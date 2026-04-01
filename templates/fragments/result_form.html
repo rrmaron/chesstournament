@@ -1,0 +1,21 @@
+<!-- This replaces the row when "Enter Result" is clicked -->
+<form hx-post="/result/submit" 
+      hx-target="#round-table" 
+      hx-swap="innerHTML">
+    <input type="hidden" name="tid" value="{{ tid }}">
+    <input type="hidden" name="round_num" value="{{ round_num }}">
+    <input type="hidden" name="white_id" value="{{ white_id }}">
+    <input type="hidden" name="black_id" value="{{ black_id }}">
+    {% if game_id %}<input type="hidden" name="result_id" value="{{ game_id }}">{% endif %}
+    
+    <select name="result" class="form-select d-inline w-50">
+        <option value="1-0">White wins (1-0)</option>
+        <option value="1/2-1/2">Draw (½-½)</option>
+        <option value="0-1">Black wins (0-1)</option>
+        <!-- Add forfeit options if desired -->
+    </select>
+    <button type="submit" class="btn btn-success btn-sm">Save Result</button>
+    <button type="button" class="btn btn-secondary btn-sm"
+            hx-get="/tournament/{{ tid }}/round/{{ round_num }}/table"
+            hx-target="#round-table">Cancel</button>
+</form>
