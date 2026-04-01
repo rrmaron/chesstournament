@@ -52,19 +52,23 @@ async def tournament_detail(request: Request, tid: int):
 def _parse_uscf_thin3(body: str) -> dict:
     """Parse name and rating from USCF thin3.php HTML response."""
     import re
-    name_m = re.search(r'(?i)name=["\']?memname["\']?\s+value=["\']([^"\'<>]+)["\']', body)
-    rating_m = re.search(r'(?i)name=["\']?rating1["\']?\s+value=["\']([^"\'<>]+)["\']', body)
+    # Attributes appear between name= and value= so match across them: name=memname ...attrs... value='...'
+    name_m = re.search(r"name=memname[^>]+value='([^']+)'", body)
+    rating_m = re.search(r"name=rating1[^>]+value='([^']+)'", body)
     name = ""
     if name_m:
-        raw = name_m.group(1).strip()  # "DOE, JOHN" format
-        parts = raw.split(", ", 1)
-        name = f"{parts[1]} {parts[0]}".title() if len(parts) == 2 else raw.title()
+        raw = name_m.group(1).strip()
+        if ", " in raw:  # "DOE, JOHN" → "John Doe"
+            parts = raw.split(", ", 1)
+            name = f"{parts[1]} {parts[0]}".title()
+        else:
+            name = raw.title()
     rating = 0
     if rating_m:
-        try:
-            rating = int(rating_m.group(1).strip())
-        except ValueError:
-            pass
+        # Value is like "1478* 2025-12-01" — extract leading digits only
+        num_m = re.search(r"(\d+)", rating_m.group(1))
+        if num_m:
+            rating = int(num_m.group(1))
     return {"name": name, "rating": rating}
 
 @app.get("/api/uscf-lookup", response_class=HTMLResponse)
@@ -74,8 +78,9 @@ async def uscf_lookup(uscf_id: str = ""):
     if len(uscf_id) < 7:
         return HTMLResponse(empty)
     try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}")
+            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
         if r.status_code != 200 or "memname" not in r.text:
             return HTMLResponse('<div id="uscf-preview"><span class="text-warning small">USCF ID not found</span></div>')
         data = _parse_uscf_thin3(r.text)

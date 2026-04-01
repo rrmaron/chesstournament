@@ -99,10 +99,13 @@ def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optio
     if uscf_id and not rating:
         try:
             import httpx, re
-            r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True)
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True, headers=headers)
             if r.status_code == 200:
-                m = re.search(r"(?i)name=[\"']?rating1[\"']?\s+value=[\"']([^\"'<>]+)[\"']", r.text)
-                rating = int(m.group(1).strip()) if m else 0
+                m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)
+                if m:
+                    num = re.search(r"(\d+)", m.group(1))
+                    rating = int(num.group(1)) if num else 0
         except:
             rating = 0
     conn = sqlite3.connect(DB_FILE)
