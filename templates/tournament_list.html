@@ -1,22 +1,39 @@
 {% extends "base.html" %}
+{% block title %}Tournaments{% endblock %}
+
 {% block content %}
 <h2>Your Tournaments</h2>
 
 <form method="post" action="/tournament" class="mb-4">
-    <input name="name" placeholder="Tournament Name" class="form-control mb-2" required>
-    <input name="rounds" type="number" value="5" class="form-control mb-2" style="max-width: 150px;">
-    <button type="submit" class="btn btn-primary">Create Tournament</button>
+    <div class="row g-3">
+        <div class="col-md-6">
+            <input type="text" name="name" class="form-control" placeholder="Tournament Name" required>
+        </div>
+        <div class="col-md-3">
+            <input type="number" name="rounds" class="form-control" value="5" min="1">
+        </div>
+        <div class="col-md-3">
+            <button type="submit" class="btn btn-primary w-100">Create Tournament</button>
+        </div>
+    </div>
 </form>
 
-{% if tournaments %}
-    <div class="list-group">
+{% if tournaments and tournaments|length > 0 %}
+    <div class="list-group mt-4">
     {% for t in tournaments %}
-        <a href="/tournament/{{ t.id }}" class="list-group-item list-group-item-action">
-            {{ t.name }} — {{ t.rounds }} rounds (current round: {{ t.current_round or 0 }})
+        <a href="/tournament/{{ t.id }}" 
+           class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+            <strong>{{ t.name }}</strong>
+            <span>
+                <span class="badge bg-secondary">{{ t.rounds }} rounds</span>
+                <span class="badge bg-info ms-2">Round {{ t.current_round or 0 }}</span>
+            </span>
         </a>
     {% endfor %}
     </div>
 {% else %}
-    <p>No tournaments yet.</p>
+    <div class="alert alert-info mt-4">
+        No tournaments yet. Create one using the form above!
+    </div>
 {% endif %}
 {% endblock %}
