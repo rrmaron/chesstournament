@@ -1,20 +1,45 @@
-<table class="table table-striped">
-    <thead><tr><th>Board</th><th>White</th><th>Black</th><th>Result</th><th>Action</th></tr></thead>
+<table class="table table-striped align-middle">
+    <thead><tr><th>Board</th><th>White</th><th>Result</th><th>Black</th><th>Action</th></tr></thead>
     <tbody>
-    {% for idx, game in enumerate(pairings, 1) %}
+    {% for game in pairings %}
     <tr>
-        <td>{{ idx }}</td>
+        <td>{{ loop.index }}</td>
         <td>{{ game.white_name }}</td>
-        <td>{{ game.black_name }}</td>
-        <td>{{ game.result or 'Pending' }}</td>
         <td>
-            <button class="btn btn-sm btn-primary"
-                    hx-get="/result/form?tid={{ tournament.id }}&round_num={{ round_num }}&white_id={{ game.white_id }}&black_id={{ game.black_id }}"
-                    hx-target="this" hx-swap="outerHTML">Enter Result</button>
-            <!-- Add buttons for bye/forfeit similarly -->
+            {% if game.result and game.result != '*' %}
+                <span class="badge bg-secondary">{{ game.result }}</span>
+            {% else %}
+                <span class="text-muted">—</span>
+            {% endif %}
+        </td>
+        <td>{{ game.black_name or '<em>bye</em>' }}</td>
+        <td>
+            {% if game.result and game.result != '*' %}
+                <span class="text-success small">✓ Recorded</span>
+            {% elif game.black_id %}
+                <form hx-post="/result/submit" hx-target="#round-table" hx-swap="innerHTML" class="d-flex gap-1">
+                    <input type="hidden" name="tid" value="{{ tournament.id }}">
+                    <input type="hidden" name="round_num" value="{{ round_num }}">
+                    <input type="hidden" name="white_id" value="{{ game.white_id }}">
+                    <input type="hidden" name="black_id" value="{{ game.black_id }}">
+                    <select name="result" class="form-select form-select-sm" style="width:auto" required>
+                        <option value="" disabled selected>Result</option>
+                        <option value="1-0">1-0 (White wins)</option>
+                        <option value="0-1">0-1 (Black wins)</option>
+                        <option value="1/2-1/2">½-½ (Draw)</option>
+                        <option value="1F-0F">1F-0F (White forfeit win)</option>
+                        <option value="0F-1F">0F-1F (Black forfeit win)</option>
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                </form>
+            {% else %}
+                <span class="text-muted small">Bye</span>
+            {% endif %}
         </td>
     </tr>
     {% endfor %}
     </tbody>
 </table>
-<!-- Simple bye assignment section for unpaired players can be added here -->
+{% if not pairings %}
+<p class="text-muted">No pairings yet for this round.</p>
+{% endif %}
