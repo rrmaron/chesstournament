@@ -1,8 +1,9 @@
 import sqlite3
+from typing import Optional
 
 DB_FILE = "mychessrating.db"
 
-def build_trf(tid: int) -> str:
+def build_trf(tid: int, rounds_to_include: Optional[int] = None) -> str:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT name, rounds, current_round FROM tournaments WHERE id=?", (tid,))
@@ -11,24 +12,27 @@ def build_trf(tid: int) -> str:
         raise ValueError("Tournament not found")
     name, total_rounds, current_round = tour
     current_round = current_round or 0
-    
-    c.execute("""SELECT id, name, rating, score 
-                 FROM players WHERE tournament_id=? 
+    if rounds_to_include is None:
+        rounds_to_include = current_round
+
+    c.execute("""SELECT id, name, rating, score
+                 FROM players WHERE tournament_id=?
                  ORDER BY rating DESC, registered_at""", (tid,))
     players_raw = c.fetchall()
-    
+
     player_id_to_rank = {pid: rank for rank, (pid, _, _, _) in enumerate(players_raw, 1)}
-    
+
     lines = []
     lines.append(f"012 {name}")
     lines.append("032 USA")
     lines.append(f"062 {len(players_raw)}")
     lines.append(f"072 {len(players_raw)}")
-    
+    lines.append(f"XXR {total_rounds}")
+
     for rank, (pid, pname, rating, score) in enumerate(players_raw, 1):
         base = f"001 {rank:04d}          {pname[:33].ljust(33)} {int(rating or 0):04d}      {float(score or 0):4.1f}"
         player_line = base
-        for r in range(1, current_round + 1):
+        for r in range(1, rounds_to_include + 1):
             # Fetch result for this player/round (simplified; expand for full accuracy)
             c.execute("""SELECT result, white_id, black_id FROM results 
                          WHERE tournament_id=? AND round=? AND (white_id=? OR black_id=?)""",

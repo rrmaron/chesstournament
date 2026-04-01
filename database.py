@@ -155,10 +155,17 @@ def record_result(tid: int, round_num: int, white_id: Optional[int] = None, blac
             pts_w, pts_b = 0.5, 0.5
     
     if white_id and black_id and not is_bye:
-        c.execute("""INSERT OR REPLACE INTO results 
-                     (tournament_id, round, white_id, black_id, result) 
-                     VALUES (?, ?, ?, ?, ?)""", 
-                  (tid, round_num, white_id, black_id, result or res_code))
+        c.execute("""SELECT id FROM results
+                     WHERE tournament_id=? AND round=? AND white_id=? AND black_id=?""",
+                  (tid, round_num, white_id, black_id))
+        existing = c.fetchone()
+        if existing:
+            c.execute("UPDATE results SET result=? WHERE id=?", (result or res_code, existing[0]))
+        else:
+            c.execute("""INSERT INTO results
+                         (tournament_id, round, white_id, black_id, result)
+                         VALUES (?, ?, ?, ?, ?)""",
+                      (tid, round_num, white_id, black_id, result or res_code))
     
     def update_running(pid: int, pts: float):
         c.execute("""SELECT score_after FROM player_round_scores 
@@ -241,3 +248,21 @@ def update_current_round(tid: int, new_round: int):
     c.execute("UPDATE tournaments SET current_round=? WHERE id=?", (new_round, tid))
     conn.commit()
     conn.close()
+
+def store_pairing(tid: int, round_num: int, white_id: int, black_id: Optional[int]):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""INSERT INTO results (tournament_id, round, white_id, black_id, result)
+                 VALUES (?, ?, ?, ?, '*')""",
+              (tid, round_num, white_id, black_id))
+    conn.commit()
+    conn.close()
+
+def get_player_rank_map(tid: int) -> Dict[int, int]:
+    """Returns {trf_rank: player_id} using the same ordering as build_trf."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id FROM players WHERE tournament_id=? ORDER BY rating DESC, registered_at", (tid,))
+    rows = c.fetchall()
+    conn.close()
+    return {rank: row[0] for rank, row in enumerate(rows, 1)}

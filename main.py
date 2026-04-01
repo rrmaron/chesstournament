@@ -12,7 +12,7 @@ from database import (
     get_tournaments, create_tournament, get_tournament,
     add_player, get_players, delete_player,
     record_result, get_pairings_for_round, get_standings,
-    update_current_round
+    update_current_round, store_pairing, get_player_rank_map
 )
 from trf_builder import build_trf
 
@@ -110,9 +110,45 @@ async def submit_bye(
 @app.post("/tournament/{tid}/next-round", response_class=HTMLResponse)
 async def generate_next_round(request: Request, tid: int):
     tournament = get_tournament(tid)
+    if not tournament:
+        raise HTTPException(404)
     current = tournament.get("current_round", 0)
     next_r = current + 1
-    update_current_round(tid, next_r)
+
+    # Build TRF with only the completed rounds (before advancing current_round)
+    trf_text = build_trf(tid, rounds_to_include=current)
+    rank_map = get_player_rank_map(tid)
+
+    trf_fd, trf_path = tempfile.mkstemp(suffix=".trf")
+    out_path = trf_path + ".out"
+    try:
+        with os.fdopen(trf_fd, "w") as f:
+            f.write(trf_text)
+
+        proc = subprocess.run(
+            [BBP_PATH, "--dutch", trf_path, "-p", out_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if proc.returncode != 0:
+            raise HTTPException(500, detail=f"bbpPairings error: {proc.stderr.strip() or proc.stdout.strip()}")
+
+        with open(out_path) as f:
+            pairing_lines = f.read().strip().splitlines()
+
+        update_current_round(tid, next_r)
+
+        for line in pairing_lines:
+            parts = line.strip().split()
+            if len(parts) == 2:
+                w_rank, b_rank = int(parts[0]), int(parts[1])
+                white_id = rank_map.get(w_rank)
+                black_id = rank_map.get(b_rank) if b_rank != 0 else None
+                if white_id:
+                    store_pairing(tid, next_r, white_id, black_id)
+    finally:
+        Path(trf_path).unlink(missing_ok=True)
+        Path(out_path).unlink(missing_ok=True)
+
     return await round_table_fragment(request, tid, next_r)
 
 # Download TRF-2026
