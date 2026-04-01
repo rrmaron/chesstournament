@@ -27,7 +27,7 @@ if os.name == "nt":
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     tournaments = get_tournaments()
-    return templates.TemplateResponse("tournament_list.html", {"request": request, "tournaments": tournaments})
+    return templates.TemplateResponse(request=request, name="tournament_list.html", context={"tournaments": tournaments})
 
 @app.post("/tournament")
 async def new_tournament(name: str = Form(...), rounds: int = Form(5), system: str = Form("dutch")):
@@ -41,8 +41,7 @@ async def tournament_detail(request: Request, tid: int):
         raise HTTPException(404)
     players = get_players(tid)
     current_round = tournament.get("current_round", 0) or 1
-    return templates.TemplateResponse("tournament_detail.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="tournament_detail.html", context={
         "tournament": tournament,
         "players": players,
         "current_round": current_round
@@ -67,8 +66,7 @@ async def round_table_fragment(request: Request, tid: int, round_num: int):
         raise HTTPException(404)
     pairings = get_pairings_for_round(tid, round_num)
     standings = get_standings(tid)
-    return templates.TemplateResponse("fragments/round_table.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="fragments/round_table.html", context={
         "tournament": tournament,
         "round_num": round_num,
         "pairings": pairings,
@@ -166,8 +164,7 @@ async def view_standings(request: Request, tid: int):
     if not tournament:
         raise HTTPException(404)
     standings = get_standings(tid)
-    return templates.TemplateResponse("standings.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="standings.html", context={
         "tournament": tournament,
         "standings": standings
     })
