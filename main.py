@@ -6,6 +6,7 @@ import subprocess
 import os
 from pathlib import Path
 import tempfile
+from typing import Optional
 
 from database import (
     get_tournaments, create_tournament, get_tournament,
