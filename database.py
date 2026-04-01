@@ -1,5 +1,6 @@
 import sqlite3
 from typing import List, Dict, Optional
+from datetime import datetime
 
 DB_FILE = "mychessrating.db"
 
@@ -10,7 +11,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS tournaments (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
-        rounds INTEGER NOT NULL,
+        rounds INTEGER NOT NULL DEFAULT 5,
         system TEXT DEFAULT 'dutch',
         current_round INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
@@ -52,6 +53,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 def create_tournament(name: str, rounds: int = 5, system: str = "dutch") -> int:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -66,8 +69,8 @@ def get_tournaments() -> List[Dict]:
     c = conn.cursor()
     c.execute("SELECT * FROM tournaments ORDER BY created_at DESC")
     rows = c.fetchall()
-    conn.close()
     cols = [col[0] for col in c.description]
+    conn.close()
     return [dict(zip(cols, row)) for row in rows]
 
 def get_tournament(tid: int) -> Optional[Dict]:
@@ -76,40 +79,38 @@ def get_tournament(tid: int) -> Optional[Dict]:
     c.execute("SELECT * FROM tournaments WHERE id=?", (tid,))
     row = c.fetchone()
     conn.close()
-    if row:
-        return dict(zip([col[0] for col in c.description], row))
-    return None
+    return dict(zip([col[0] for col in c.description], row)) if row else None
 
-def add_player(tournament_id: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None, email: Optional[str] = None):
+def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None, email: Optional[str] = None):
     if uscf_id and not rating:
         try:
             import httpx
-            resp = httpx.get(f"https://beta-ratings-api.uschess.org/api/v1/members/{uscf_id.strip()}", timeout=5)
-            if resp.status_code == 200:
-                data = resp.json()
+            r = httpx.get(f"https://beta-ratings-api.uschess.org/api/v1/members/{uscf_id.strip()}", timeout=5)
+            if r.status_code == 200:
+                data = r.json()
                 rating = data.get("regular_rating") or data.get("rating") or 0
         except:
             rating = 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email) VALUES (?, ?, ?, ?, ?)",
-              (tournament_id, name.strip(), uscf_id, rating or 0, email))
+              (tid, name.strip(), uscf_id, rating or 0, email))
     conn.commit()
     conn.close()
 
-def get_players(tournament_id: int) -> List[Dict]:
+def get_players(tid: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE tournament_id=? ORDER BY rating DESC, name", (tournament_id,))
+    c.execute("SELECT * FROM players WHERE tournament_id=? ORDER BY rating DESC, name", (tid,))
     rows = c.fetchall()
-    conn.close()
     cols = [col[0] for col in c.description]
+    conn.close()
     return [dict(zip(cols, row)) for row in rows]
 
-def delete_player(player_id: int):
+def delete_player(pid: int):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("DELETE FROM players WHERE id=?", (player_id,))
+    c.execute("DELETE FROM players WHERE id=?", (pid,))
     conn.commit()
     conn.close()
 
@@ -118,42 +119,48 @@ def record_result(tid: int, round_num: int, white_id: Optional[int] = None, blac
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    points_w = 0.0
-    points_b = 0.0
+    pts_w = pts_b = 0.0
     res_code = result or "-"
     
     if is_bye:
         if bye_type == "full":
-            points_w = 1.0
-            res_code = "1B"
+            pts_w = 1.0
+            res_code = "F"  # full bye
         elif bye_type == "half":
-            points_w = 0.5
-            res_code = "½B"
+            pts_w = 0.5
+            res_code = "H"
         else:
-            points_w = 0.0
-            res_code = "0B"
+            pts_w = 0.0
+            res_code = "Z"
     elif result:
-        if result == "1-0" or result == "1F-0F":
-            points_w, points_b = 1.0, 0.0
-        elif result == "0-1" or result == "0F-1F":
-            points_w, points_b = 0.0, 1.0
+        if result in ("1-0", "1F-0F"):
+            pts_w, pts_b = 1.0, 0.0
+        elif result in ("0-1", "0F-1F"):
+            pts_w, pts_b = 0.0, 1.0
         elif result == "1/2-1/2":
-            points_w, points_b = 0.5, 0.5
+            pts_w, pts_b = 0.5, 0.5
     
     if white_id and black_id and not is_bye:
-        c.execute("INSERT OR REPLACE INTO results (tournament_id, round, white_id, black_id, result) VALUES (?, ?, ?, ?, ?)",
+        c.execute("""INSERT OR REPLACE INTO results 
+                     (tournament_id, round, white_id, black_id, result) 
+                     VALUES (?, ?, ?, ?, ?)""", 
                   (tid, round_num, white_id, black_id, result or res_code))
     
     def update_running(pid: int, pts: float):
-        c.execute("SELECT score_after FROM player_round_scores WHERE tournament_id=? AND player_id=? AND round=?",
-                  (tid, pid, round_num-1))
+        c.execute("""SELECT score_after FROM player_round_scores 
+                     WHERE tournament_id=? AND player_id=? AND round=?""",
+                  (tid, pid, round_num - 1))
         prev = c.fetchone()
         prev_score = prev[0] if prev else 0.0
-        c.execute("INSERT OR REPLACE INTO player_round_scores (tournament_id, player_id, round, score_after) VALUES (?, ?, ?, ?)",
+        c.execute("""INSERT OR REPLACE INTO player_round_scores 
+                     (tournament_id, player_id, round, score_after) 
+                     VALUES (?, ?, ?, ?)""", 
                   (tid, pid, round_num, prev_score + pts))
     
-    if white_id: update_running(white_id, points_w)
-    if black_id: update_running(black_id, points_b)
+    if white_id:
+        update_running(white_id, pts_w)
+    if black_id:
+        update_running(black_id, pts_b)
     
     conn.commit()
     conn.close()
@@ -162,61 +169,61 @@ def record_result(tid: int, round_num: int, white_id: Optional[int] = None, blac
 def recalculate_scores(tid: int):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("UPDATE players SET score=0 WHERE tournament_id=?", (tid,))
+    c.execute("UPDATE players SET score = 0 WHERE tournament_id=?", (tid,))
     c.execute("SELECT white_id, black_id, result FROM results WHERE tournament_id=?", (tid,))
     for w, b, res in c.fetchall():
-        if res in ('1-0', '1F-0F'):
+        if res in ("1-0", "1F-0F"):
             c.execute("UPDATE players SET score = score + 1 WHERE id=?", (w,))
-        elif res in ('0-1', '0F-1F'):
+        elif res in ("0-1", "0F-1F"):
             c.execute("UPDATE players SET score = score + 1 WHERE id=?", (b,))
-        elif res == '1/2-1/2':
-            c.execute("UPDATE players SET score = score + 0.5 WHERE id IN (?,?)", (w, b))
+        elif res == "1/2-1/2":
+            c.execute("UPDATE players SET score = score + 0.5 WHERE id IN (?, ?)", (w, b))
     conn.commit()
     conn.close()
 
 def get_pairings_for_round(tid: int, round_num: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""SELECT r.id as result_id, r.white_id, r.black_id, pw.name as white_name, pb.name as black_name, r.result
+    c.execute("""SELECT r.id as result_id, r.white_id, r.black_id, 
+                        pw.name as white_name, pb.name as black_name, r.result
                  FROM results r
-                 JOIN players pw ON r.white_id = pw.id
-                 JOIN players pb ON r.black_id = pb.id
-                 WHERE r.tournament_id=? AND r.round=? ORDER BY r.id""", (tid, round_num))
+                 LEFT JOIN players pw ON r.white_id = pw.id
+                 LEFT JOIN players pb ON r.black_id = pb.id
+                 WHERE r.tournament_id=? AND r.round=? 
+                 ORDER BY r.id""", (tid, round_num))
     rows = c.fetchall()
     conn.close()
     cols = [col[0] for col in c.description]
     return [dict(zip(cols, row)) for row in rows]
 
 def get_standings(tid: int) -> List[Dict]:
-    # Full tiebreak calculation (from previous version, with per-round data)
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, name, rating, score FROM players WHERE tournament_id=?", (tid,))
+    c.execute("SELECT id, name, rating, score FROM players WHERE tournament_id=? ORDER BY score DESC, rating DESC", (tid,))
     players = [dict(zip([col[0] for col in c.description], row)) for row in c.fetchall()]
     conn.close()
     
-    player_scores = {p['id']: p['score'] for p in players}
-    
     for p in players:
-        pid = p['id']
-        # Progressive & Cumulative from per-round table
+        pid = p["id"]
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("SELECT score_after FROM player_round_scores WHERE tournament_id=? AND player_id=? ORDER BY round", (tid, pid))
-        running = [row[0] for row in c.fetchall()]
+        running = [r[0] for r in c.fetchall()]
         conn.close()
-        p['progressive'] = round(sum(running), 1)
-        p['cumulative'] = p['progressive']
-        
-        # Buchholz, SB, Median (simplified)
-        # ... (add opponents logic as needed; basic version shown earlier)
-        p['buchholz'] = round(p['score'] * 2, 1)  # placeholder – replace with full opponent sum
-        p['sonneborn_berger'] = round(p['score'] * 1.5, 1)
-        p['median'] = round(p['score'], 1)
-        p['solkoff'] = p['buchholz']
+        p["progressive"] = round(sum(running), 1)
+        p["cumulative"] = p["progressive"]
+        p["buchholz"] = round(p["score"] * 2, 1)  # Replace with full opponent sum in production
+        p["sonneborn_berger"] = round(p["score"] * 1.5, 1)
+        p["median"] = round(p["score"], 1)
+        p["solkoff"] = p["buchholz"]
     
-    players.sort(key=lambda x: (-x['score'], -x['buchholz'], -x['sonneborn_berger'], -x['median'], -x['progressive']))
+    players.sort(key=lambda x: (-x["score"], -x.get("buchholz", 0), -x.get("sonneborn_berger", 0),
+                                -x.get("median", 0), -x.get("progressive", 0)))
     return players
 
-# Call init_db() on startup
-init_db()
+def update_current_round(tid: int, new_round: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("UPDATE tournaments SET current_round=? WHERE id=?", (new_round, tid))
+    conn.commit()
+    conn.close()
