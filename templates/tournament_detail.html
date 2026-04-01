@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>{{ tournament.name }} — Round {{ current_round }}</h2>
+
+<div id="round-table" hx-get="/tournament/{{ tournament.id }}/round/{{ current_round }}/table" 
+     hx-trigger="load" hx-swap="innerHTML"></div>
+
+<button hx-post="/tournament/{{ tournament.id }}/next-round" 
+        hx-target="#round-table" 
+        hx-swap="innerHTML"
+        class="btn btn-success mt-3">Generate Next Round</button>
+
+<a href="/tournament/{{ tournament.id }}/trf" class="btn btn-info mt-3" download>Download TRF-2026</a>
+
+<a href="/tournament/{{ tournament.id }}/standings" class="btn btn-secondary mt-3">View Full Standings</a>
+{% endblock %}
