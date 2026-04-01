@@ -33,31 +33,48 @@
     </table>
     {% endif %}
 
+    <script>
+    function fillUscfPlayer(btn) {
+        document.getElementById('player-name').value = btn.dataset.name;
+        document.getElementById('player-uscf-id').value = btn.dataset.id;
+        document.getElementById('player-rating').value = btn.dataset.rating;
+        document.getElementById('uscf-suggestions').innerHTML = '';
+        document.getElementById('uscf-preview').innerHTML = '';
+    }
+    </script>
     <form method="post" action="/tournament/{{ tournament.id }}/player" class="row g-2 align-items-end">
+      <div class="col-md-4" style="position:relative">
+        <label class="form-label">Name <span class="text-danger">*</span></label>
+        <input type="text" id="player-name" name="name" class="form-control" required
+               placeholder="Type 2+ chars to search USCF…"
+               autocomplete="off"
+               hx-get="/api/uscf-search"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#uscf-suggestions"
+               hx-swap="outerHTML"
+               hx-include="this">
+        <div id="uscf-suggestions"></div>
+      </div>
       <div class="col-md-2">
         <label class="form-label">USCF ID</label>
-        <input type="text" name="uscf_id" class="form-control" placeholder="Enter to auto-fill"
+        <input type="text" id="player-uscf-id" name="uscf_id" class="form-control" placeholder="Auto-filled"
                hx-get="/api/uscf-lookup"
-               hx-trigger="keyup changed delay:400ms, change"
+               hx-trigger="keyup changed delay:400ms"
                hx-target="#uscf-preview"
                hx-swap="outerHTML"
                hx-include="[name='uscf_id']">
         <div id="uscf-preview"></div>
       </div>
-      <div class="col-md-3">
-        <label class="form-label">Name <span class="text-danger">*</span></label>
-        <input type="text" id="player-name" name="name" class="form-control" required placeholder="Full name">
-      </div>
       <div class="col-md-2">
         <label class="form-label">Rating</label>
-        <input type="number" id="player-rating" name="rating" class="form-control" placeholder="Optional">
+        <input type="number" id="player-rating" name="rating" class="form-control" placeholder="Auto-filled">
       </div>
       <div class="col-md-2">
         <label class="form-label">Email</label>
         <input type="email" name="email" class="form-control" placeholder="Optional">
       </div>
-      <div class="col-md-1">
-        <button type="submit" class="btn btn-primary w-100">Add</button>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">Add Player</button>
       </div>
     </form>
   </div>

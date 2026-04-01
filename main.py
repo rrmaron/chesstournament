@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import html
+import re
 import httpx
 from typing import Optional
 
@@ -51,7 +52,6 @@ async def tournament_detail(request: Request, tid: int):
 
 def _parse_uscf_thin3(body: str) -> dict:
     """Parse name and rating from USCF thin3.php HTML response."""
-    import re
     # Attributes appear between name= and value= so match across them: name=memname ...attrs... value='...'
     name_m = re.search(r"name=memname[^>]+value='([^']+)'", body)
     rating_m = re.search(r"name=rating1[^>]+value='([^']+)'", body)
@@ -94,6 +94,49 @@ async def uscf_lookup(uscf_id: str = ""):
         import logging
         logging.exception("USCF lookup failed")
         return HTMLResponse(f'<div id="uscf-preview"><span class="text-danger small">Lookup failed: {html.escape(str(e))}</span></div>')
+
+@app.get("/api/uscf-search", response_class=HTMLResponse)
+async def uscf_search(name: str = ""):
+    q = name.strip()
+    empty = '<div id="uscf-suggestions"></div>'
+    if len(q) < 2:
+        return HTMLResponse(empty)
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+        # Use the last word as last name, rest as first name
+        parts = q.split()
+        data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+        rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
+        if not rows:
+            return HTMLResponse(f'{empty}')
+        items = ""
+        for uid, raw_name, info in rows[:12]:
+            display = raw_name.strip()
+            if ", " in display:
+                ln, fn = display.split(", ", 1)
+                display = f"{fn.title()} {ln.title()}"
+            else:
+                display = display.title()
+            rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
+            rating = rating_m.group(1) if rating_m else ""
+            dn = html.escape(display)
+            items += (
+                f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
+                f' data-name="{dn}" data-id="{html.escape(uid)}" data-rating="{html.escape(rating)}"'
+                f' onclick="fillUscfPlayer(this)">'
+                f'{dn} <span class="text-muted">{html.escape(uid)}</span>'
+                f'{" — " + rating if rating else ""}'
+                f'</button>'
+            )
+        return HTMLResponse(
+            f'<div id="uscf-suggestions">'
+            f'<div class="list-group mt-1" style="max-height:220px;overflow-y:auto;position:absolute;z-index:100;width:100%">'
+            f'{items}</div></div>'
+        )
+    except Exception:
+        return HTMLResponse(empty)
 
 @app.post("/tournament/{tid}/player")
 async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
