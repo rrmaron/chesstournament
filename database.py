@@ -68,21 +68,24 @@ def create_tournament(name: str, rounds: int = 5, system: str = "dutch") -> int:
 def get_tournaments() -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, name, rounds, system, current_round FROM tournaments ORDER BY created_at DESC")
+    c.execute("""
+        SELECT id, name, rounds, system, current_round 
+        FROM tournaments 
+        ORDER BY created_at DESC
+    """)
     rows = c.fetchall()
     conn.close()
     
     tournaments = []
     for row in rows:
         tournaments.append({
-            "id": row[0],
-            "name": row[1],
-            "rounds": row[2],
-            "system": row[3],
-            "current_round": row[4]
+            "id": int(row[0]),
+            "name": str(row[1]),
+            "rounds": int(row[2]),
+            "system": str(row[3]),
+            "current_round": int(row[4]) if row[4] is not None else 0
         })
     return tournaments
-
 
 def get_tournament(tid: int) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)
