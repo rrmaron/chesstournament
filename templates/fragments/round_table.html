@@ -1,0 +1,20 @@
+<table class="table table-striped">
+    <thead><tr><th>Board</th><th>White</th><th>Black</th><th>Result</th><th>Action</th></tr></thead>
+    <tbody>
+    {% for idx, game in enumerate(pairings, 1) %}
+    <tr>
+        <td>{{ idx }}</td>
+        <td>{{ game.white_name }}</td>
+        <td>{{ game.black_name }}</td>
+        <td>{{ game.result or 'Pending' }}</td>
+        <td>
+            <button class="btn btn-sm btn-primary"
+                    hx-get="/result/form?tid={{ tournament.id }}&round_num={{ round_num }}&white_id={{ game.white_id }}&black_id={{ game.black_id }}"
+                    hx-target="this" hx-swap="outerHTML">Enter Result</button>
+            <!-- Add buttons for bye/forfeit similarly -->
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<!-- Simple bye assignment section for unpaired players can be added here -->
