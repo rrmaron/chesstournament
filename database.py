@@ -98,11 +98,11 @@ def get_tournament(tid: int) -> Optional[Dict]:
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None, email: Optional[str] = None):
     if uscf_id and not rating:
         try:
-            import httpx
-            r = httpx.get(f"https://beta-ratings-api.uschess.org/api/v1/members/{uscf_id.strip()}", timeout=5)
+            import httpx, re
+            r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True)
             if r.status_code == 200:
-                data = r.json()
-                rating = data.get("regular_rating") or data.get("rating") or 0
+                m = re.search(r"(?i)name=[\"']?rating1[\"']?\s+value=[\"']([^\"'<>]+)[\"']", r.text)
+                rating = int(m.group(1).strip()) if m else 0
         except:
             rating = 0
     conn = sqlite3.connect(DB_FILE)

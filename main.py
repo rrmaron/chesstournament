@@ -49,6 +49,24 @@ async def tournament_detail(request: Request, tid: int):
         "current_round": current_round
     })
 
+def _parse_uscf_thin3(body: str) -> dict:
+    """Parse name and rating from USCF thin3.php HTML response."""
+    import re
+    name_m = re.search(r'(?i)name=["\']?memname["\']?\s+value=["\']([^"\'<>]+)["\']', body)
+    rating_m = re.search(r'(?i)name=["\']?rating1["\']?\s+value=["\']([^"\'<>]+)["\']', body)
+    name = ""
+    if name_m:
+        raw = name_m.group(1).strip()  # "DOE, JOHN" format
+        parts = raw.split(", ", 1)
+        name = f"{parts[1]} {parts[0]}".title() if len(parts) == 2 else raw.title()
+    rating = 0
+    if rating_m:
+        try:
+            rating = int(rating_m.group(1).strip())
+        except ValueError:
+            pass
+    return {"name": name, "rating": rating}
+
 @app.get("/api/uscf-lookup", response_class=HTMLResponse)
 async def uscf_lookup(uscf_id: str = ""):
     uscf_id = uscf_id.strip()
@@ -56,22 +74,21 @@ async def uscf_lookup(uscf_id: str = ""):
     if len(uscf_id) < 7:
         return HTMLResponse(empty)
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"https://beta-ratings-api.uschess.org/api/v1/members/{uscf_id}")
-        if r.status_code != 200:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}")
+        if r.status_code != 200 or "memname" not in r.text:
             return HTMLResponse('<div id="uscf-preview"><span class="text-warning small">USCF ID not found</span></div>')
-        data = r.json()
-        rating = data.get("regular_rating") or data.get("rating") or ""
-        fname = data.get("first_name") or data.get("mem_fname") or ""
-        lname = data.get("last_name") or data.get("mem_lname") or ""
-        full_name = data.get("name") or data.get("full_name") or f"{fname} {lname}".strip()
+        data = _parse_uscf_thin3(r.text)
+        full_name, rating = data["name"], data["rating"]
         safe_name = html.escape(full_name)
         preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}</span></div>'
         name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
         rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
         return HTMLResponse(preview + name_oob + rating_oob)
-    except Exception:
-        return HTMLResponse('<div id="uscf-preview"><span class="text-danger small">Lookup failed — check connection</span></div>')
+    except Exception as e:
+        import logging
+        logging.exception("USCF lookup failed")
+        return HTMLResponse(f'<div id="uscf-preview"><span class="text-danger small">Lookup failed: {html.escape(str(e))}</span></div>')
 
 @app.post("/tournament/{tid}/player")
 async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
