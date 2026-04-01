@@ -1,16 +1,21 @@
-app = "mychessrating"
-primary_region = "ord"  # or "dfw" since you're in Plano, Texas
+# fly.toml app configuration file generated for mychessrating on 2026-03-31T23:46:23-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'mychessrating'
+primary_region = 'ord'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [http_service]
   internal_port = 10000
   force_https = true
-  auto_stop_machines = true     # Important for cost savings
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0      # Scale to zero when idle
+  min_machines_running = 0
 
 [[vm]]
-  size = "shared-cpu-1x"        # Cheapest
-  memory = "512mb"              # Sufficient for your app
+  size = 'shared-cpu-1x'
+  memory = '512mb'
