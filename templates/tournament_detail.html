@@ -34,24 +34,30 @@
     {% endif %}
 
     <form method="post" action="/tournament/{{ tournament.id }}/player" class="row g-2 align-items-end">
-      <div class="col-md-4">
-        <label class="form-label">Name <span class="text-danger">*</span></label>
-        <input type="text" name="name" class="form-control" required placeholder="Full name">
-      </div>
       <div class="col-md-2">
         <label class="form-label">USCF ID</label>
-        <input type="text" name="uscf_id" class="form-control" placeholder="Optional">
+        <input type="text" name="uscf_id" class="form-control" placeholder="Enter to auto-fill"
+               hx-get="/api/uscf-lookup"
+               hx-trigger="keyup changed delay:400ms, change"
+               hx-target="#uscf-preview"
+               hx-swap="outerHTML"
+               hx-include="[name='uscf_id']">
+        <div id="uscf-preview"></div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Name <span class="text-danger">*</span></label>
+        <input type="text" id="player-name" name="name" class="form-control" required placeholder="Full name">
       </div>
       <div class="col-md-2">
         <label class="form-label">Rating</label>
-        <input type="number" name="rating" class="form-control" placeholder="Optional">
+        <input type="number" id="player-rating" name="rating" class="form-control" placeholder="Optional">
       </div>
       <div class="col-md-2">
         <label class="form-label">Email</label>
         <input type="email" name="email" class="form-control" placeholder="Optional">
       </div>
-      <div class="col-md-2">
-        <button type="submit" class="btn btn-primary w-100">Add Player</button>
+      <div class="col-md-1">
+        <button type="submit" class="btn btn-primary w-100">Add</button>
       </div>
     </form>
   </div>

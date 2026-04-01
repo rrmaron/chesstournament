@@ -6,6 +6,8 @@ import subprocess
 import os
 from pathlib import Path
 import tempfile
+import html
+import httpx
 from typing import Optional
 
 from database import (
@@ -46,6 +48,30 @@ async def tournament_detail(request: Request, tid: int):
         "players": players,
         "current_round": current_round
     })
+
+@app.get("/api/uscf-lookup", response_class=HTMLResponse)
+async def uscf_lookup(uscf_id: str = ""):
+    uscf_id = uscf_id.strip()
+    empty = '<div id="uscf-preview"></div>'
+    if len(uscf_id) < 7:
+        return HTMLResponse(empty)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"https://beta-ratings-api.uschess.org/api/v1/members/{uscf_id}")
+        if r.status_code != 200:
+            return HTMLResponse('<div id="uscf-preview"><span class="text-warning small">USCF ID not found</span></div>')
+        data = r.json()
+        rating = data.get("regular_rating") or data.get("rating") or ""
+        fname = data.get("first_name") or data.get("mem_fname") or ""
+        lname = data.get("last_name") or data.get("mem_lname") or ""
+        full_name = data.get("name") or data.get("full_name") or f"{fname} {lname}".strip()
+        safe_name = html.escape(full_name)
+        preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}</span></div>'
+        name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
+        rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
+        return HTMLResponse(preview + name_oob + rating_oob)
+    except Exception:
+        return HTMLResponse('<div id="uscf-preview"><span class="text-danger small">Lookup failed — check connection</span></div>')
 
 @app.post("/tournament/{tid}/player")
 async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
