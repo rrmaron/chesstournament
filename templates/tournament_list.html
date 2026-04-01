@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Your Tournaments</h2>
+<form method="post" action="/tournament" class="mb-4">
+    <input name="name" placeholder="Tournament Name" class="form-control d-inline w-50" required>
+    <input name="rounds" type="number" value="5" class="form-control d-inline w-25">
+    <button type="submit" class="btn btn-primary">Create Tournament</button>
+</form>
+<ul class="list-group">
+{% for t in tournaments %}
+    <li class="list-group-item">
+        <a href="/tournament/{{ t.id }}">{{ t.name }}</a> ({{ t.rounds }} rounds, current: {{ t.current_round or 0 }})
+    </li>
+{% endfor %}
+</ul>
+{% endblock %}
