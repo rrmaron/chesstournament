@@ -18,4 +18,4 @@ RUN chmod +x ./bbpPairings
 EXPOSE 10000
 
 # Production command
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000", "--log-level", "info"]
