@@ -1,0 +1,16 @@
+app = "mychessrating"
+primary_region = "ord"  # or "dfw" since you're in Plano, Texas
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 10000
+  force_https = true
+  auto_stop_machines = true     # Important for cost savings
+  auto_start_machines = true
+  min_machines_running = 0      # Scale to zero when idle
+
+[[vm]]
+  size = "shared-cpu-1x"        # Cheapest
+  memory = "512mb"              # Sufficient for your app
