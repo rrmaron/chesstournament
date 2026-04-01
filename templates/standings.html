@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Standings with Tiebreaks — {{ tournament.name }}</h2>
+<table class="table table-striped">
+    <thead>
+        <tr><th>Rank</th><th>Player</th><th>Rating</th><th>Score</th><th>Progressive</th><th>Cumulative</th><th>Buchholz</th><th>S-B</th></tr>
+    </thead>
+    <tbody>
+    {% for rank, p in enumerate(standings, 1) %}
+    <tr>
+        <td>{{ rank }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.rating }}</td>
+        <td><strong>{{ p.score }}</strong></td>
+        <td>{{ p.progressive }}</td>
+        <td>{{ p.cumulative }}</td>
+        <td>{{ p.buchholz }}</td>
+        <td>{{ p.sonneborn_berger }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
