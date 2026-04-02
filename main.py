@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -15,7 +15,8 @@ from database import (
     get_tournaments, create_tournament, get_tournament,
     add_player, get_players, delete_player,
     record_result, get_pairings_for_round, get_standings,
-    update_current_round, store_pairing, get_player_rank_map
+    update_current_round, store_pairing, get_player_rank_map,
+    import_uscf_members, search_uscf_members, lookup_uscf_member, get_uscf_db_count
 )
 from trf_builder import build_trf
 
@@ -71,12 +72,34 @@ def _parse_uscf_thin3(body: str) -> dict:
             rating = int(num_m.group(1))
     return {"name": name, "rating": rating}
 
+def _format_uscf_name(raw: str) -> str:
+    """Convert 'DOE, JOHN' → 'John Doe', or title-case if no comma."""
+    raw = raw.strip()
+    if ", " in raw:
+        ln, fn = raw.split(", ", 1)
+        return f"{fn.title()} {ln.title()}"
+    return raw.title()
+
+def _lookup_oob(full_name: str, rating: int, source: str = "") -> str:
+    safe_name = html.escape(full_name)
+    src = f" <span class='text-muted'>({html.escape(source)})</span>" if source else ""
+    preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{src}</span></div>'
+    name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
+    rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
+    return preview + name_oob + rating_oob
+
 @app.get("/api/uscf-lookup", response_class=HTMLResponse)
 async def uscf_lookup(uscf_id: str = ""):
     uscf_id = uscf_id.strip()
     empty = '<div id="uscf-preview"></div>'
     if len(uscf_id) < 7:
         return HTMLResponse(empty)
+    # 1. Try local DB first
+    local = lookup_uscf_member(uscf_id)
+    if local:
+        name = _format_uscf_name(local["name"])
+        return HTMLResponse(_lookup_oob(name, local["rating"], "local DB"))
+    # 2. Fall back to USCF thin3.php
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
@@ -84,16 +107,33 @@ async def uscf_lookup(uscf_id: str = ""):
         if r.status_code != 200 or "memname" not in r.text:
             return HTMLResponse('<div id="uscf-preview"><span class="text-warning small">USCF ID not found</span></div>')
         data = _parse_uscf_thin3(r.text)
-        full_name, rating = data["name"], data["rating"]
-        safe_name = html.escape(full_name)
-        preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}</span></div>'
-        name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
-        rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
-        return HTMLResponse(preview + name_oob + rating_oob)
+        return HTMLResponse(_lookup_oob(data["name"], data["rating"], "uschess.org"))
     except Exception as e:
         import logging
         logging.exception("USCF lookup failed")
         return HTMLResponse(f'<div id="uscf-preview"><span class="text-danger small">Lookup failed: {html.escape(str(e))}</span></div>')
+
+def _suggestions_html(results: list) -> str:
+    if not results:
+        return '<div id="uscf-suggestions"></div>'
+    items = ""
+    for r in results:
+        display = _format_uscf_name(r["name"])
+        rating = r.get("rating") or ""
+        dn = html.escape(display)
+        items += (
+            f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
+            f' data-name="{dn}" data-id="{html.escape(r["uscf_id"])}" data-rating="{html.escape(str(rating))}"'
+            f' onclick="fillUscfPlayer(this)">'
+            f'{dn} <span class="text-muted">{html.escape(r["uscf_id"])}</span>'
+            f'{" — " + str(rating) if rating else ""}'
+            f'</button>'
+        )
+    return (
+        '<div id="uscf-suggestions">'
+        '<div class="list-group mt-1" style="max-height:220px;overflow-y:auto;position:absolute;z-index:100;width:100%">'
+        f'{items}</div></div>'
+    )
 
 @app.get("/api/uscf-search", response_class=HTMLResponse)
 async def uscf_search(name: str = ""):
@@ -101,40 +141,27 @@ async def uscf_search(name: str = ""):
     empty = '<div id="uscf-suggestions"></div>'
     if len(q) < 2:
         return HTMLResponse(empty)
+    # 1. Try local DB first
+    local = search_uscf_members(q)
+    if local:
+        return HTMLResponse(_suggestions_html(local))
+    # 2. Fall back to USCF thin2.php
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-        # Use the last word as last name, rest as first name
         parts = q.split()
         data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
             r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
         rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
-        if not rows:
-            return HTMLResponse(f'{empty}')
-        items = ""
+        results = []
         for uid, raw_name, info in rows[:12]:
-            display = raw_name.strip()
-            if ", " in display:
-                ln, fn = display.split(", ", 1)
-                display = f"{fn.title()} {ln.title()}"
-            else:
-                display = display.title()
             rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
-            rating = rating_m.group(1) if rating_m else ""
-            dn = html.escape(display)
-            items += (
-                f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
-                f' data-name="{dn}" data-id="{html.escape(uid)}" data-rating="{html.escape(rating)}"'
-                f' onclick="fillUscfPlayer(this)">'
-                f'{dn} <span class="text-muted">{html.escape(uid)}</span>'
-                f'{" — " + rating if rating else ""}'
-                f'</button>'
-            )
-        return HTMLResponse(
-            f'<div id="uscf-suggestions">'
-            f'<div class="list-group mt-1" style="max-height:220px;overflow-y:auto;position:absolute;z-index:100;width:100%">'
-            f'{items}</div></div>'
-        )
+            results.append({
+                "uscf_id": uid,
+                "name": raw_name.strip(),
+                "rating": int(rating_m.group(1)) if rating_m else 0,
+            })
+        return HTMLResponse(_suggestions_html(results))
     except Exception:
         return HTMLResponse(empty)
 
@@ -259,6 +286,21 @@ async def view_standings(request: Request, tid: int):
         "tournament": tournament,
         "standings": standings
     })
+
+@app.get("/uscf-db", response_class=HTMLResponse)
+async def uscf_db_page(request: Request, imported: Optional[int] = None):
+    count = get_uscf_db_count()
+    return templates.TemplateResponse(request=request, name="uscf_db.html", context={
+        "count": count,
+        "imported": imported,
+    })
+
+@app.post("/uscf-db/upload")
+async def uscf_db_upload(file: UploadFile = File(...)):
+    content = await file.read()
+    text = content.decode("utf-8", errors="replace")
+    count = import_uscf_members(text.splitlines())
+    return RedirectResponse(f"/uscf-db?imported={count}", status_code=303)
 
 if __name__ == "__main__":
     import uvicorn

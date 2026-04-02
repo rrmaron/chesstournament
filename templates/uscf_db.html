@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}USCF Database{% endblock %}
+{% block content %}
+<h2>USCF Member Database</h2>
+
+{% if imported is not none %}
+<div class="alert alert-success">
+  Imported <strong>{{ "{:,}".format(imported) }}</strong> members successfully.
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-body">
+    <p class="mb-1">
+      {% if count > 0 %}
+        <span class="text-success fw-bold">✓ {{ "{:,}".format(count) }} members loaded</span>
+        — name search and ID lookup use the local database.
+      {% else %}
+        <span class="text-warning fw-bold">No local database loaded.</span>
+        Name search falls back to the USCF website (slower, less current).
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><strong>Upload USCF Rating Supplement</strong></div>
+  <div class="card-body">
+    <p class="text-muted small mb-3">
+      Download the <strong>allratings TSV file</strong> from
+      <a href="https://ratings.uschess.org/portal/published-ratings" target="_blank">ratings.uschess.org/portal/published-ratings</a>
+      (TD login required), then upload it here. Updated on the 1st of each month.
+    </p>
+    <form method="post" action="/uscf-db/upload" enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
+      <div>
+        <label class="form-label">allratings file (.txt / .tsv)</label>
+        <input type="file" name="file" accept=".txt,.tsv,.tab,.csv" class="form-control" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
+    </form>
+    <p class="text-muted small mt-2">
+      The file has ~660,000 rows — import takes a few seconds.
+      <strong>Note:</strong> the database resets on app restart; re-upload after each deploy.
+    </p>
+  </div>
+</div>
+
+<a href="/" class="btn btn-secondary mt-3">← Back to Tournaments</a>
+{% endblock %}

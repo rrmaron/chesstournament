@@ -50,10 +50,92 @@ def init_db():
         UNIQUE(tournament_id, player_id, round)
     )''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS uscf_members (
+        uscf_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        rating INTEGER DEFAULT 0,
+        state TEXT,
+        expiry TEXT
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_uscf_members_name ON uscf_members(name)')
+
     conn.commit()
     conn.close()
 
 init_db()
+
+
+def import_uscf_members(lines: list) -> int:
+    """Parse and bulk-insert TSV lines from the USCF allratings download."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM uscf_members")
+    batch = []
+    for line in lines:
+        parts = line.split('\t')
+        if len(parts) < 5:
+            continue
+        uscf_id = parts[0].strip()
+        if not uscf_id.isdigit():
+            continue  # skip header or malformed rows
+        name = parts[1].strip()
+        expiry = parts[2].strip() if len(parts) > 2 else ""
+        state = parts[3].strip() if len(parts) > 3 else ""
+        try:
+            rating = int(parts[4].strip()) if parts[4].strip().isdigit() else 0
+        except (ValueError, IndexError):
+            rating = 0
+        batch.append((uscf_id, name, rating, state, expiry))
+        if len(batch) >= 5000:
+            c.executemany(
+                "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)",
+                batch
+            )
+            batch = []
+    if batch:
+        c.executemany(
+            "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)",
+            batch
+        )
+    conn.commit()
+    count = c.execute("SELECT COUNT(*) FROM uscf_members").fetchone()[0]
+    conn.close()
+    return count
+
+
+def search_uscf_members(q: str, limit: int = 12) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    words = q.upper().split()
+    conditions = " AND ".join(["name LIKE ?" for _ in words])
+    params = [f"%{w}%" for w in words] + [limit]
+    c.execute(
+        f"SELECT uscf_id, name, rating, state FROM uscf_members WHERE {conditions} ORDER BY rating DESC LIMIT ?",
+        params
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [{"uscf_id": r[0], "name": r[1], "rating": r[2], "state": r[3]} for r in rows]
+
+
+def lookup_uscf_member(uscf_id: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT uscf_id, name, rating, state FROM uscf_members WHERE uscf_id=?", (uscf_id.strip(),))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3]}
+    return None
+
+
+def get_uscf_db_count() -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM uscf_members")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
 
 def create_tournament(name: str, rounds: int = 5, system: str = "dutch") -> int:
     conn = sqlite3.connect(DB_FILE)

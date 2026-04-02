@@ -2,7 +2,10 @@
 {% block title %}Tournaments{% endblock %}
 
 {% block content %}
-<h2>Your Tournaments</h2>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Your Tournaments</h2>
+  <a href="/uscf-db" class="btn btn-sm btn-outline-secondary">USCF Database</a>
+</div>
 
 <form method="post" action="/tournament" class="mb-4">
     <input type="text" name="name" class="form-control mb-2" placeholder="Tournament Name" required>
