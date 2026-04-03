@@ -65,6 +65,7 @@ def init_db():
     for sql in [
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN fide_id TEXT",
+        "ALTER TABLE players ADD COLUMN expiry TEXT",
     ]:
         try:
             c.execute(sql)
@@ -165,11 +166,11 @@ def search_uscf_members(q: str, limit: int = 12) -> List[Dict]:
 def lookup_uscf_member(uscf_id: str) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT uscf_id, name, rating, state, fide_id FROM uscf_members WHERE uscf_id=?", (uscf_id.strip(),))
+    c.execute("SELECT uscf_id, name, rating, state, fide_id, expiry FROM uscf_members WHERE uscf_id=?", (uscf_id.strip(),))
     row = c.fetchone()
     conn.close()
     if row:
-        return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3], "fide_id": row[4]}
+        return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3], "fide_id": row[4], "expiry": row[5]}
     return None
 
 
@@ -222,15 +223,17 @@ def get_tournament(tid: int) -> Optional[Dict]:
     return dict(zip([col[0] for col in c.description], row)) if row else None
 
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None,
-               email: Optional[str] = None, fide_id: Optional[str] = None):
+               email: Optional[str] = None, fide_id: Optional[str] = None, expiry: Optional[str] = None):
     if uscf_id:
-        # Always check local DB — fills rating and fide_id regardless of what form submitted
+        # Always check local DB — fills rating, fide_id, expiry regardless of what form submitted
         local = lookup_uscf_member(uscf_id)
         if local:
             if not rating:
                 rating = local.get("rating") or 0
             if not fide_id:
                 fide_id = local.get("fide_id")
+            if not expiry:
+                expiry = local.get("expiry")
         elif not rating:
             # Fall back to thin3.php only if not in local DB
             try:
@@ -246,8 +249,8 @@ def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optio
                 rating = 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id) VALUES (?, ?, ?, ?, ?, ?)",
-              (tid, name.strip(), uscf_id, rating or 0, email, fide_id))
+    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id, expiry) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (tid, name.strip(), uscf_id, rating or 0, email, fide_id, expiry))
     conn.commit()
     conn.close()
 

@@ -81,11 +81,12 @@ def _format_uscf_name(raw: str) -> str:
         return f"{fn.title()} {ln.title()}"
     return raw.title()
 
-def _lookup_oob(full_name: str, rating: int, source: str = "", fide_id: str = "") -> str:
+def _lookup_oob(full_name: str, rating: int, source: str = "", fide_id: str = "", expiry: str = "") -> str:
     safe_name = html.escape(full_name)
     src = f" <span class='text-muted'>({html.escape(source)})</span>" if source else ""
     fide_str = f" · FIDE: {html.escape(fide_id)}" if fide_id else ""
-    preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{fide_str}{src}</span></div>'
+    exp_str = f" · Expires: {html.escape(expiry)}" if expiry else ""
+    preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{fide_str}{exp_str}{src}</span></div>'
     name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
     rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
     fide_oob = f'<input type="text" id="player-fide-id" name="fide_id" class="form-control" value="{html.escape(fide_id)}" placeholder="Auto-filled" hx-swap-oob="true">'
@@ -101,7 +102,7 @@ async def uscf_lookup(uscf_id: str = ""):
     local = lookup_uscf_member(uscf_id)
     if local:
         name = _format_uscf_name(local["name"])
-        return HTMLResponse(_lookup_oob(name, local["rating"], "local DB", local.get("fide_id") or ""))
+        return HTMLResponse(_lookup_oob(name, local["rating"], "local DB", local.get("fide_id") or "", local.get("expiry") or ""))
     # 2. Fall back to USCF thin3.php
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
