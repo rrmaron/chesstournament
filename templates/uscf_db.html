@@ -31,7 +31,7 @@
       <a href="https://ratings.uschess.org/portal/published-ratings" target="_blank">ratings.uschess.org/portal/published-ratings</a>
       (TD login required), then upload it here. Updated on the 1st of each month.
     </p>
-    <form id="upload-form" enctype="multipart/form-data" class="mb-3">
+    <form id="upload-form" method="post" action="/uscf-db/upload" enctype="multipart/form-data" class="mb-3">
       <div class="mb-2">
         <label class="form-label">allratings file (.txt / .tsv)</label>
         <input type="file" id="upload-file" name="file" accept=".txt,.tsv,.tab,.csv" class="form-control" required>
