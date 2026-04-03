@@ -88,11 +88,18 @@ def import_uscf_members(raw_bytes: bytes) -> int:
         uscf_id = parts[0].strip()
         if not uscf_id.isdigit():
             continue
-        if not first_row_written:
+        if not first_row_written or uscf_id == "31625896":
             import json as _json
             debug_path = DB_FILE.replace(".db", "_col_debug.json")
+            label = uscf_id if uscf_id == "31625896" else "first_row"
+            try:
+                with open(debug_path) as _f:
+                    existing = _json.load(_f)
+            except Exception:
+                existing = {}
+            existing[label] = {str(i): v.strip() for i, v in enumerate(parts[:20])}
             with open(debug_path, "w") as _f:
-                _json.dump({str(i): v.strip() for i, v in enumerate(parts[:20])}, _f)
+                _json.dump(existing, _f, indent=2)
             first_row_written = True
         name   = parts[1].strip()
         state  = parts[2].strip() if len(parts) > 2 else ""
