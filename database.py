@@ -87,10 +87,11 @@ def import_uscf_members(raw_bytes: bytes) -> int:
         uscf_id = parts[0].strip()
         if not uscf_id.isdigit():
             continue
-        name = parts[1].strip()
-        expiry = parts[2].strip() if len(parts) > 2 else ""
-        state  = parts[3].strip() if len(parts) > 3 else ""
-        r = parts[4].strip()
+        name   = parts[1].strip()
+        state  = parts[2].strip() if len(parts) > 2 else ""
+        # parts[3] = country ("USA"), parts[4] = expiry date
+        expiry = parts[4].strip() if len(parts) > 4 else ""
+        r      = parts[5].strip() if len(parts) > 5 else ""
         rating = int(r) if r.isdigit() else 0
         batch.append((uscf_id, name, rating, state, expiry))
         if len(batch) >= 50000:
