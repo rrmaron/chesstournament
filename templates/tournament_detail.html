@@ -7,6 +7,13 @@
 <div class="alert alert-info">Add players below, then generate the first round.</div>
 {% endif %}
 
+{% if imported is not none %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  Imported <strong>{{ imported }}</strong> player{{ 's' if imported != 1 else '' }} successfully.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <!-- Player Registration (shown until first round is generated) -->
 {% if current_round <= 1 %}
 <div class="card mb-4">
@@ -77,6 +84,24 @@
         <button type="submit" class="btn btn-primary w-100">Add Player</button>
       </div>
     </form>
+
+    <hr class="my-3">
+    <div>
+      <a class="text-decoration-none small" data-bs-toggle="collapse" href="#csv-import-section">
+        ▸ Import players from CSV / text file
+      </a>
+      <div class="collapse mt-2" id="csv-import-section">
+        <p class="text-muted small mb-2">
+          Upload a file with one entry per line — either <strong>USCF IDs</strong> (7–8 digits) or
+          <strong>player names</strong>. Comma- or tab-separated files also accepted; USCF ID and name
+          can appear in either column order.
+        </p>
+        <form method="post" action="/tournament/{{ tournament.id }}/import-players" enctype="multipart/form-data" class="d-flex gap-2 align-items-center">
+          <input type="file" name="file" accept=".csv,.txt,.tsv,.tab" class="form-control form-control-sm" required style="max-width:300px">
+          <button type="submit" class="btn btn-sm btn-outline-primary">Import</button>
+        </form>
+      </div>
+    </div>
   </div>
 </div>
 {% else %}

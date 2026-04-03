@@ -39,7 +39,7 @@ async def new_tournament(name: str = Form(...), rounds: int = Form(5), system: s
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.get("/tournament/{tid}", response_class=HTMLResponse)
-async def tournament_detail(request: Request, tid: int):
+async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -48,7 +48,8 @@ async def tournament_detail(request: Request, tid: int):
     return templates.TemplateResponse(request=request, name="tournament_detail.html", context={
         "tournament": tournament,
         "players": players,
-        "current_round": current_round
+        "current_round": current_round,
+        "imported": imported,
     })
 
 def _parse_uscf_thin3(body: str) -> dict:
@@ -170,6 +171,61 @@ async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str
                           rating: Optional[int] = Form(None), email: Optional[str] = Form(None)):
     add_player(tid, name, uscf_id, rating, email)
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
+
+@app.post("/tournament/{tid}/import-players")
+async def import_players_csv(tid: int, file: UploadFile = File(...)):
+    content = await file.read()
+    text = content.decode("utf-8-sig", errors="replace")
+    added = 0
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Split on comma or tab; find USCF ID (7-8 digits) and/or name
+        parts = [p.strip() for p in re.split(r'[,\t]', line) if p.strip()]
+        uscf_id = None
+        name = None
+        rating = None
+        for part in parts:
+            if re.match(r'^\d{7,8}$', part):
+                uscf_id = part
+                break
+        name_parts = [p for p in parts if not re.match(r'^\d{7,8}$', p)]
+        if name_parts:
+            name = name_parts[0]
+
+        if uscf_id:
+            local = lookup_uscf_member(uscf_id)
+            if local:
+                name = _format_uscf_name(local["name"])
+                rating = local["rating"]
+            else:
+                try:
+                    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+                    async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                        r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+                    if r.status_code == 200 and "memname" in r.text:
+                        data = _parse_uscf_thin3(r.text)
+                        name = data["name"] or name
+                        rating = data["rating"]
+                except Exception:
+                    pass
+            if not name:
+                continue
+        elif name:
+            results = search_uscf_members(name, limit=1)
+            if results:
+                top = results[0]
+                uscf_id = top["uscf_id"]
+                name = _format_uscf_name(top["name"])
+                rating = top["rating"]
+        else:
+            continue
+
+        add_player(tid, name, uscf_id, rating)
+        added += 1
+
+    return RedirectResponse(f"/tournament/{tid}?imported={added}", status_code=303)
 
 @app.post("/player/{pid}/delete")
 async def remove_player(pid: int):
