@@ -303,6 +303,11 @@ async def uscf_db_upload(file: UploadFile = File(...)):
     count = await loop.run_in_executor(None, import_uscf_members, content)
     return {"imported": count}
 
+@app.get("/api/uscf-member/{uscf_id}")
+async def uscf_member_debug(uscf_id: str):
+    from database import lookup_uscf_member
+    return lookup_uscf_member(uscf_id) or {"error": "not found"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
