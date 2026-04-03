@@ -2,7 +2,8 @@ import sqlite3
 from typing import List, Dict, Optional
 from datetime import datetime
 
-DB_FILE = "mychessrating.db"
+import os
+DB_FILE = os.environ.get("DB_FILE", "/data/mychessrating.db" if os.path.isdir("/data") else "mychessrating.db")
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
