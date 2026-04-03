@@ -223,15 +223,16 @@ def get_tournament(tid: int) -> Optional[Dict]:
 
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None,
                email: Optional[str] = None, fide_id: Optional[str] = None):
-    if uscf_id and not rating:
-        # 1. Check local USCF DB first (has current monthly ratings)
+    if uscf_id:
+        # Always check local DB — fills rating and fide_id regardless of what form submitted
         local = lookup_uscf_member(uscf_id)
-        if local and local.get("rating"):
-            rating = local["rating"]
+        if local:
+            if not rating:
+                rating = local.get("rating") or 0
             if not fide_id:
                 fide_id = local.get("fide_id")
-        else:
-            # 2. Fall back to thin3.php
+        elif not rating:
+            # Fall back to thin3.php only if not in local DB
             try:
                 import httpx, re
                 headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
