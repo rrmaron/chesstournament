@@ -103,17 +103,12 @@ def import_uscf_members(raw_bytes: bytes) -> int:
             first_row_written = True
         name   = parts[1].strip()
         state  = parts[2].strip() if len(parts) > 2 else ""
-        # parts[3] = country ("USA"), parts[4] = expiry date
         expiry = parts[4].strip() if len(parts) > 4 else ""
-        # Rating may have indicator suffix like "1570P"; try col 5 then col 6
+        # col 9 = regular rating (e.g. "1570*")
         import re as _re
-        rating = 0
-        for col in (5, 6):
-            raw = parts[col].strip() if len(parts) > col else ""
-            m = _re.search(r'(\d{3,4})', raw)
-            if m:
-                rating = int(m.group(1))
-                break
+        raw_r  = parts[9].strip() if len(parts) > 9 else ""
+        m      = _re.search(r'(\d+)', raw_r)
+        rating = int(m.group(1)) if m else 0
         batch.append((uscf_id, name, rating, state, expiry))
         if len(batch) >= 50000:
             c.executemany(SQL, batch)
