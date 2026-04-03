@@ -31,19 +31,74 @@
       <a href="https://ratings.uschess.org/portal/published-ratings" target="_blank">ratings.uschess.org/portal/published-ratings</a>
       (TD login required), then upload it here. Updated on the 1st of each month.
     </p>
-    <form method="post" action="/uscf-db/upload" enctype="multipart/form-data" class="d-flex gap-2 align-items-end">
-      <div>
+    <form id="upload-form" enctype="multipart/form-data" class="mb-3">
+      <div class="mb-2">
         <label class="form-label">allratings file (.txt / .tsv)</label>
-        <input type="file" name="file" accept=".txt,.tsv,.tab,.csv" class="form-control" required>
+        <input type="file" id="upload-file" name="file" accept=".txt,.tsv,.tab,.csv" class="form-control" required>
       </div>
-      <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
+      <button id="upload-btn" type="submit" class="btn btn-primary">Upload &amp; Import</button>
     </form>
-    <p class="text-muted small mt-2">
-      The file has ~660,000 rows — import takes a few seconds.
-      <strong>Note:</strong> the database resets on app restart; re-upload after each deploy.
-    </p>
+
+    <div id="progress-section" style="display:none">
+      <div id="progress-label" class="small text-muted mb-1">Uploading…</div>
+      <div class="progress" style="height:22px">
+        <div id="upload-bar"
+             class="progress-bar progress-bar-striped progress-bar-animated"
+             role="progressbar" style="width:0%">0%</div>
+      </div>
+    </div>
+
+    <p class="text-muted small mt-2 mb-0">The file is ~50 MB / 660,000 rows — upload takes a few seconds, then a few more to import.</p>
   </div>
 </div>
 
 <a href="/" class="btn btn-secondary mt-3">← Back to Tournaments</a>
+
+<script>
+document.getElementById('upload-form').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const file = document.getElementById('upload-file').files[0];
+  if (!file) return;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('upload-btn').disabled = true;
+
+  const bar = document.getElementById('upload-bar');
+  const label = document.getElementById('progress-label');
+
+  const xhr = new XMLHttpRequest();
+
+  xhr.upload.onprogress = function(e) {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      bar.style.width = pct + '%';
+      bar.textContent = pct + '%';
+      if (pct === 100) {
+        label.textContent = 'Importing records — please wait…';
+      } else {
+        label.textContent = 'Uploading ' + pct + '%…';
+      }
+    }
+  };
+
+  xhr.onload = function() {
+    bar.style.width = '100%';
+    bar.textContent = '100%';
+    window.location.href = xhr.responseURL || '/uscf-db';
+  };
+
+  xhr.onerror = function() {
+    label.textContent = 'Upload failed — please try again.';
+    bar.classList.remove('progress-bar-animated');
+    bar.classList.add('bg-danger');
+    document.getElementById('upload-btn').disabled = false;
+  };
+
+  xhr.open('POST', '/uscf-db/upload');
+  xhr.send(formData);
+});
+</script>
 {% endblock %}
