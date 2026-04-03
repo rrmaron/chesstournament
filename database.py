@@ -91,8 +91,15 @@ def import_uscf_members(raw_bytes: bytes) -> int:
         state  = parts[2].strip() if len(parts) > 2 else ""
         # parts[3] = country ("USA"), parts[4] = expiry date
         expiry = parts[4].strip() if len(parts) > 4 else ""
-        r      = parts[5].strip() if len(parts) > 5 else ""
-        rating = int(r) if r.isdigit() else 0
+        # Rating may have indicator suffix like "1570P"; try col 5 then col 6
+        import re as _re
+        rating = 0
+        for col in (5, 6):
+            raw = parts[col].strip() if len(parts) > col else ""
+            m = _re.search(r'(\d{3,4})', raw)
+            if m:
+                rating = int(m.group(1))
+                break
         batch.append((uscf_id, name, rating, state, expiry))
         if len(batch) >= 50000:
             c.executemany(SQL, batch)
