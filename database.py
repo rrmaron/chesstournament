@@ -110,8 +110,19 @@ def search_uscf_members(q: str, limit: int = 12) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     words = q.upper().split()
-    conditions = " AND ".join(["name LIKE ?" for _ in words])
-    params = [f"%{w}%" for w in words] + [limit]
+    if not words:
+        conn.close()
+        return []
+    # Each word must match as a prefix of either the last name or the first name.
+    # Names are stored as "LASTNAME, FIRSTNAME", so:
+    #   last-name prefix  → name LIKE 'WORD%'
+    #   first-name prefix → name LIKE '%, WORD%'
+    conditions = " AND ".join(["(name LIKE ? OR name LIKE ?)" for _ in words])
+    params = []
+    for w in words:
+        params.append(f"{w}%")      # last-name prefix
+        params.append(f"%, {w}%")   # first-name prefix
+    params.append(limit)
     c.execute(
         f"SELECT uscf_id, name, rating, state FROM uscf_members WHERE {conditions} ORDER BY rating DESC LIMIT ?",
         params
