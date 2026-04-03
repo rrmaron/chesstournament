@@ -22,4 +22,4 @@ primary_region = 'ord'
 
 [[vm]]
   size = 'shared-cpu-1x'
-  memory = '512mb'
+  memory = '1gb'

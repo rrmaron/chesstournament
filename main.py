@@ -297,9 +297,10 @@ async def uscf_db_page(request: Request, imported: Optional[int] = None):
 
 @app.post("/uscf-db/upload")
 async def uscf_db_upload(file: UploadFile = File(...)):
+    import asyncio
     content = await file.read()
-    text = content.decode("utf-8", errors="replace")
-    count = import_uscf_members(text.splitlines())
+    loop = asyncio.get_event_loop()
+    count = await loop.run_in_executor(None, import_uscf_members, content)
     return {"imported": count}
 
 if __name__ == "__main__":

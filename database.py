@@ -66,40 +66,42 @@ def init_db():
 init_db()
 
 
-def import_uscf_members(lines: list) -> int:
-    """Parse and bulk-insert TSV lines from the USCF allratings download."""
+def import_uscf_members(raw_bytes: bytes) -> int:
+    """Stream-parse and bulk-insert TSV bytes from the USCF allratings download."""
+    import io
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    # Speed-optimised pragmas for bulk load
+    c.execute("PRAGMA synchronous = OFF")
+    c.execute("PRAGMA journal_mode = WAL")
+    c.execute("PRAGMA cache_size = -64000")  # 64 MB cache
     c.execute("DELETE FROM uscf_members")
+    SQL = "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)"
     batch = []
-    for line in lines:
+    count = 0
+    reader = io.TextIOWrapper(io.BytesIO(raw_bytes), encoding="utf-8", errors="replace")
+    for line in reader:
         parts = line.split('\t')
         if len(parts) < 5:
             continue
         uscf_id = parts[0].strip()
         if not uscf_id.isdigit():
-            continue  # skip header or malformed rows
+            continue
         name = parts[1].strip()
         expiry = parts[2].strip() if len(parts) > 2 else ""
-        state = parts[3].strip() if len(parts) > 3 else ""
-        try:
-            rating = int(parts[4].strip()) if parts[4].strip().isdigit() else 0
-        except (ValueError, IndexError):
-            rating = 0
+        state  = parts[3].strip() if len(parts) > 3 else ""
+        r = parts[4].strip()
+        rating = int(r) if r.isdigit() else 0
         batch.append((uscf_id, name, rating, state, expiry))
-        if len(batch) >= 5000:
-            c.executemany(
-                "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)",
-                batch
-            )
+        if len(batch) >= 50000:
+            c.executemany(SQL, batch)
+            conn.commit()
+            count += len(batch)
             batch = []
     if batch:
-        c.executemany(
-            "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)",
-            batch
-        )
-    conn.commit()
-    count = c.execute("SELECT COUNT(*) FROM uscf_members").fetchone()[0]
+        c.executemany(SQL, batch)
+        conn.commit()
+        count += len(batch)
     conn.close()
     return count
 
