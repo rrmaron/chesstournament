@@ -79,6 +79,7 @@ def import_uscf_members(raw_bytes: bytes) -> int:
     SQL = "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)"
     batch = []
     count = 0
+    first_row_written = False
     reader = io.TextIOWrapper(io.BytesIO(raw_bytes), encoding="utf-8", errors="replace")
     for line in reader:
         parts = line.split('\t')
@@ -87,6 +88,12 @@ def import_uscf_members(raw_bytes: bytes) -> int:
         uscf_id = parts[0].strip()
         if not uscf_id.isdigit():
             continue
+        if not first_row_written:
+            import json as _json
+            debug_path = DB_FILE.replace(".db", "_col_debug.json")
+            with open(debug_path, "w") as _f:
+                _json.dump({str(i): v.strip() for i, v in enumerate(parts[:20])}, _f)
+            first_row_written = True
         name   = parts[1].strip()
         state  = parts[2].strip() if len(parts) > 2 else ""
         # parts[3] = country ("USA"), parts[4] = expiry date

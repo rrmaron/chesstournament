@@ -308,6 +308,17 @@ async def uscf_member_debug(uscf_id: str):
     from database import lookup_uscf_member
     return lookup_uscf_member(uscf_id) or {"error": "not found"}
 
+@app.get("/api/uscf-col-debug")
+async def uscf_col_debug():
+    import json
+    from database import DB_FILE
+    debug_path = DB_FILE.replace(".db", "_col_debug.json")
+    try:
+        with open(debug_path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"error": "re-upload the allratings file to generate this"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
