@@ -81,13 +81,15 @@ def _format_uscf_name(raw: str) -> str:
         return f"{fn.title()} {ln.title()}"
     return raw.title()
 
-def _lookup_oob(full_name: str, rating: int, source: str = "") -> str:
+def _lookup_oob(full_name: str, rating: int, source: str = "", fide_id: str = "") -> str:
     safe_name = html.escape(full_name)
     src = f" <span class='text-muted'>({html.escape(source)})</span>" if source else ""
-    preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{src}</span></div>'
+    fide_str = f" · FIDE: {html.escape(fide_id)}" if fide_id else ""
+    preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{fide_str}{src}</span></div>'
     name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'
     rating_oob = f'<input type="number" id="player-rating" name="rating" class="form-control" value="{html.escape(str(rating))}" placeholder="Optional" hx-swap-oob="true">'
-    return preview + name_oob + rating_oob
+    fide_oob = f'<input type="text" id="player-fide-id" name="fide_id" class="form-control" value="{html.escape(fide_id)}" placeholder="Auto-filled" hx-swap-oob="true">'
+    return preview + name_oob + rating_oob + fide_oob
 
 @app.get("/api/uscf-lookup", response_class=HTMLResponse)
 async def uscf_lookup(uscf_id: str = ""):
@@ -99,7 +101,7 @@ async def uscf_lookup(uscf_id: str = ""):
     local = lookup_uscf_member(uscf_id)
     if local:
         name = _format_uscf_name(local["name"])
-        return HTMLResponse(_lookup_oob(name, local["rating"], "local DB"))
+        return HTMLResponse(_lookup_oob(name, local["rating"], "local DB", local.get("fide_id") or ""))
     # 2. Fall back to USCF thin3.php
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
@@ -121,13 +123,16 @@ def _suggestions_html(results: list) -> str:
     for r in results:
         display = _format_uscf_name(r["name"])
         rating = r.get("rating") or ""
+        fide_id = r.get("fide_id") or ""
         dn = html.escape(display)
         items += (
             f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
             f' data-name="{dn}" data-id="{html.escape(r["uscf_id"])}" data-rating="{html.escape(str(rating))}"'
+            f' data-fide="{html.escape(fide_id)}"'
             f' onclick="fillUscfPlayer(this)">'
             f'{dn} <span class="text-muted">{html.escape(r["uscf_id"])}</span>'
             f'{" — " + str(rating) if rating else ""}'
+            f'{" · FIDE " + fide_id if fide_id else ""}'
             f'</button>'
         )
     return (
@@ -168,8 +173,9 @@ async def uscf_search(name: str = ""):
 
 @app.post("/tournament/{tid}/player")
 async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
-                          rating: Optional[int] = Form(None), email: Optional[str] = Form(None)):
-    add_player(tid, name, uscf_id, rating, email)
+                          rating: Optional[int] = Form(None), email: Optional[str] = Form(None),
+                          fide_id: Optional[str] = Form(None)):
+    add_player(tid, name, uscf_id, rating, email, fide_id or None)
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.post("/tournament/{tid}/import-players")
@@ -194,11 +200,13 @@ async def import_players_csv(tid: int, file: UploadFile = File(...)):
         if name_parts:
             name = name_parts[0]
 
+        fide_id = None
         if uscf_id:
             local = lookup_uscf_member(uscf_id)
             if local:
                 name = _format_uscf_name(local["name"])
                 rating = local["rating"]
+                fide_id = local.get("fide_id")
             else:
                 try:
                     headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
@@ -219,10 +227,11 @@ async def import_players_csv(tid: int, file: UploadFile = File(...)):
                 uscf_id = top["uscf_id"]
                 name = _format_uscf_name(top["name"])
                 rating = top["rating"]
+                fide_id = top.get("fide_id")
         else:
             continue
 
-        add_player(tid, name, uscf_id, rating)
+        add_player(tid, name, uscf_id, rating, fide_id=fide_id)
         added += 1
 
     return RedirectResponse(f"/tournament/{tid}?imported={added}", status_code=303)

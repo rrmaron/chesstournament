@@ -21,13 +21,14 @@
   <div class="card-body">
     {% if players %}
     <table class="table table-sm mb-3">
-      <thead><tr><th>#</th><th>Name</th><th>USCF ID</th><th>Rating</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Name</th><th>USCF ID</th><th>FIDE ID</th><th>Rating</th><th></th></tr></thead>
       <tbody>
         {% for p in players %}
         <tr>
           <td>{{ loop.index }}</td>
           <td>{{ p.name }}</td>
           <td>{{ p.uscf_id or '—' }}</td>
+          <td>{{ p.fide_id or '—' }}</td>
           <td>{{ p.rating or '—' }}</td>
           <td>
             <form method="post" action="/player/{{ p.id }}/delete" style="display:inline">
@@ -45,6 +46,7 @@
         document.getElementById('player-name').value = btn.dataset.name;
         document.getElementById('player-uscf-id').value = btn.dataset.id;
         document.getElementById('player-rating').value = btn.dataset.rating;
+        document.getElementById('player-fide-id').value = btn.dataset.fide || '';
         document.getElementById('uscf-suggestions').innerHTML = '';
         document.getElementById('uscf-preview').innerHTML = '';
     }
@@ -75,6 +77,10 @@
       <div class="col-md-2">
         <label class="form-label">Rating</label>
         <input type="number" id="player-rating" name="rating" class="form-control" placeholder="Auto-filled">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">FIDE ID</label>
+        <input type="text" id="player-fide-id" name="fide_id" class="form-control" placeholder="Auto-filled">
       </div>
       <div class="col-md-2">
         <label class="form-label">Email</label>

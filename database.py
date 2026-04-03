@@ -56,9 +56,20 @@ def init_db():
         name TEXT NOT NULL,
         rating INTEGER DEFAULT 0,
         state TEXT,
-        expiry TEXT
+        expiry TEXT,
+        fide_id TEXT
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_uscf_members_name ON uscf_members(name)')
+
+    # Migrations for existing DBs
+    for sql in [
+        "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
+        "ALTER TABLE players ADD COLUMN fide_id TEXT",
+    ]:
+        try:
+            c.execute(sql)
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()
@@ -76,7 +87,7 @@ def import_uscf_members(raw_bytes: bytes) -> int:
     c.execute("PRAGMA journal_mode = WAL")
     c.execute("PRAGMA cache_size = -64000")  # 64 MB cache
     c.execute("DELETE FROM uscf_members")
-    SQL = "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry) VALUES (?,?,?,?,?)"
+    SQL = "INSERT OR REPLACE INTO uscf_members (uscf_id, name, rating, state, expiry, fide_id) VALUES (?,?,?,?,?,?)"
     batch = []
     count = 0
     first_row_written = False
@@ -104,12 +115,14 @@ def import_uscf_members(raw_bytes: bytes) -> int:
         name   = parts[1].strip()
         state  = parts[2].strip() if len(parts) > 2 else ""
         expiry = parts[4].strip() if len(parts) > 4 else ""
-        # col 9 = regular rating (e.g. "1570*")
+        # col 6 = FIDE ID (7-9 digits), col 9 = regular rating (e.g. "1570*")
         import re as _re
+        fide_raw = parts[6].strip() if len(parts) > 6 else ""
+        fide_id  = fide_raw if _re.match(r'^\d{7,9}$', fide_raw) else None
         raw_r  = parts[9].strip() if len(parts) > 9 else ""
         m      = _re.search(r'(\d+)', raw_r)
         rating = int(m.group(1)) if m else 0
-        batch.append((uscf_id, name, rating, state, expiry))
+        batch.append((uscf_id, name, rating, state, expiry, fide_id))
         if len(batch) >= 50000:
             c.executemany(SQL, batch)
             conn.commit()
@@ -141,22 +154,22 @@ def search_uscf_members(q: str, limit: int = 12) -> List[Dict]:
         params.append(f"%, {w}%")   # first-name prefix
     params.append(limit)
     c.execute(
-        f"SELECT uscf_id, name, rating, state FROM uscf_members WHERE {conditions} ORDER BY rating DESC LIMIT ?",
+        f"SELECT uscf_id, name, rating, state, fide_id FROM uscf_members WHERE {conditions} ORDER BY rating DESC LIMIT ?",
         params
     )
     rows = c.fetchall()
     conn.close()
-    return [{"uscf_id": r[0], "name": r[1], "rating": r[2], "state": r[3]} for r in rows]
+    return [{"uscf_id": r[0], "name": r[1], "rating": r[2], "state": r[3], "fide_id": r[4]} for r in rows]
 
 
 def lookup_uscf_member(uscf_id: str) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT uscf_id, name, rating, state FROM uscf_members WHERE uscf_id=?", (uscf_id.strip(),))
+    c.execute("SELECT uscf_id, name, rating, state, fide_id FROM uscf_members WHERE uscf_id=?", (uscf_id.strip(),))
     row = c.fetchone()
     conn.close()
     if row:
-        return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3]}
+        return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3], "fide_id": row[4]}
     return None
 
 
@@ -208,12 +221,15 @@ def get_tournament(tid: int) -> Optional[Dict]:
     conn.close()
     return dict(zip([col[0] for col in c.description], row)) if row else None
 
-def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None, email: Optional[str] = None):
+def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None,
+               email: Optional[str] = None, fide_id: Optional[str] = None):
     if uscf_id and not rating:
         # 1. Check local USCF DB first (has current monthly ratings)
         local = lookup_uscf_member(uscf_id)
         if local and local.get("rating"):
             rating = local["rating"]
+            if not fide_id:
+                fide_id = local.get("fide_id")
         else:
             # 2. Fall back to thin3.php
             try:
@@ -229,8 +245,8 @@ def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optio
                 rating = 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email) VALUES (?, ?, ?, ?, ?)",
-              (tid, name.strip(), uscf_id, rating or 0, email))
+    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id) VALUES (?, ?, ?, ?, ?, ?)",
+              (tid, name.strip(), uscf_id, rating or 0, email, fide_id))
     conn.commit()
     conn.close()
 
