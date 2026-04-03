@@ -220,12 +220,17 @@ def get_players(tid: int) -> List[Dict]:
     conn.close()
     return [dict(zip(cols, row)) for row in rows]
 
-def delete_player(pid: int):
+def delete_player(pid: int) -> Optional[int]:
+    """Delete player and return their tournament_id."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
+    c.execute("SELECT tournament_id FROM players WHERE id=?", (pid,))
+    row = c.fetchone()
+    tid = row[0] if row else None
     c.execute("DELETE FROM players WHERE id=?", (pid,))
     conn.commit()
     conn.close()
+    return tid
 
 def record_result(tid: int, round_num: int, white_id: Optional[int] = None, black_id: Optional[int] = None,
                   result: Optional[str] = None, is_bye: bool = False, bye_type: str = "none"):

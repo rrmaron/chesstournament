@@ -173,8 +173,8 @@ async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str
 
 @app.post("/player/{pid}/delete")
 async def remove_player(pid: int):
-    delete_player(pid)
-    return RedirectResponse("/", status_code=303)
+    tid = delete_player(pid)
+    return RedirectResponse(f"/tournament/{tid}" if tid else "/", status_code=303)
 
 # HTMX: Round table fragment
 @app.get("/tournament/{tid}/round/{round_num}/table", response_class=HTMLResponse)
