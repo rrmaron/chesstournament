@@ -193,17 +193,23 @@ def get_tournament(tid: int) -> Optional[Dict]:
 
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None, email: Optional[str] = None):
     if uscf_id and not rating:
-        try:
-            import httpx, re
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True, headers=headers)
-            if r.status_code == 200:
-                m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)
-                if m:
-                    num = re.search(r"(\d+)", m.group(1))
-                    rating = int(num.group(1)) if num else 0
-        except:
-            rating = 0
+        # 1. Check local USCF DB first (has current monthly ratings)
+        local = lookup_uscf_member(uscf_id)
+        if local and local.get("rating"):
+            rating = local["rating"]
+        else:
+            # 2. Fall back to thin3.php
+            try:
+                import httpx, re
+                headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+                r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True, headers=headers)
+                if r.status_code == 200:
+                    m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)
+                    if m:
+                        num = re.search(r"(\d+)", m.group(1))
+                        rating = int(num.group(1)) if num else 0
+            except:
+                rating = 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email) VALUES (?, ?, ?, ?, ?)",
