@@ -300,7 +300,7 @@ async def uscf_db_upload(file: UploadFile = File(...)):
     content = await file.read()
     text = content.decode("utf-8", errors="replace")
     count = import_uscf_members(text.splitlines())
-    return RedirectResponse(f"/uscf-db?imported={count}", status_code=303)
+    return {"imported": count}
 
 if __name__ == "__main__":
     import uvicorn

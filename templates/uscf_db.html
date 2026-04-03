@@ -85,9 +85,19 @@ document.getElementById('upload-form').addEventListener('submit', function(e) {
   };
 
   xhr.onload = function() {
-    bar.style.width = '100%';
-    bar.textContent = '100%';
-    window.location.href = xhr.responseURL || '/uscf-db';
+    if (xhr.status === 200) {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        window.location.href = '/uscf-db?imported=' + data.imported;
+      } catch(e) {
+        window.location.href = '/uscf-db';
+      }
+    } else {
+      label.textContent = 'Import failed (HTTP ' + xhr.status + ') — please try again.';
+      bar.classList.remove('progress-bar-animated');
+      bar.classList.add('bg-danger');
+      document.getElementById('upload-btn').disabled = false;
+    }
   };
 
   xhr.onerror = function() {
