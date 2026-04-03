@@ -21,7 +21,7 @@
   <div class="card-body">
     {% if players %}
     <table class="table table-sm mb-3">
-      <thead><tr><th>#</th><th>Name</th><th>USCF ID</th><th>FIDE ID</th><th>Expires</th><th>Rating</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Name</th><th>USCF ID</th><th>FIDE ID</th><th>Expires</th><th>USCF Rtg</th><th>FIDE Rtg</th><th></th></tr></thead>
       <tbody>
         {% for p in players %}
         <tr>
@@ -31,6 +31,7 @@
           <td>{{ p.fide_id or '—' }}</td>
           <td>{{ p.expiry or '—' }}</td>
           <td>{{ p.rating or '—' }}</td>
+          <td>{{ p.fide_rating or '—' }}</td>
           <td>
             <form method="post" action="/player/{{ p.id }}/delete" style="display:inline">
               <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove {{ p.name }}?')">✕</button>

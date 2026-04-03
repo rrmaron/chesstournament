@@ -84,7 +84,7 @@ def _format_uscf_name(raw: str) -> str:
 def _lookup_oob(full_name: str, rating: int, source: str = "", fide_id: str = "", expiry: str = "") -> str:
     safe_name = html.escape(full_name)
     src = f" <span class='text-muted'>({html.escape(source)})</span>" if source else ""
-    fide_str = f" · FIDE: {html.escape(fide_id)}" if fide_id else ""
+    fide_str = f" · FIDE ID: {html.escape(fide_id)}" if fide_id else ""
     exp_str = f" · Expires: {html.escape(expiry)}" if expiry else ""
     preview = f'<div id="uscf-preview"><span class="text-success small">✓ {safe_name} — Rating: {rating or "Unrated"}{fide_str}{exp_str}{src}</span></div>'
     name_oob = f'<input type="text" id="player-name" name="name" class="form-control" value="{safe_name}" required placeholder="Full name" hx-swap-oob="true">'

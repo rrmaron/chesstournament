@@ -66,6 +66,7 @@ def init_db():
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN expiry TEXT",
+        "ALTER TABLE players ADD COLUMN fide_rating INTEGER DEFAULT 0",
     ]:
         try:
             c.execute(sql)
@@ -222,6 +223,21 @@ def get_tournament(tid: int) -> Optional[Dict]:
     conn.close()
     return dict(zip([col[0] for col in c.description], row)) if row else None
 
+def _fetch_fide_rating(fide_id: str) -> int:
+    """Fetch standard FIDE rating from app.fide.com API."""
+    try:
+        import httpx
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+        r = httpx.get(f"https://app.fide.com/api/v1/client/players/{fide_id}",
+                      timeout=8, follow_redirects=True, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            return int(data.get("rating") or data.get("standard_rating") or 0)
+    except Exception:
+        pass
+    return 0
+
+
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None,
                email: Optional[str] = None, fide_id: Optional[str] = None, expiry: Optional[str] = None):
     if uscf_id:
@@ -247,10 +263,11 @@ def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optio
                         rating = int(num.group(1)) if num else 0
             except:
                 rating = 0
+    fide_rating = _fetch_fide_rating(fide_id) if fide_id else 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id, expiry) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (tid, name.strip(), uscf_id, rating or 0, email, fide_id, expiry))
+    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id, expiry, fide_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (tid, name.strip(), uscf_id, rating or 0, email, fide_id, expiry, fide_rating))
     conn.commit()
     conn.close()
 
