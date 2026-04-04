@@ -373,10 +373,22 @@ async def uscf_db_upload(file: UploadFile = File(...)):
 @app.get("/api/uscf-live-debug/{uscf_id}")
 async def uscf_live_debug(uscf_id: str):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+               "Accept": "application/json, text/plain, */*"}
+    results = {}
+    urls = [
+        f"https://ratings.uschess.org/api/player/{uscf_id}",
+        f"https://ratings.uschess.org/api/v1/player/{uscf_id}",
+        f"https://ratings.uschess.org/api/players/{uscf_id}",
+        f"http://www.uschess.org/msa/MbrDtlTnmtHist.php?{uscf_id}",
+    ]
     async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        r = await client.get(f"https://ratings.uschess.org/player/{uscf_id}", headers=headers)
-    return {"status": r.status_code, "body": r.text[:4000]}
+        for url in urls:
+            try:
+                r = await client.get(url, headers=headers)
+                results[url] = {"status": r.status_code, "body": r.text[:500]}
+            except Exception as e:
+                results[url] = {"error": str(e)}
+    return results
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
