@@ -18,6 +18,7 @@ def build_trf(tid: int, rounds_to_include: Optional[int] = None) -> str:
 
     c.execute("""SELECT id, name, rating, score
                  FROM players WHERE tournament_id=?
+                 AND (status IS NULL OR status != 'withdrawn')
                  ORDER BY rating DESC, registered_at""", (tid,))
     players_raw = c.fetchall()
 

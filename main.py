@@ -10,7 +10,8 @@ import tempfile
 import html
 import re
 import httpx
-from typing import Optional
+from typing import Optional, List
+import stripe
 
 from database import (
     get_tournaments, create_tournament, get_tournament,
@@ -23,6 +24,9 @@ from database import (
     delete_user, update_user_password,
     create_verification_token, check_and_consume_token, activate_user,
     get_setting, set_setting,
+    update_tournament_settings, get_player,
+    register_player_public, set_player_status,
+    update_player_payment, update_player_bye_request,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -30,6 +34,7 @@ from notify import send_verification_email, send_verification_sms
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 
 app = FastAPI(title="MyChessRating Pairings")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -160,6 +165,18 @@ async def register_submit(
 
     email = contact if channel == "email" else None
     phone = contact if channel == "sms" else None
+
+    if get_setting("require_verification", "1") == "0":
+        # Verification disabled — activate immediately
+        uid = create_pending_user(username, password, email=email, phone=phone)
+        activate_user(uid)
+        from database import DB_FILE
+        import sqlite3 as _sq
+        row = _sq.connect(DB_FILE).execute("SELECT id, username, role FROM users WHERE id=?", (uid,)).fetchone()
+        if row:
+            request.session["user"] = {"id": row[0], "username": row[1], "role": row[2]}
+        return RedirectResponse("/", status_code=303)
+
     uid = create_pending_user(username, password, email=email, phone=phone)
     token = create_verification_token(uid, channel, contact)
 
@@ -170,7 +187,8 @@ async def register_submit(
             await send_verification_sms(contact, token)
     except Exception as e:
         error = str(e)
-        return templates.TemplateResponse(request=request, name="register.html", context={"error": error})
+        return templates.TemplateResponse(request=request, name="register.html",
+                                          context={"error": error, "reg_method": reg_method})
 
     request.session["pending_user_id"] = uid
     request.session["pending_contact"] = contact
@@ -244,16 +262,20 @@ async def users_page(request: Request, saved: Optional[str] = None, user: dict =
         "current_user": user,
         "reg_method": get_setting("registration_method", "both"),
         "login_message": get_setting("login_message", ""),
+        "require_verification": get_setting("require_verification", "1") == "1",
         "saved": saved == "1",
     })
 
 @app.post("/admin/settings")
 async def save_settings(
+    request: Request,
     registration_method: str = Form(...),
     _user: dict = Depends(require_admin),
 ):
     if registration_method in ("email", "sms", "both"):
         set_setting("registration_method", registration_method)
+    form = await request.form()
+    set_setting("require_verification", "1" if form.get("require_verification") else "0")
     return RedirectResponse("/users?saved=1", status_code=303)
 
 @app.post("/admin/settings/login-message")
@@ -308,18 +330,28 @@ async def new_tournament(
     name: str = Form(...),
     rounds: int = Form(5),
     system: str = Form("dutch"),
+    entry_fee: float = Form(0),
     _user: dict = Depends(require_td),
 ):
-    tid = create_tournament(name, rounds, system)
+    tid = create_tournament(name, rounds, system, entry_fee)
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.get("/tournament/{tid}", response_class=HTMLResponse)
 async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None,
                              user: dict = Depends(require_login)):
+    import json as _json
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
-    players = get_players(tid)
+    players_raw = get_players(tid)
+    players = []
+    for p in players_raw:
+        p = dict(p)
+        try:
+            p["byes_list"] = _json.loads(p.get("requested_byes") or "[]")
+        except Exception:
+            p["byes_list"] = []
+        players.append(p)
     current_round = tournament.get("current_round", 0) or 1
     return templates.TemplateResponse(request=request, name="tournament_detail.html", context={
         "tournament": tournament,
@@ -867,6 +899,172 @@ async def fide_pdf(
         buf, media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename=FIDE_Rating_{data['rating']}.pdf"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Tournament settings (TD only)
+# ---------------------------------------------------------------------------
+
+@app.post("/tournament/{tid}/settings")
+async def tournament_settings(
+    tid: int,
+    entry_fee: float = Form(0),
+    registration_open: str = Form(None),
+    _user: dict = Depends(require_td),
+):
+    update_tournament_settings(tid, entry_fee, 1 if registration_open else 0)
+    return RedirectResponse(f"/tournament/{tid}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Public entry list (no auth)
+# ---------------------------------------------------------------------------
+
+@app.get("/tournament/{tid}/entries", response_class=HTMLResponse)
+async def entry_list_page(request: Request, tid: int):
+    import json as _json
+    tournament = get_tournament(tid)
+    if not tournament:
+        raise HTTPException(404)
+    players_raw = get_players(tid)
+    players = []
+    for p in players_raw:
+        p = dict(p)
+        try:
+            p["byes_list"] = _json.loads(p.get("requested_byes") or "[]")
+        except Exception:
+            p["byes_list"] = []
+        players.append(p)
+    return templates.TemplateResponse(request=request, name="entry_list.html",
+                                      context={"tournament": tournament, "players": players})
+
+
+# ---------------------------------------------------------------------------
+# Public registration form (no auth)
+# ---------------------------------------------------------------------------
+
+@app.get("/tournament/{tid}/register", response_class=HTMLResponse)
+async def tournament_register_page(request: Request, tid: int, cancelled: Optional[str] = None):
+    tournament = get_tournament(tid)
+    if not tournament:
+        raise HTTPException(404)
+    current_user = get_current_user(request)
+    return templates.TemplateResponse(request=request, name="tournament_register.html", context={
+        "tournament": tournament,
+        "current_user": current_user,
+        "error": "Payment was cancelled — please try again." if cancelled else None,
+    })
+
+
+@app.post("/tournament/{tid}/register")
+async def tournament_register_submit(
+    request: Request,
+    tid: int,
+    name: str = Form(...),
+    uscf_id: Optional[str] = Form(None),
+    rating: Optional[int] = Form(None),
+    email: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    fide_id: Optional[str] = Form(None),
+    requested_byes: List[int] = Form(default=[]),
+):
+    import json as _json
+    tournament = get_tournament(tid)
+    if not tournament:
+        raise HTTPException(404)
+    entry_fee = float(tournament.get("entry_fee") or 0)
+    local = lookup_uscf_member(uscf_id) if uscf_id else None
+    expiry = local.get("expiry") if local else None
+    player_id = register_player_public(
+        tid, name.strip(), uscf_id or None, rating or 0,
+        email or None, phone or None, fide_id or None, expiry,
+        requested_byes=requested_byes,
+        payment_status="pending" if entry_fee > 0 else "waived",
+    )
+    if entry_fee > 0 and STRIPE_SECRET_KEY:
+        stripe.api_key = STRIPE_SECRET_KEY
+        base_url = str(request.base_url).rstrip("/")
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{"price_data": {"currency": "usd",
+                "product_data": {"name": f"Entry fee: {tournament['name']}"},
+                "unit_amount": int(entry_fee * 100)}, "quantity": 1}],
+            mode="payment",
+            success_url=f"{base_url}/tournament/{tid}/register/success?session_id={{CHECKOUT_SESSION_ID}}&player_id={player_id}",
+            cancel_url=f"{base_url}/tournament/{tid}/register/cancel?player_id={player_id}",
+            customer_email=email or None,
+        )
+        return RedirectResponse(session.url, status_code=303)
+    elif entry_fee > 0:
+        import logging
+        logging.warning(f"[DEV] Stripe not configured — skipping payment for player {player_id}")
+        update_player_payment(player_id, "waived")
+    return RedirectResponse(f"/tournament/{tid}/register/success?player_id={player_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Stripe callbacks (no auth)
+# ---------------------------------------------------------------------------
+
+@app.get("/tournament/{tid}/register/success", response_class=HTMLResponse)
+async def register_success(request: Request, tid: int, player_id: int, session_id: Optional[str] = None):
+    import json as _json
+    tournament = get_tournament(tid)
+    player = get_player(player_id)
+    if session_id and STRIPE_SECRET_KEY:
+        stripe.api_key = STRIPE_SECRET_KEY
+        try:
+            s = stripe.checkout.Session.retrieve(session_id)
+            if s.payment_status == "paid":
+                update_player_payment(player_id, "paid", session_id)
+                player = get_player(player_id)
+        except Exception:
+            pass
+    if player:
+        try:
+            player["byes_list"] = _json.loads(player.get("requested_byes") or "[]")
+        except Exception:
+            player["byes_list"] = []
+    return templates.TemplateResponse(request=request, name="tournament_register_success.html",
+                                      context={"tournament": tournament, "player": player})
+
+
+@app.get("/tournament/{tid}/register/cancel")
+async def register_cancel(tid: int, player_id: Optional[int] = None):
+    if player_id:
+        delete_player(player_id)
+    return RedirectResponse(f"/tournament/{tid}/register?cancelled=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Withdraw / restore player (TD)
+# ---------------------------------------------------------------------------
+
+@app.post("/player/{pid}/withdraw")
+async def withdraw_player(pid: int, _user: dict = Depends(require_td)):
+    tid = set_player_status(pid, "withdrawn")
+    return RedirectResponse(f"/tournament/{tid}", status_code=303)
+
+
+@app.post("/player/{pid}/restore")
+async def restore_player(pid: int, _user: dict = Depends(require_td)):
+    tid = set_player_status(pid, "active")
+    return RedirectResponse(f"/tournament/{tid}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Bye request management (TD)
+# ---------------------------------------------------------------------------
+
+@app.post("/player/{pid}/bye-request")
+async def update_bye_request(
+    pid: int,
+    round_num: int = Form(...),
+    action: str = Form(...),
+    _user: dict = Depends(require_td),
+):
+    tid = update_player_bye_request(pid, round_num, action)
+    return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 
 if __name__ == "__main__":

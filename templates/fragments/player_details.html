@@ -7,7 +7,7 @@
           <th class="ps-3" style="width:40%">USCF ID</th>
           <td>
             {% if uscf_id %}
-              <a href="https://www.uschess.org/msa/MbrDtlMain.php?{{ uscf_id }}" target="_blank">{{ uscf_id }}</a>
+              <a href="https://ratings.uschess.com/player/details/{{ uscf_id }}" target="_blank">{{ uscf_id }}</a>
             {% else %}—{% endif %}
           </td>
         </tr>

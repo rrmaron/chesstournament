@@ -32,7 +32,9 @@ def init_db():
         rounds INTEGER NOT NULL DEFAULT 5,
         system TEXT DEFAULT 'dutch',
         current_round INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        entry_fee REAL DEFAULT 0,
+        registration_open INTEGER DEFAULT 1
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS players (
@@ -44,6 +46,11 @@ def init_db():
         email TEXT,
         score REAL DEFAULT 0.0,
         registered_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        payment_status TEXT DEFAULT 'waived',
+        payment_intent_id TEXT,
+        requested_byes TEXT DEFAULT '[]',
+        phone TEXT,
         FOREIGN KEY(tournament_id) REFERENCES tournaments(id)
     )''')
     
@@ -114,6 +121,13 @@ def init_db():
         "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
         "ALTER TABLE users ADD COLUMN email TEXT",
         "ALTER TABLE users ADD COLUMN phone TEXT",
+        "ALTER TABLE tournaments ADD COLUMN entry_fee REAL DEFAULT 0",
+        "ALTER TABLE tournaments ADD COLUMN registration_open INTEGER DEFAULT 1",
+        "ALTER TABLE players ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE players ADD COLUMN payment_status TEXT DEFAULT 'waived'",
+        "ALTER TABLE players ADD COLUMN payment_intent_id TEXT",
+        "ALTER TABLE players ADD COLUMN requested_byes TEXT DEFAULT '[]'",
+        "ALTER TABLE players ADD COLUMN phone TEXT",
     ]:
         try:
             c.execute(sql)
@@ -366,10 +380,10 @@ def get_uscf_db_count() -> int:
     conn.close()
     return count
 
-def create_tournament(name: str, rounds: int = 5, system: str = "dutch") -> int:
+def create_tournament(name: str, rounds: int = 5, system: str = "dutch", entry_fee: float = 0) -> int:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO tournaments (name, rounds, system) VALUES (?, ?, ?)", (name, rounds, system))
+    c.execute("INSERT INTO tournaments (name, rounds, system, entry_fee) VALUES (?, ?, ?, ?)", (name, rounds, system, entry_fee))
     tid = c.lastrowid
     conn.commit()
     conn.close()
@@ -652,3 +666,93 @@ def get_player_rank_map(tid: int) -> Dict[int, int]:
     rows = c.fetchall()
     conn.close()
     return {rank: row[0] for rank, row in enumerate(rows, 1)}
+
+
+def update_tournament_settings(tid: int, entry_fee: float, registration_open: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "UPDATE tournaments SET entry_fee=?, registration_open=? WHERE id=?",
+        (entry_fee, registration_open, tid)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_player(pid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE id=?", (pid,))
+    row = c.fetchone()
+    cols = [col[0] for col in c.description]
+    conn.close()
+    return dict(zip(cols, row)) if row else None
+
+
+def register_player_public(tid: int, name: str, uscf_id: Optional[str], rating: int,
+                            email: Optional[str], phone: Optional[str], fide_id: Optional[str],
+                            expiry: Optional[str], requested_byes: list, payment_status: str) -> int:
+    import json
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO players
+           (tournament_id, name, uscf_id, rating, email, phone, fide_id, expiry,
+            status, payment_status, requested_byes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+        (tid, name, uscf_id, rating or 0, email, phone, fide_id, expiry,
+         payment_status, json.dumps(requested_byes or []))
+    )
+    pid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return pid
+
+
+def set_player_status(pid: int, status: str) -> Optional[int]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT tournament_id FROM players WHERE id=?", (pid,))
+    row = c.fetchone()
+    tid = row[0] if row else None
+    c.execute("UPDATE players SET status=? WHERE id=?", (status, pid))
+    conn.commit()
+    conn.close()
+    return tid
+
+
+def update_player_payment(pid: int, payment_status: str, payment_intent_id: Optional[str] = None):
+    conn = sqlite3.connect(DB_FILE)
+    if payment_intent_id:
+        conn.execute(
+            "UPDATE players SET payment_status=?, payment_intent_id=? WHERE id=?",
+            (payment_status, payment_intent_id, pid)
+        )
+    else:
+        conn.execute("UPDATE players SET payment_status=? WHERE id=?", (payment_status, pid))
+    conn.commit()
+    conn.close()
+
+
+def update_player_bye_request(pid: int, round_num: int, action: str) -> Optional[int]:
+    import json
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT tournament_id, requested_byes FROM players WHERE id=?", (pid,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    tid = row[0]
+    try:
+        byes = json.loads(row[1] or '[]')
+    except Exception:
+        byes = []
+    if action == "add" and round_num not in byes:
+        byes.append(round_num)
+        byes.sort()
+    elif action == "remove" and round_num in byes:
+        byes.remove(round_num)
+    c.execute("UPDATE players SET requested_byes=? WHERE id=?", (json.dumps(byes), pid))
+    conn.commit()
+    conn.close()
+    return tid

@@ -3,6 +3,34 @@
 <h2>{{ tournament.name }}</h2>
 <p class="text-muted">{{ tournament.rounds }} rounds &bull; {{ tournament.system|capitalize }} system</p>
 
+{% if current_user %}
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Tournament Settings</strong>
+    <a href="/tournament/{{ tournament.id }}/entries" class="btn btn-sm btn-outline-secondary">View Entry List</a>
+  </div>
+  <div class="card-body">
+    <form method="post" action="/tournament/{{ tournament.id }}/settings" class="row g-3 align-items-end">
+      <div class="col-auto">
+        <label class="form-label">Entry Fee ($)</label>
+        <input type="number" name="entry_fee" value="{{ tournament.entry_fee or 0 }}" step="0.01" min="0"
+               class="form-control" style="max-width:130px">
+      </div>
+      <div class="col-auto">
+        <div class="form-check mt-4">
+          <input class="form-check-input" type="checkbox" name="registration_open" id="reg-open-check"
+                 {% if tournament.registration_open %}checked{% endif %}>
+          <label class="form-check-label" for="reg-open-check">Registration open</label>
+        </div>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {% if current_round <= 1 and not players %}
 <div class="alert alert-info">Add players below, then generate the first round.</div>
 {% endif %}
@@ -20,8 +48,24 @@
   <div class="card-header"><strong>Players ({{ players|length }})</strong></div>
   <div class="card-body">
     {% if players %}
+    <div class="table-responsive">
     <table class="table table-sm mb-3">
-      <thead><tr><th>#</th><th>Name</th><th>USCF ID</th><th>FIDE ID</th><th>Expires</th><th>USCF Rtg</th><th>Live Rtg</th><th>FIDE Rtg</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>USCF ID</th>
+          <th>FIDE ID</th>
+          <th>Expires</th>
+          <th>USCF Rtg</th>
+          <th>Live Rtg</th>
+          <th>FIDE Rtg</th>
+          <th>Status</th>
+          <th>Payment</th>
+          <th>Byes</th>
+          <th></th>
+        </tr>
+      </thead>
       <tbody>
         {% for p in players %}
         <tr>
@@ -34,14 +78,47 @@
           <td>{{ p.live_rating or '—' }}</td>
           <td>{{ p.fide_rating or '—' }}</td>
           <td>
+            {% if p.status == 'withdrawn' %}
+              <span class="badge bg-danger">Withdrawn</span>
+            {% else %}
+              <span class="badge bg-success">Active</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if p.payment_status == 'paid' %}
+              <span class="badge bg-success">Paid</span>
+            {% elif p.payment_status == 'pending' %}
+              <span class="badge bg-warning text-dark">Pending</span>
+            {% else %}
+              <span class="badge bg-secondary">Free</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if p.byes_list %}
+              Rds {{ p.byes_list | join(',') }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td class="d-flex gap-1 flex-wrap">
             <form method="post" action="/player/{{ p.id }}/delete" style="display:inline">
-              <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove {{ p.name }}?')">✕</button>
+              <button class="btn btn-sm btn-outline-danger" onclick="return confirm('Remove {{ p.name }}?')">&#10005;</button>
             </form>
+            {% if p.status == 'withdrawn' %}
+            <form method="post" action="/player/{{ p.id }}/restore" style="display:inline">
+              <button class="btn btn-sm btn-outline-success">Restore</button>
+            </form>
+            {% else %}
+            <form method="post" action="/player/{{ p.id }}/withdraw" style="display:inline">
+              <button class="btn btn-sm btn-outline-warning">Withdraw</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    </div>
     {% endif %}
 
     <script>
@@ -97,7 +174,7 @@
     <hr class="my-3">
     <div>
       <a class="text-decoration-none small" data-bs-toggle="collapse" href="#csv-import-section">
-        ▸ Import players from CSV / text file
+        &#9658; Import players from CSV / text file
       </a>
       <div class="collapse mt-2" id="csv-import-section">
         <p class="text-muted small mb-2">
@@ -113,6 +190,73 @@
     </div>
   </div>
 </div>
+
+<!-- Bye Requests (pre-tournament, TD manages) -->
+{% if players %}
+<div class="card mb-4">
+  <div class="card-header">
+    <strong>Bye Requests</strong>
+    <span class="text-muted small ms-2">Add or remove half-point bye requests per player</span>
+  </div>
+  <div class="card-body">
+    <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Current Byes</th>
+          <th>Add Bye</th>
+          <th>Remove Bye</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in players %}
+        {% if p.status != 'withdrawn' %}
+        <tr>
+          <td>{{ p.name }}</td>
+          <td>
+            {% if p.byes_list %}
+              Rds {{ p.byes_list | join(', ') }}
+            {% else %}
+              <span class="text-muted">None</span>
+            {% endif %}
+          </td>
+          <td>
+            <form method="post" action="/player/{{ p.id }}/bye-request" class="d-flex gap-2 align-items-center">
+              <input type="hidden" name="action" value="add">
+              <select name="round_num" class="form-select form-select-sm" style="max-width:90px">
+                {% for r in range(1, tournament.rounds + 1) %}
+                <option value="{{ r }}">Rd {{ r }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline-primary">Add</button>
+            </form>
+          </td>
+          <td>
+            {% if p.byes_list %}
+            <form method="post" action="/player/{{ p.id }}/bye-request" class="d-flex gap-2 align-items-center">
+              <input type="hidden" name="action" value="remove">
+              <select name="round_num" class="form-select form-select-sm" style="max-width:90px">
+                {% for r in p.byes_list %}
+                <option value="{{ r }}">Rd {{ r }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+            </form>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% else %}
 <p class="text-muted"><strong>{{ players|length }} players</strong> &mdash; <a href="/tournament/{{ tournament.id }}/standings">View standings</a></p>
 {% endif %}
