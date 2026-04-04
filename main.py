@@ -377,10 +377,11 @@ async def uscf_live_debug(uscf_id: str):
         r = await client.get(f"http://www.uschess.org/msa/MbrDtlTnmtHist.php?{uscf_id}", headers=headers)
     # Find section around first rating-looking number
     body = r.text
-    idx = body.find("Post")
-    if idx == -1:
-        idx = body.find("Rating")
-    return {"status": r.status_code, "snippet": body[max(0,idx-100):idx+1500]}
+    # Find all occurrences of "Post" after the table starts
+    table_idx = body.find("<table", body.find("Tournament"))
+    if table_idx == -1:
+        table_idx = body.find("Reg.")
+    return {"status": r.status_code, "snippet": body[max(0,table_idx-50):table_idx+2000]}
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
