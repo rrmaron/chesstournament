@@ -55,7 +55,20 @@
       </tbody>
     </table>
   </div>
-  <div class="card-footer bg-white">
+  <div class="card-footer bg-white d-flex flex-column gap-2">
+    <form hx-post="/profile/populate"
+          hx-target="#profile-set-feedback"
+          hx-swap="innerHTML"
+          class="d-flex align-items-center gap-2">
+      <input type="hidden" name="uscf_id"     value="{{ uscf_id or '' }}">
+      <input type="hidden" name="fide_id"     value="{{ fide_id or '' }}">
+      <input type="hidden" name="uscf_rating" value="{{ rating or '' }}">
+      <input type="hidden" name="fide_rating" value="{{ fide_rating or '' }}">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">
+        Use as my profile
+      </button>
+      <span id="profile-set-feedback" class="small"></span>
+    </form>
     <button class="btn btn-outline-primary btn-sm w-100"
             onclick="loadRatingImpact(this)">
       What will happen to my ratings if I play this player?

@@ -951,6 +951,24 @@ async def update_profile(
     return RedirectResponse("/profile?saved=1", status_code=303)
 
 
+@app.post("/profile/populate", response_class=HTMLResponse)
+async def profile_populate(
+    uscf_id: Optional[str] = Form(None),
+    fide_id: Optional[str] = Form(None),
+    uscf_rating: Optional[int] = Form(None),
+    fide_rating: Optional[int] = Form(None),
+    user: dict = Depends(require_login),
+):
+    update_user_profile(
+        user["id"],
+        uscf_id.strip() if uscf_id else None,
+        fide_id.strip() if fide_id else None,
+        uscf_rating or None,
+        fide_rating or None,
+    )
+    return HTMLResponse('<span class="text-success fw-semibold">&#10003; Profile updated</span>')
+
+
 # ---------------------------------------------------------------------------
 # FIDE Initial Rating Calculator
 # ---------------------------------------------------------------------------
