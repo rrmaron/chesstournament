@@ -370,6 +370,14 @@ async def uscf_db_upload(file: UploadFile = File(...)):
     return {"imported": count}
 
 
+@app.get("/api/uscf-live-debug/{uscf_id}")
+async def uscf_live_debug(uscf_id: str):
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        r = await client.get(f"https://ratings.uschess.org/player/{uscf_id}", headers=headers)
+    return {"status": r.status_code, "body": r.text[:4000]}
+
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
     import json
