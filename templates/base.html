@@ -18,6 +18,9 @@
         <a class="nav-link text-light" href="/player-lookup">Player Lookup</a>
         <a class="nav-link text-light" href="/fide-calculator">FIDE Calculator</a>
         <a class="nav-link text-light" href="/profile">My Profile</a>
+        {% if u.role in ("td", "admin") %}
+          <a class="nav-link text-light" href="/tournaments">Tournaments</a>
+        {% endif %}
         {% if u.role == "admin" %}
           <a class="nav-link text-light" href="/users">Users</a>
           <a class="nav-link text-light" href="/uscf-db">USCF DB</a>

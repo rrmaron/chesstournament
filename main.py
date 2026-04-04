@@ -322,6 +322,10 @@ async def change_password_route(
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, user: dict = Depends(require_login)):
+    return RedirectResponse("/player-lookup", status_code=302)
+
+@app.get("/tournaments", response_class=HTMLResponse)
+async def tournaments_home(request: Request, user: dict = Depends(require_td)):
     tournaments = get_tournaments()
     return templates.TemplateResponse(request=request, name="tournament_list.html",
                                       context={"tournaments": tournaments, "current_user": user})
