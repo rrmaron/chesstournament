@@ -376,10 +376,10 @@ async def uscf_member_debug(uscf_id: str):
 
 @app.get("/api/fide-debug/{fide_id}")
 async def fide_debug(fide_id: str):
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
     async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        r = await client.get(f"https://app.fide.com/api/v1/client/players/{fide_id}", headers=headers)
-    return {"status": r.status_code, "body": r.text[:2000]}
+        r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
+    return {"status": r.status_code, "body": r.text[:3000]}
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
