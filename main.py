@@ -374,6 +374,13 @@ async def uscf_member_debug(uscf_id: str):
     from database import lookup_uscf_member
     return lookup_uscf_member(uscf_id) or {"error": "not found"}
 
+@app.get("/api/fide-debug/{fide_id}")
+async def fide_debug(fide_id: str):
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        r = await client.get(f"https://app.fide.com/api/v1/client/players/{fide_id}", headers=headers)
+    return {"status": r.status_code, "body": r.text[:2000]}
+
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
     import json
