@@ -379,7 +379,11 @@ async def fide_debug(fide_id: str):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
     async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
         r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
-    return {"status": r.status_code, "body": r.text[:3000]}
+    # Find the section around "rating" to identify the correct pattern
+    body = r.text
+    idx = body.lower().find("rating")
+    snippet = body[max(0, idx-100):idx+500] if idx != -1 else body[:2000]
+    return {"status": r.status_code, "snippet": snippet}
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
