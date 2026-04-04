@@ -27,6 +27,7 @@ from database import (
     update_tournament_settings, get_player,
     register_player_public, set_player_status,
     update_player_payment, update_player_bye_request,
+    get_user_profile, update_user_profile,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -859,6 +860,95 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
         "fide_id": fide_id, "expiry": expiry,
         "live_rating": live_rating, "fide_rating": fide_rating,
     })
+
+
+# ---------------------------------------------------------------------------
+# Rating impact calculator
+# ---------------------------------------------------------------------------
+
+def _elo_impact(my_rating: int, opp_rating: int, k: int) -> dict:
+    expected = 1 / (1 + 10 ** ((opp_rating - my_rating) / 400))
+    return {
+        "win":  round(k * (1.0 - expected)),
+        "draw": round(k * (0.5 - expected)),
+        "loss": round(k * (0.0 - expected)),
+        "expected_pct": round(expected * 100),
+    }
+
+def _uscf_k(rating: int) -> int:
+    if rating < 2100: return 32
+    if rating < 2400: return 24
+    return 16
+
+def _fide_k(rating: int) -> int:
+    if rating < 1600: return 40
+    if rating < 2400: return 20
+    return 10
+
+
+@app.get("/api/rating-impact", response_class=HTMLResponse)
+async def rating_impact_api(
+    request: Request,
+    opp_uscf: Optional[int] = None,
+    opp_fide: Optional[int] = None,
+    opp_name: Optional[str] = None,
+):
+    user = get_current_user(request)
+    profile = get_user_profile(user["id"]) if user else None
+    my_uscf = profile.get("uscf_rating") if profile else None
+    my_fide = profile.get("fide_rating") if profile else None
+
+    uscf_impact = (
+        _elo_impact(my_uscf, opp_uscf, _uscf_k(my_uscf))
+        if my_uscf and opp_uscf else None
+    )
+    fide_impact = (
+        _elo_impact(my_fide, opp_fide, _fide_k(my_fide))
+        if my_fide and opp_fide else None
+    )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="fragments/rating_impact.html",
+        context={
+            "opp_name": opp_name,
+            "my_uscf": my_uscf,
+            "my_fide": my_fide,
+            "opp_uscf": opp_uscf,
+            "opp_fide": opp_fide,
+            "uscf_impact": uscf_impact,
+            "fide_impact": fide_impact,
+            "has_profile": bool(profile and (my_uscf or my_fide)),
+            "logged_in": bool(user),
+        },
+    )
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request, saved: Optional[str] = None, user: dict = Depends(require_login)):
+    profile = get_user_profile(user["id"])
+    return templates.TemplateResponse(request=request, name="profile.html", context={
+        "profile": profile,
+        "saved": saved == "1",
+    })
+
+
+@app.post("/profile")
+async def update_profile(
+    uscf_id: Optional[str] = Form(None),
+    fide_id: Optional[str] = Form(None),
+    uscf_rating: Optional[int] = Form(None),
+    fide_rating: Optional[int] = Form(None),
+    user: dict = Depends(require_login),
+):
+    update_user_profile(
+        user["id"],
+        uscf_id.strip() if uscf_id else None,
+        fide_id.strip() if fide_id else None,
+        uscf_rating,
+        fide_rating,
+    )
+    return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------

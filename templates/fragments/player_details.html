@@ -1,4 +1,7 @@
-<div class="card shadow-sm">
+<div class="card shadow-sm"
+     data-opp-name="{{ name }}"
+     data-opp-uscf="{{ rating or '' }}"
+     data-opp-fide="{{ fide_rating or '' }}">
   <div class="card-header bg-primary text-white fw-semibold fs-5">{{ name }}</div>
   <div class="card-body p-0">
     <table class="table table-striped mb-0">
@@ -51,5 +54,11 @@
         </tr>
       </tbody>
     </table>
+  </div>
+  <div class="card-footer bg-white">
+    <button class="btn btn-outline-primary btn-sm w-100"
+            onclick="loadRatingImpact(this)">
+      What will happen to my ratings if I play this player?
+    </button>
   </div>
 </div>

@@ -93,6 +93,10 @@ def init_db():
         status TEXT NOT NULL DEFAULT 'active',
         email TEXT,
         phone TEXT,
+        uscf_id TEXT,
+        fide_id TEXT,
+        uscf_rating INTEGER,
+        fide_rating INTEGER,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
@@ -128,6 +132,10 @@ def init_db():
         "ALTER TABLE players ADD COLUMN payment_intent_id TEXT",
         "ALTER TABLE players ADD COLUMN requested_byes TEXT DEFAULT '[]'",
         "ALTER TABLE players ADD COLUMN phone TEXT",
+        "ALTER TABLE users ADD COLUMN uscf_id TEXT",
+        "ALTER TABLE users ADD COLUMN fide_id TEXT",
+        "ALTER TABLE users ADD COLUMN uscf_rating INTEGER",
+        "ALTER TABLE users ADD COLUMN fide_rating INTEGER",
     ]:
         try:
             c.execute(sql)
@@ -243,6 +251,30 @@ def delete_user(uid: int):
 def update_user_password(uid: int, new_password: str):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(new_password), uid))
+    conn.commit()
+    conn.close()
+
+def get_user_profile(uid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, username, role, email, phone, uscf_id, fide_id, uscf_rating, fide_rating FROM users WHERE id=?",
+        (uid,)
+    )
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    cols = ["id", "username", "role", "email", "phone", "uscf_id", "fide_id", "uscf_rating", "fide_rating"]
+    return dict(zip(cols, row))
+
+def update_user_profile(uid: int, uscf_id: Optional[str], fide_id: Optional[str],
+                         uscf_rating: Optional[int], fide_rating: Optional[int]):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "UPDATE users SET uscf_id=?, fide_id=?, uscf_rating=?, fide_rating=? WHERE id=?",
+        (uscf_id, fide_id, uscf_rating, fide_rating, uid)
+    )
     conn.commit()
     conn.close()
 
