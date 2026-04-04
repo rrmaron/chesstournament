@@ -317,6 +317,99 @@ async def change_password_route(
 
 
 # ---------------------------------------------------------------------------
+# Public JSON API (used by mobile app — no auth required)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/public/player-search")
+async def public_player_search(name: str = ""):
+    q = name.strip()
+    if len(q) < 2:
+        return []
+    local = search_uscf_members(q)
+    if not local:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            parts = q.split()
+            data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+            rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
+            for uid, raw_name, info in rows[:12]:
+                rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
+                local.append({
+                    "uscf_id": uid,
+                    "name": raw_name.strip(),
+                    "rating": int(rating_m.group(1)) if rating_m else 0,
+                    "fide_id": None,
+                })
+        except Exception:
+            pass
+    return [
+        {"uscf_id": p["uscf_id"], "name": _format_uscf_name(p["name"]), "rating": p.get("rating") or 0}
+        for p in local
+    ]
+
+
+@app.get("/api/public/player-details")
+async def public_player_details(uscf_id: str = ""):
+    uscf_id = uscf_id.strip()
+    if not uscf_id:
+        return {}
+    name, rating, fide_id, expiry = "", 0, "", ""
+    local = lookup_uscf_member(uscf_id)
+    if local:
+        name    = _format_uscf_name(local["name"])
+        rating  = local.get("rating") or 0
+        fide_id = local.get("fide_id") or ""
+        expiry  = local.get("expiry") or ""
+    else:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+            if r.status_code == 200 and "memname" in r.text:
+                data = _parse_uscf_thin3(r.text)
+                name   = data["name"]
+                rating = data["rating"]
+        except Exception:
+            pass
+    live_rating = 0
+    try:
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Origin": "https://ratings.uschess.org"}
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers)
+        if r.status_code == 200:
+            for section in r.json().get("items", []):
+                for record in section.get("ratingRecords", []):
+                    if record.get("ratingSource") == "R":
+                        live_rating = record.get("postRating", 0)
+                        break
+                if live_rating:
+                    break
+    except Exception:
+        pass
+    fide_rating = 0
+    if fide_id:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
+            if r.status_code == 200:
+                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+                if m:
+                    fide_rating = int(m.group(1))
+        except Exception:
+            pass
+    if not name:
+        return {}
+    return {
+        "name": name, "uscf_id": uscf_id, "uscf_rating": rating,
+        "live_uscf_rating": live_rating, "fide_id": fide_id,
+        "fide_rating": fide_rating, "expiry": expiry,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main app routes
 # ---------------------------------------------------------------------------
 
