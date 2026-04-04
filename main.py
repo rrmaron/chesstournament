@@ -372,23 +372,15 @@ async def uscf_db_upload(file: UploadFile = File(...)):
 
 @app.get("/api/uscf-live-debug/{uscf_id}")
 async def uscf_live_debug(uscf_id: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-               "Accept": "application/json, text/plain, */*"}
-    results = {}
-    urls = [
-        f"https://ratings.uschess.org/api/player/{uscf_id}",
-        f"https://ratings.uschess.org/api/v1/player/{uscf_id}",
-        f"https://ratings.uschess.org/api/players/{uscf_id}",
-        f"http://www.uschess.org/msa/MbrDtlTnmtHist.php?{uscf_id}",
-    ]
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
     async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        for url in urls:
-            try:
-                r = await client.get(url, headers=headers)
-                results[url] = {"status": r.status_code, "body": r.text[:500]}
-            except Exception as e:
-                results[url] = {"error": str(e)}
-    return results
+        r = await client.get(f"http://www.uschess.org/msa/MbrDtlTnmtHist.php?{uscf_id}", headers=headers)
+    # Find section around first rating-looking number
+    body = r.text
+    idx = body.find("Post")
+    if idx == -1:
+        idx = body.find("Rating")
+    return {"status": r.status_code, "snippet": body[max(0,idx-100):idx+1500]}
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():
