@@ -22,10 +22,12 @@ from database import (
     verify_password, create_user, create_pending_user, list_users,
     delete_user, update_user_password,
     create_verification_token, check_and_consume_token, activate_user,
+    get_setting, set_setting,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
 from notify import send_verification_email, send_verification_sms
+from fide import calculate_rating, generate_pdf as fide_generate_pdf
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
@@ -69,7 +71,11 @@ async def login_page(request: Request, next: str = "/"):
     user = get_current_user(request)
     if user:
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request=request, name="login.html", context={"next": next, "error": None})
+    return templates.TemplateResponse(request=request, name="login.html", context={
+        "next": next,
+        "error": None,
+        "login_message": get_setting("login_message", ""),
+    })
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(
@@ -115,7 +121,10 @@ async def logout(request: Request):
 async def register_page(request: Request):
     if get_current_user(request):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request=request, name="register.html", context={"error": None})
+    return templates.TemplateResponse(request=request, name="register.html", context={
+        "error": None,
+        "reg_method": get_setting("registration_method", "both"),
+    })
 
 @app.post("/register", response_class=HTMLResponse)
 async def register_submit(
@@ -129,6 +138,10 @@ async def register_submit(
     error = None
     username = username.strip()
     contact = contact.strip()
+    reg_method = get_setting("registration_method", "both")
+
+    if reg_method != "both" and channel != reg_method:
+        channel = reg_method  # silently correct if client sent wrong value
 
     if password != confirm:
         error = "Passwords do not match."
@@ -142,7 +155,8 @@ async def register_submit(
         error = "An account with that phone number already exists."
 
     if error:
-        return templates.TemplateResponse(request=request, name="register.html", context={"error": error})
+        return templates.TemplateResponse(request=request, name="register.html",
+                                          context={"error": error, "reg_method": reg_method})
 
     email = contact if channel == "email" else None
     phone = contact if channel == "sms" else None
@@ -223,10 +237,32 @@ async def verify_resend(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/users", response_class=HTMLResponse)
-async def users_page(request: Request, user: dict = Depends(require_admin)):
+async def users_page(request: Request, saved: Optional[str] = None, user: dict = Depends(require_admin)):
     users = list_users()
-    return templates.TemplateResponse(request=request, name="users.html",
-                                      context={"users": users, "current_user": user})
+    return templates.TemplateResponse(request=request, name="users.html", context={
+        "users": users,
+        "current_user": user,
+        "reg_method": get_setting("registration_method", "both"),
+        "login_message": get_setting("login_message", ""),
+        "saved": saved == "1",
+    })
+
+@app.post("/admin/settings")
+async def save_settings(
+    registration_method: str = Form(...),
+    _user: dict = Depends(require_admin),
+):
+    if registration_method in ("email", "sms", "both"):
+        set_setting("registration_method", registration_method)
+    return RedirectResponse("/users?saved=1", status_code=303)
+
+@app.post("/admin/settings/login-message")
+async def save_login_message(
+    login_message: str = Form(""),
+    _user: dict = Depends(require_admin),
+):
+    set_setting("login_message", login_message.strip())
+    return RedirectResponse("/users?saved=1", status_code=303)
 
 @app.post("/users")
 async def create_user_route(
@@ -662,6 +698,176 @@ async def uscf_col_debug(_user: dict = Depends(require_admin)):
             return json.load(f)
     except FileNotFoundError:
         return {"error": "re-upload the allratings file to generate this"}
+
+# ---------------------------------------------------------------------------
+# Player Rating Lookup
+# ---------------------------------------------------------------------------
+
+@app.get("/player-lookup", response_class=HTMLResponse)
+async def player_lookup_page(request: Request, user: dict = Depends(require_login)):
+    return templates.TemplateResponse(request=request, name="player_lookup.html",
+                                      context={"current_user": user})
+
+@app.get("/api/player-lookup-search", response_class=HTMLResponse)
+async def player_lookup_search(name: str = "", _user: dict = Depends(require_login)):
+    q = name.strip()
+    empty = '<div id="lookup-suggestions"></div>'
+    if len(q) < 2:
+        return HTMLResponse(empty)
+
+    local = search_uscf_members(q)
+    if not local:
+        # Fall back to USCF thin2.php
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            parts = q.split()
+            data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+            rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
+            for uid, raw_name, info in rows[:12]:
+                rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
+                local.append({
+                    "uscf_id": uid,
+                    "name": raw_name.strip(),
+                    "rating": int(rating_m.group(1)) if rating_m else 0,
+                    "fide_id": None,
+                })
+        except Exception:
+            pass
+
+    if not local:
+        return HTMLResponse('<div id="lookup-suggestions"><p class="text-muted small mt-1">No results found.</p></div>')
+
+    items = ""
+    for r in local:
+        display = html.escape(_format_uscf_name(r["name"]))
+        rating_str = f' — {r["rating"]}' if r.get("rating") else ""
+        items += (
+            f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
+            f' onclick="selectPlayer(\'{html.escape(display)}\', \'{r["uscf_id"]}\')">'
+            f'{display} <span class="text-muted">{r["uscf_id"]}</span>{html.escape(rating_str)}'
+            f'</button>'
+        )
+    return HTMLResponse(
+        f'<div id="lookup-suggestions">'
+        f'<div class="list-group mt-1" style="position:absolute;z-index:100;width:100%;max-height:240px;overflow-y:auto">'
+        f'{items}</div></div>'
+    )
+
+@app.get("/api/player-details", response_class=HTMLResponse)
+async def player_details(request: Request, uscf_id: str = "", _user: dict = Depends(require_login)):
+    uscf_id = uscf_id.strip()
+    if not uscf_id:
+        return HTMLResponse("")
+
+    # 1. Local DB
+    name, rating, fide_id, expiry = "", 0, "", ""
+    local = lookup_uscf_member(uscf_id)
+    if local:
+        name    = _format_uscf_name(local["name"])
+        rating  = local.get("rating") or 0
+        fide_id = local.get("fide_id") or ""
+        expiry  = local.get("expiry") or ""
+    else:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+            if r.status_code == 200 and "memname" in r.text:
+                data = _parse_uscf_thin3(r.text)
+                name   = data["name"]
+                rating = data["rating"]
+        except Exception:
+            pass
+
+    # 2. Live USCF rating
+    live_rating = 0
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+            "Accept": "application/json",
+            "Origin": "https://ratings.uschess.org",
+        }
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(
+                f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections",
+                headers=headers,
+            )
+        if r.status_code == 200:
+            for section in r.json().get("items", []):
+                for record in section.get("ratingRecords", []):
+                    if record.get("ratingSource") == "R":
+                        live_rating = record.get("postRating", 0)
+                        break
+                if live_rating:
+                    break
+    except Exception:
+        pass
+
+    # 3. FIDE rating
+    fide_rating = 0
+    if fide_id:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
+            if r.status_code == 200:
+                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+                if m:
+                    fide_rating = int(m.group(1))
+        except Exception:
+            pass
+
+    if not name:
+        return HTMLResponse('<div class="alert alert-warning">Player not found.</div>')
+
+    return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
+        "name": name, "uscf_id": uscf_id, "rating": rating,
+        "fide_id": fide_id, "expiry": expiry,
+        "live_rating": live_rating, "fide_rating": fide_rating,
+    })
+
+
+# ---------------------------------------------------------------------------
+# FIDE Initial Rating Calculator
+# ---------------------------------------------------------------------------
+
+@app.get("/fide-calculator", response_class=HTMLResponse)
+async def fide_calculator_page(request: Request, user: dict = Depends(require_login)):
+    return templates.TemplateResponse(request=request, name="fide_calculator.html",
+                                      context={"current_user": user})
+
+@app.post("/fide-calculator/calculate")
+async def fide_calculate(request: Request, _user: dict = Depends(require_login)):
+    body = await request.json()
+    result = calculate_rating(body.get("opponents", []), body.get("results", []))
+    return result or {"error": "Need 5+ valid games against FIDE-rated opponents"}
+
+@app.post("/fide-calculator/pdf")
+async def fide_pdf(
+    request: Request,
+    name: str = Form(""),
+    opponents: str = Form(""),
+    results: str = Form(""),
+    _user: dict = Depends(require_login),
+):
+    import json
+    from fastapi.responses import StreamingResponse
+    try:
+        opps = json.loads(opponents)
+        res  = json.loads(results)
+    except Exception:
+        raise HTTPException(400, "Invalid game data")
+    data = calculate_rating(opps, res)
+    if not data:
+        raise HTTPException(400, "Need 5+ valid games to generate certificate")
+    buf = fide_generate_pdf(data, name.strip())
+    return StreamingResponse(
+        buf, media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=FIDE_Rating_{data['rating']}.pdf"},
+    )
+
 
 if __name__ == "__main__":
     import uvicorn

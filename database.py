@@ -89,6 +89,11 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS verification_tokens (
         id INTEGER PRIMARY KEY,
         user_id INTEGER NOT NULL,
@@ -238,6 +243,23 @@ def ensure_admin_exists():
         create_user("admin", "admin", "admin")
 
 ensure_admin_exists()
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+def get_setting(key: str, default: str = "") -> str:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def set_setting(key: str, value: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+    conn.close()
 
 
 def import_uscf_members(raw_bytes: bytes) -> int:

@@ -10,7 +10,10 @@
 <div class="container" style="max-width:400px;margin-top:10vh">
     <div class="card shadow-sm">
         <div class="card-body p-4">
-            <h4 class="card-title mb-4 text-center">♟️ MyChessRating</h4>
+            <h4 class="card-title mb-3 text-center">♟️ MyChessRating</h4>
+            {% if login_message %}
+            <div class="alert alert-info py-2 small" style="white-space:pre-wrap">{{ login_message }}</div>
+            {% endif %}
             {% if error %}
             <div class="alert alert-danger py-2">{{ error }}</div>
             {% endif %}

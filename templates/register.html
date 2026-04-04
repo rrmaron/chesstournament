@@ -31,6 +31,7 @@
                     <input type="password" name="confirm" class="form-control" required minlength="6">
                 </div>
 
+                {% if reg_method == "both" %}
                 <div class="mb-3">
                     <label class="form-label">Verify via</label>
                     <div class="d-flex gap-3">
@@ -46,12 +47,19 @@
                         </div>
                     </div>
                 </div>
+                {% else %}
+                <input type="hidden" name="channel" value="{{ reg_method }}">
+                {% endif %}
 
-                <div class="mb-4" id="contactField">
-                    <label class="form-label" id="contactLabel">Email address</label>
+                <div class="mb-4">
+                    <label class="form-label" id="contactLabel">
+                        {% if reg_method == "sms" %}Phone number{% else %}Email address{% endif %}
+                    </label>
                     <input type="text" name="contact" id="contactInput" class="form-control" required
-                           placeholder="you@example.com">
-                    <div class="form-text" id="contactHint"></div>
+                           placeholder="{% if reg_method == 'sms' %}+12125551234{% else %}you@example.com{% endif %}">
+                    <div class="form-text" id="contactHint">
+                        {% if reg_method == "sms" %}E.164 format: +1 followed by 10 digits (US), or your country code + number.{% endif %}
+                    </div>
                 </div>
 
                 <button type="submit" class="btn btn-primary w-100">Send verification code</button>
@@ -61,24 +69,17 @@
         </div>
     </div>
 </div>
+{% if reg_method == "both" %}
 <script>
 function toggleContact() {
     const sms = document.getElementById('chSms').checked;
-    const label = document.getElementById('contactLabel');
-    const input = document.getElementById('contactInput');
-    const hint  = document.getElementById('contactHint');
-    if (sms) {
-        label.textContent = 'Phone number';
-        input.placeholder = '+12125551234';
-        input.type = 'tel';
-        hint.textContent = 'E.164 format: +1 followed by 10 digits (US), or your country code + number.';
-    } else {
-        label.textContent = 'Email address';
-        input.placeholder = 'you@example.com';
-        input.type = 'email';
-        hint.textContent = '';
-    }
+    document.getElementById('contactLabel').textContent = sms ? 'Phone number' : 'Email address';
+    document.getElementById('contactInput').placeholder  = sms ? '+12125551234' : 'you@example.com';
+    document.getElementById('contactInput').type         = sms ? 'tel' : 'email';
+    document.getElementById('contactHint').textContent   = sms
+        ? 'E.164 format: +1 followed by 10 digits (US), or your country code + number.' : '';
 }
 </script>
+{% endif %}
 </body>
 </html>

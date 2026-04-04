@@ -1,0 +1,55 @@
+<div class="card shadow-sm">
+  <div class="card-header bg-primary text-white fw-semibold fs-5">{{ name }}</div>
+  <div class="card-body p-0">
+    <table class="table table-striped mb-0">
+      <tbody>
+        <tr>
+          <th class="ps-3" style="width:40%">USCF ID</th>
+          <td>
+            {% if uscf_id %}
+              <a href="https://www.uschess.org/msa/MbrDtlMain.php?{{ uscf_id }}" target="_blank">{{ uscf_id }}</a>
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th class="ps-3">USCF Rating</th>
+          <td>{{ rating if rating else '—' }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">Live USCF Rating</th>
+          <td>
+            {% if live_rating %}
+              {{ live_rating }}
+            {% else %}
+              <span class="text-muted">Not available</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th class="ps-3">FIDE ID</th>
+          <td>
+            {% if fide_id %}
+              <a href="https://ratings.fide.com/profile/{{ fide_id }}" target="_blank">{{ fide_id }}</a>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th class="ps-3">FIDE Rating</th>
+          <td>
+            {% if fide_rating %}
+              {{ fide_rating }}
+            {% else %}
+              <span class="text-muted">{% if fide_id %}Not rated{% else %}No FIDE ID{% endif %}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th class="ps-3">USCF Expiry</th>
+          <td>{{ expiry if expiry else '—' }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>

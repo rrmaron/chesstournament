@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% block title %}FIDE Rating Calculator{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-9">
+
+<h2 class="text-center mb-1" style="color:#003087">FIDE Initial Rating Calculator</h2>
+
+<!-- Rating badge -->
+<div id="rating-display" class="text-center mb-3">
+  <h4 class="text-muted"><em>Your First FIDE Rating: Not yet available (need 5+ real games)</em></h4>
+</div>
+
+<!-- Explanation (collapsed) -->
+<div class="accordion mb-3" id="explAccordion">
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#explBody">
+        How this works — FIDE Rating Regulations (March 1, 2024)
+      </button>
+    </h2>
+    <div id="explBody" class="accordion-collapse collapse">
+      <div class="accordion-body small text-muted">
+        <p>To calculate the initial rating, FIDE starts with 2 draws against fictional 1800-rated opponents — these are already included in the calculation automatically.</p>
+        <p>Then 5 or more results against FIDE-rated opponents are needed to get your first official rating.</p>
+        <ul>
+          <li>If you score 0 points in your first tournament, those results are disregarded.</li>
+          <li>Only enter results from tournaments where you scored at least 0.5 points.</li>
+          <li>If your FIDE rating falls below 1400, you need to start again (minimum 5 games, ≥0.5 pts).</li>
+          <li>Results from tournaments within 26 consecutive months are pooled.</li>
+        </ul>
+        <p><strong>FIDE §7.1.4</strong> — A rating shall be published when based on ≥5 games against rated opponents. Rating must be at least 1400.</p>
+        <p><strong>FIDE §8.2.1</strong> — If an unrated player scores zero in their first event, that score is disregarded.</p>
+        <p>Find older games at <a href="https://ratings.fide.com/" target="_blank">ratings.fide.com</a> → search your name → Calculations → View each month.</p>
+        <p>FIDE ratings are published on the 1st of each month. Official calculator: <a href="https://ratings.fide.com/calc.phtml?page=change" target="_blank">FIDE Rating Change Calculator</a>.</p>
+        <p><strong>K-Factor rules (March 2024):</strong> K=40 for new players (first 30 games) and players under 18 below 2300 · K=20 below 2400 · K=10 at 2400+</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Game -->
+<div class="card mb-3">
+  <div class="card-header fw-semibold">Add Game</div>
+  <div class="card-body">
+    <div class="row g-2 align-items-end">
+      <div class="col-sm-5">
+        <label class="form-label small">Opponent Rating</label>
+        <input type="number" id="inp-opp" class="form-control" min="800" max="3000" value="1500">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small">Result</label>
+        <select id="inp-result" class="form-select">
+          <option value="1">1 — Win</option>
+          <option value="0.5" selected>0.5 — Draw</option>
+          <option value="0">0 — Loss</option>
+        </select>
+      </div>
+      <div class="col-sm-3">
+        <button class="btn btn-primary w-100" onclick="addGame()">Add Game</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CSV controls -->
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  <a id="csv-template-link" href="#" class="btn btn-outline-secondary btn-sm"
+     onclick="downloadTemplate(event)">Download CSV Template</a>
+  <label class="btn btn-outline-secondary btn-sm mb-0">
+    Import CSV <input type="file" accept=".csv" class="d-none" onchange="importCSV(this)">
+  </label>
+  <button class="btn btn-outline-secondary btn-sm" onclick="exportCSV()">Export CSV</button>
+  <button class="btn btn-outline-danger btn-sm ms-auto" onclick="clearAll()">Clear All Games</button>
+</div>
+
+<!-- Games table -->
+<div class="table-responsive mb-3">
+  <table class="table table-bordered table-sm align-middle" id="games-table">
+    <thead class="table-dark">
+      <tr><th>#</th><th>Opponent Rating</th><th>Result</th><th></th></tr>
+    </thead>
+    <tbody id="games-tbody"></tbody>
+  </table>
+</div>
+<p class="text-muted small">Rows 1–2 are the two fictitious 1800 draws required by FIDE's formula — do not delete them.</p>
+
+<!-- Results section -->
+<div id="results-section" class="d-none">
+  <div class="card border-primary mb-3">
+    <div class="card-header bg-primary text-white fw-semibold">Calculation Breakdown</div>
+    <div class="card-body">
+      <p id="calc-explanation" class="small mb-3"></p>
+      <div class="row text-center g-2">
+        <div class="col-4">
+          <div class="border rounded p-2">
+            <div class="small text-muted">Games</div>
+            <div class="fw-bold fs-5" id="r-games"></div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded p-2">
+            <div class="small text-muted">Score %</div>
+            <div class="fw-bold fs-5" id="r-perc"></div>
+          </div>
+        </div>
+        <div class="col-4">
+          <div class="border rounded p-2">
+            <div class="small text-muted">Avg Opponent</div>
+            <div class="fw-bold fs-5" id="r-avg"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PDF download -->
+  <div class="card mb-4">
+    <div class="card-header fw-semibold">Download Certificate</div>
+    <div class="card-body">
+      <form method="post" action="/fide-calculator/pdf" target="_blank">
+        <input type="hidden" name="opponents" id="pdf-opponents">
+        <input type="hidden" name="results"   id="pdf-results">
+        <div class="row g-2 align-items-end">
+          <div class="col-sm-8">
+            <label class="form-label small">Your name (for the certificate)</label>
+            <input type="text" name="name" class="form-control" placeholder="e.g. John Smith">
+          </div>
+          <div class="col-sm-4">
+            <button type="submit" class="btn btn-success w-100" onclick="setPdfFields()">
+              Download PDF
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- "need more games" nudge -->
+<div id="need-more-section">
+  <div class="alert alert-info" id="need-more-msg">
+    Add 5+ real games against FIDE-rated opponents to calculate your rating.
+  </div>
+</div>
+
+</div><!-- col -->
+</div><!-- row -->
+
+<script>
+// ── state ──────────────────────────────────────────────────────────────────
+const FIXED = [{opp:1800,result:"0.5"},{opp:1800,result:"0.5"}];
+let realGames = [];          // user-added games only
+let lastCalc  = null;        // most recent calculation result
+
+// ── render table ───────────────────────────────────────────────────────────
+function renderTable() {
+  const tbody = document.getElementById("games-tbody");
+  const all   = [...FIXED, ...realGames];
+  tbody.innerHTML = all.map((g, i) => {
+    const fixed = i < 2;
+    const opp   = fixed
+      ? `<span class="text-muted">${g.opp}</span>`
+      : `<input type="number" class="form-control form-control-sm"
+               min="800" max="3000" value="${g.opp}"
+               onchange="updateGame(${i-2},'opp',this.value)">`;
+    const res   = fixed
+      ? `<span class="text-muted">${g.result} (draw)</span>`
+      : `<select class="form-select form-select-sm" onchange="updateGame(${i-2},'result',this.value)">
+           <option value="1"   ${g.result==="1"   ?"selected":""}>1 — Win</option>
+           <option value="0.5" ${g.result==="0.5" ?"selected":""}>0.5 — Draw</option>
+           <option value="0"   ${g.result==="0"   ?"selected":""}>0 — Loss</option>
+         </select>`;
+    const del   = fixed ? "" :
+      `<button class="btn btn-outline-danger btn-sm" onclick="removeGame(${i-2})">✕</button>`;
+    const rowCls = fixed ? "table-secondary" : "";
+    return `<tr class="${rowCls}"><td>${i+1}</td><td>${opp}</td><td>${res}</td><td>${del}</td></tr>`;
+  }).join("");
+}
+
+// ── game mutations ──────────────────────────────────────────────────────────
+function addGame() {
+  const opp = parseInt(document.getElementById("inp-opp").value) || 1500;
+  const res  = document.getElementById("inp-result").value;
+  realGames.push({opp, result:res});
+  renderTable();
+  doCalculate();
+}
+
+function removeGame(i) {
+  realGames.splice(i, 1);
+  renderTable();
+  doCalculate();
+}
+
+function updateGame(i, field, value) {
+  if (field === "opp") realGames[i].opp = parseInt(value) || 0;
+  else realGames[i].result = value;
+  doCalculate();
+}
+
+function clearAll() {
+  if (!confirm("Clear all real games?")) return;
+  realGames = [];
+  renderTable();
+  doCalculate();
+}
+
+// ── calculate ───────────────────────────────────────────────────────────────
+async function doCalculate() {
+  const opps = realGames.map(g => g.opp);
+  const res  = realGames.map(g => g.result);
+  const resp = await fetch("/fide-calculator/calculate", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({opponents:opps, results:res})
+  });
+  const data = await resp.json();
+  lastCalc = data.error ? null : data;
+  updateDisplay(data);
+}
+
+function updateDisplay(data) {
+  const ratingDiv   = document.getElementById("rating-display");
+  const resultsDiv  = document.getElementById("results-section");
+  const needMoreDiv = document.getElementById("need-more-section");
+  const needMoreMsg = document.getElementById("need-more-msg");
+
+  if (data && !data.error) {
+    ratingDiv.innerHTML =
+      `<h3 style="color:#003087">Your First FIDE Rating: <strong>${data.rating}</strong></h3>`;
+    document.getElementById("r-games").textContent = data.games;
+    document.getElementById("r-perc").textContent  = data.perc + "%";
+    document.getElementById("r-avg").textContent   = data.avg;
+    document.getElementById("calc-explanation").textContent =
+      `Performance rating (Rp) = ${data.avg} (avg opponent) + ${data.dp} (dp) = ${data.Rp}.` +
+      ` The 2 fictitious 1800-draw games are included, so total games shown is 2 higher than real games played.`;
+    resultsDiv.classList.remove("d-none");
+    needMoreDiv.classList.add("d-none");
+  } else {
+    ratingDiv.innerHTML =
+      `<h4 class="text-muted"><em>Your First FIDE Rating: Not yet available (need 5+ real games)</em></h4>`;
+    resultsDiv.classList.add("d-none");
+    needMoreDiv.classList.remove("d-none");
+    const have = realGames.length;
+    needMoreMsg.textContent = have < 5
+      ? `Add ${5 - have} more real game${5-have!==1?"s":""} against FIDE-rated opponents to calculate your rating.`
+      : (data.error || "Could not calculate rating — check opponent ratings (800–3000).");
+  }
+}
+
+// ── PDF helpers ─────────────────────────────────────────────────────────────
+function setPdfFields() {
+  document.getElementById("pdf-opponents").value =
+    JSON.stringify(realGames.map(g => g.opp));
+  document.getElementById("pdf-results").value =
+    JSON.stringify(realGames.map(g => g.result));
+}
+
+// ── CSV ─────────────────────────────────────────────────────────────────────
+function downloadTemplate(e) {
+  e.preventDefault();
+  const csv = "opponent_rating,result\n1800,0.5\n1900,1\n1700,0\n";
+  triggerDownload("fide_template.csv", csv, "text/csv");
+}
+
+function exportCSV() {
+  const all  = [...FIXED, ...realGames];
+  const rows = [["opponent_rating","result"],
+                ...all.map(g => [g.opp, g.result])];
+  const csv  = rows.map(r => r.join(",")).join("\n");
+  triggerDownload("my_fide_games.csv", csv, "text/csv");
+}
+
+function importCSV(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.trim().split("\n");
+    const header = lines[0].toLowerCase().replace(/\r/,"");
+    if (!header.includes("opponent_rating") || !header.includes("result")) {
+      alert("CSV must have columns: opponent_rating, result");
+      return;
+    }
+    // All rows after header (skip first 2 fixed if they look like 1800,0.5)
+    const newReal = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].replace(/\r/,"").split(",");
+      if (parts.length < 2) continue;
+      const opp = parseInt(parts[0].replace(/"/g,"").trim());
+      const res = parts[1].replace(/"/g,"").trim();
+      if (isNaN(opp) || opp < 800 || opp > 3000) continue;
+      newReal.push({opp, result:res});
+    }
+    // Remove leading fixed-looking rows (1800,0.5) from import
+    let skip = 0;
+    while (skip < newReal.length && newReal[skip].opp === 1800 &&
+           newReal[skip].result === "0.5") skip++;
+    realGames = newReal.slice(skip);
+    renderTable();
+    doCalculate();
+    input.value = "";
+  };
+  reader.readAsText(file);
+}
+
+function triggerDownload(filename, content, type) {
+  const a   = document.createElement("a");
+  a.href    = URL.createObjectURL(new Blob([content], {type}));
+  a.download = filename;
+  a.click();
+}
+
+// ── init ─────────────────────────────────────────────────────────────────────
+renderTable();
+doCalculate();
+</script>
+{% endblock %}

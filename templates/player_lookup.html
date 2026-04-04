@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Player Rating Lookup{% endblock %}
+{% block content %}
+<style>
+  .htmx-indicator { display: none; }
+  .htmx-request .htmx-indicator,
+  .htmx-request.htmx-indicator { display: block; }
+</style>
+
+<div class="row justify-content-center">
+<div class="col-md-7">
+
+  <h2 class="mb-4">Player Rating Lookup</h2>
+
+  <div class="mb-4" style="position:relative">
+    <label class="form-label fw-semibold">Player Name</label>
+    <input type="text"
+           id="name-input"
+           class="form-control form-control-lg"
+           placeholder="Start typing a name..."
+           autocomplete="off"
+           hx-get="/api/player-lookup-search"
+           hx-trigger="keyup changed delay:300ms"
+           hx-target="#lookup-suggestions"
+           name="name">
+    <div id="lookup-suggestions"></div>
+  </div>
+
+  <div id="details-loading" class="htmx-indicator text-center py-4">
+    <div class="spinner-border text-primary" role="status"></div>
+    <p class="mt-2 text-muted">Fetching ratings — this may take a few seconds…</p>
+  </div>
+
+  <div id="player-details"></div>
+
+</div>
+</div>
+
+<script>
+function selectPlayer(name, uscfId) {
+  document.getElementById("name-input").value = name;
+  document.getElementById("lookup-suggestions").innerHTML = "";
+  htmx.ajax("GET", "/api/player-details?uscf_id=" + uscfId, {
+    target: "#player-details",
+    indicator: "#details-loading"
+  });
+}
+
+// Close suggestions when clicking outside
+document.addEventListener("click", function(e) {
+  if (!e.target.closest("#name-input") && !e.target.closest("#lookup-suggestions")) {
+    document.getElementById("lookup-suggestions").innerHTML = "";
+  }
+});
+</script>
+{% endblock %}

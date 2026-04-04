@@ -3,6 +3,56 @@
 {% block content %}
 <h2 class="mb-4">User Management</h2>
 
+{% if saved %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  Settings saved.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Registration Settings</div>
+  <div class="card-body">
+    <form method="post" action="/admin/settings" class="d-flex align-items-center gap-3 flex-wrap">
+      <label class="form-label mb-0">Allow self-registration via:</label>
+      <div class="d-flex gap-3">
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="registration_method" id="rmBoth"
+                 value="both" {% if reg_method == "both" %}checked{% endif %}>
+          <label class="form-check-label" for="rmBoth">Email &amp; SMS</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="registration_method" id="rmEmail"
+                 value="email" {% if reg_method == "email" %}checked{% endif %}>
+          <label class="form-check-label" for="rmEmail">Email only</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="registration_method" id="rmSms"
+                 value="sms" {% if reg_method == "sms" %}checked{% endif %}>
+          <label class="form-check-label" for="rmSms">SMS only</label>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    </form>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Login Page Message</div>
+  <div class="card-body">
+    <form method="post" action="/admin/settings/login-message">
+      <div class="mb-2">
+        <textarea name="login_message" class="form-control" rows="3"
+                  placeholder="Optional message shown on the login page (e.g. welcome text, instructions, upcoming event info)">{{ login_message }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm">Save</button>
+      {% if login_message %}
+      <button type="submit" name="login_message" value="" class="btn btn-outline-secondary btn-sm ms-2">Clear</button>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
 <div class="card mb-4">
   <div class="card-header">Add User</div>
   <div class="card-body">
