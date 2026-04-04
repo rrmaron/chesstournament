@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<h2 class="mb-4">User Management</h2>
+
+<div class="card mb-4">
+  <div class="card-header">Add User</div>
+  <div class="card-body">
+    <form method="post" action="/users" class="row g-2">
+      <div class="col-md-4">
+        <input type="text" name="username" class="form-control" placeholder="Username" required>
+      </div>
+      <div class="col-md-3">
+        <input type="password" name="password" class="form-control" placeholder="Password" required>
+      </div>
+      <div class="col-md-3">
+        <select name="role" class="form-select">
+          <option value="viewer">viewer</option>
+          <option value="td">td</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-primary w-100">Add</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<table class="table table-striped align-middle">
+  <thead>
+    <tr><th>Username</th><th>Role</th><th>Created</th><th>Change Password</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}{% if u.id == current_user.id %} <span class="badge bg-primary">you</span>{% endif %}</td>
+      <td><span class="badge bg-secondary">{{ u.role }}</span></td>
+      <td class="text-muted small">{{ u.created_at }}</td>
+      <td>
+        <form method="post" action="/users/{{ u.id }}/password" class="d-flex gap-1">
+          <input type="password" name="new_password" class="form-control form-control-sm" placeholder="New password" required style="max-width:160px">
+          <button type="submit" class="btn btn-outline-secondary btn-sm">Set</button>
+        </form>
+      </td>
+      <td>
+        {% if u.id != current_user.id %}
+        <form method="post" action="/users/{{ u.id }}/delete"
+              onsubmit="return confirm('Delete user {{ u.username }}?')">
+          <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

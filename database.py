@@ -5,6 +5,23 @@ from datetime import datetime
 import os
 DB_FILE = os.environ.get("DB_FILE", "/data/mychessrating.db" if os.path.isdir("/data") else "mychessrating.db")
 
+import hashlib
+import hmac
+import secrets
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000)
+    return f"pbkdf2$sha256$260000${salt}${dk.hex()}"
+
+def verify_password(plain: str, stored: str) -> bool:
+    try:
+        _, alg, iters, salt, dk_hex = stored.split("$")
+        dk = hashlib.pbkdf2_hmac(alg, plain.encode(), salt.encode(), int(iters))
+        return hmac.compare_digest(dk.hex(), dk_hex)
+    except Exception:
+        return False
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -61,12 +78,37 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_uscf_members_name ON uscf_members(name)')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'viewer',
+        status TEXT NOT NULL DEFAULT 'active',
+        email TEXT,
+        phone TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS verification_tokens (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        contact TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )''')
+
     # Migrations for existing DBs
     for sql in [
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN expiry TEXT",
         "ALTER TABLE players ADD COLUMN fide_rating INTEGER DEFAULT 0",
+        "ALTER TABLE players ADD COLUMN live_rating INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE users ADD COLUMN email TEXT",
+        "ALTER TABLE users ADD COLUMN phone TEXT",
     ]:
         try:
             c.execute(sql)
@@ -77,6 +119,125 @@ def init_db():
     conn.close()
 
 init_db()
+
+
+# ---------------------------------------------------------------------------
+# User / auth functions
+# ---------------------------------------------------------------------------
+
+def create_user(username: str, password: str, role: str = "viewer", status: str = "active") -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, ?)",
+              (username.strip(), _hash_password(password), role, status))
+    uid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return uid
+
+def create_pending_user(username: str, password: str, email: str = None, phone: str = None) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO users (username, password_hash, role, status, email, phone) VALUES (?, ?, 'viewer', 'pending', ?, ?)",
+        (username.strip(), _hash_password(password), email, phone)
+    )
+    uid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return uid
+
+def get_user_by_username(username: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, username, password_hash, role, status, email, phone FROM users WHERE username=?", (username.strip(),))
+    row = c.fetchone()
+    conn.close()
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "role": row[3],
+            "status": row[4], "email": row[5], "phone": row[6]} if row else None
+
+def get_user_by_email(email: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, username FROM users WHERE email=?", (email.strip(),))
+    row = c.fetchone()
+    conn.close()
+    return {"id": row[0], "username": row[1]} if row else None
+
+def get_user_by_phone(phone: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, username FROM users WHERE phone=?", (phone.strip(),))
+    row = c.fetchone()
+    conn.close()
+    return {"id": row[0], "username": row[1]} if row else None
+
+def create_verification_token(user_id: int, channel: str, contact: str) -> str:
+    import random
+    from datetime import datetime, timedelta
+    token = f"{random.randint(0, 999999):06d}"
+    expires = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM verification_tokens WHERE user_id=?", (user_id,))
+    c.execute("INSERT INTO verification_tokens (user_id, token, channel, contact, expires_at) VALUES (?, ?, ?, ?, ?)",
+              (user_id, token, channel, contact, expires))
+    conn.commit()
+    conn.close()
+    return token
+
+def check_and_consume_token(user_id: int, token: str) -> bool:
+    from datetime import datetime
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, expires_at FROM verification_tokens WHERE user_id=? AND token=?", (user_id, token))
+    row = c.fetchone()
+    if not row or datetime.utcnow().isoformat() > row[1]:
+        conn.close()
+        return False
+    c.execute("DELETE FROM verification_tokens WHERE id=?", (row[0],))
+    conn.commit()
+    conn.close()
+    return True
+
+def activate_user(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET status='active' WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def list_users() -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT id, username, role, status, created_at FROM users ORDER BY created_at")
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "username": r[1], "role": r[2], "status": r[3], "created_at": r[4]} for r in rows]
+
+def delete_user(uid: int):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("DELETE FROM users WHERE id=?", (uid,))
+    conn.commit()
+    conn.close()
+
+def update_user_password(uid: int, new_password: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(new_password), uid))
+    conn.commit()
+    conn.close()
+
+def ensure_admin_exists():
+    """Create a default admin/admin account if no users exist yet."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    count = c.fetchone()[0]
+    conn.close()
+    if count == 0:
+        create_user("admin", "admin", "admin")
+
+ensure_admin_exists()
 
 
 def import_uscf_members(raw_bytes: bytes) -> int:
@@ -223,8 +384,50 @@ def get_tournament(tid: int) -> Optional[Dict]:
     conn.close()
     return dict(zip([col[0] for col in c.description], row)) if row else None
 
+def _fetch_live_uscf_rating(uscf_id: str) -> int:
+    """Fetch live post-event USCF regular rating from MUIR sections API."""
+    try:
+        import httpx
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+            "Accept": "application/json",
+            "Origin": "https://ratings.uschess.org",
+        }
+        r = httpx.get(
+            f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections",
+            timeout=10, follow_redirects=True, headers=headers
+        )
+        if r.status_code == 200:
+            for section in r.json().get("items", []):
+                for record in section.get("ratingRecords", []):
+                    if record.get("ratingSource") == "R":
+                        return record.get("postRating", 0)
+    except Exception:
+        pass
+    return 0
+
+
+def _fetch_thin3(uscf_id: str) -> dict:
+    """Fetch fallback USCF rating from thin3.php (used only when player not in local DB)."""
+    result = {"rating": 0}
+    try:
+        import httpx, re
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+        r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}",
+                      timeout=8, follow_redirects=True, headers=headers)
+        if r.status_code == 200:
+            m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)
+            if m:
+                num = re.search(r"(\d+)", m.group(1))
+                if num: result["rating"] = int(num.group(1))
+    except Exception:
+        pass
+    return result
+
+
 def _fetch_fide_rating(fide_id: str) -> int:
-    """Fetch standard FIDE rating by scraping ratings.fide.com profile page."""
+    """Fetch official FIDE standard rating by scraping ratings.fide.com.
+    Returns 0 for unrated players (no match on page)."""
     try:
         import httpx, re
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
@@ -241,6 +444,8 @@ def _fetch_fide_rating(fide_id: str) -> int:
 
 def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optional[int] = None,
                email: Optional[str] = None, fide_id: Optional[str] = None, expiry: Optional[str] = None):
+    fide_rating = 0
+    live_rating = 0
     if uscf_id:
         # Always check local DB — fills rating, fide_id, expiry regardless of what form submitted
         local = lookup_uscf_member(uscf_id)
@@ -251,24 +456,16 @@ def add_player(tid: int, name: str, uscf_id: Optional[str] = None, rating: Optio
                 fide_id = local.get("fide_id")
             if not expiry:
                 expiry = local.get("expiry")
-        elif not rating:
-            # Fall back to thin3.php only if not in local DB
-            try:
-                import httpx, re
-                headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-                r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}", timeout=8, follow_redirects=True, headers=headers)
-                if r.status_code == 200:
-                    m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)
-                    if m:
-                        num = re.search(r"(\d+)", m.group(1))
-                        rating = int(num.group(1)) if num else 0
-            except:
-                rating = 0
+        # Fallback USCF rating via thin3.php if not in local DB
+        if not rating:
+            thin3 = _fetch_thin3(uscf_id)
+            rating = thin3.get("rating", 0)
+        live_rating = _fetch_live_uscf_rating(uscf_id)
     fide_rating = _fetch_fide_rating(fide_id) if fide_id else 0
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id, expiry, fide_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-              (tid, name.strip(), uscf_id, rating or 0, email, fide_id, expiry, fide_rating))
+    c.execute("INSERT INTO players (tournament_id, name, uscf_id, rating, email, fide_id, expiry, fide_rating, live_rating) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              (tid, name.strip(), uscf_id, rating or 0, email, fide_id, expiry, fide_rating, live_rating))
     conn.commit()
     conn.close()
 
@@ -370,12 +567,14 @@ def recalculate_scores(tid: int):
 def get_pairings_for_round(tid: int, round_num: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("""SELECT r.id as result_id, r.white_id, r.black_id, 
-                        pw.name as white_name, pb.name as black_name, r.result
+    c.execute("""SELECT r.id as result_id, r.white_id, r.black_id,
+                        pw.name as white_name, pb.name as black_name, r.result,
+                        pw.rating as white_rating, pb.rating as black_rating,
+                        pw.fide_rating as white_fide_rating, pb.fide_rating as black_fide_rating
                  FROM results r
                  LEFT JOIN players pw ON r.white_id = pw.id
                  LEFT JOIN players pb ON r.black_id = pb.id
-                 WHERE r.tournament_id=? AND r.round=? 
+                 WHERE r.tournament_id=? AND r.round=?
                  ORDER BY r.id""", (tid, round_num))
     rows = c.fetchall()
     conn.close()

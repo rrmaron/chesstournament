@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
+from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 import subprocess
 import os
 from pathlib import Path
@@ -16,11 +17,20 @@ from database import (
     add_player, get_players, delete_player,
     record_result, get_pairings_for_round, get_standings,
     update_current_round, store_pairing, get_player_rank_map,
-    import_uscf_members, search_uscf_members, lookup_uscf_member, get_uscf_db_count
+    import_uscf_members, search_uscf_members, lookup_uscf_member, get_uscf_db_count,
+    get_user_by_username, get_user_by_email, get_user_by_phone,
+    verify_password, create_user, create_pending_user, list_users,
+    delete_user, update_user_password,
+    create_verification_token, check_and_consume_token, activate_user,
 )
 from trf_builder import build_trf
+from auth import get_current_user, require_login, require_td, require_admin
+from notify import send_verification_email, send_verification_sms
+
+SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 
 app = FastAPI(title="MyChessRating Pairings")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -28,18 +38,248 @@ BBP_PATH = "./bbpPairings"
 if os.name == "nt":
     BBP_PATH += ".exe"
 
+
+# ---------------------------------------------------------------------------
+# Exception handlers
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(401)
+async def not_authenticated(request: Request, exc: HTTPException):
+    if request.headers.get("HX-Request"):
+        return Response(headers={"HX-Redirect": "/login"}, status_code=200)
+    if request.session.get("pending_user_id"):
+        return RedirectResponse("/verify", status_code=303)
+    next_url = request.url.path
+    return RedirectResponse(url=f"/login?next={next_url}", status_code=303)
+
+@app.exception_handler(403)
+async def forbidden(request: Request, exc: HTTPException):
+    return HTMLResponse(
+        f'<div class="alert alert-danger">Access denied: {html.escape(exc.detail or "Insufficient permissions")}</div>',
+        status_code=403
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/"):
+    user = get_current_user(request)
+    if user:
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request=request, name="login.html", context={"next": next, "error": None})
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form("/"),
+):
+    user = get_user_by_username(username)
+    if not user or not verify_password(password, user["password_hash"]):
+        return templates.TemplateResponse(request=request, name="login.html",
+                                          context={"next": next, "error": "Invalid username or password"})
+    if user.get("status") == "pending":
+        # Account exists but not verified — resend OTP and send to verify page
+        contact = user.get("email") or user.get("phone")
+        channel = "email" if user.get("email") else "sms"
+        token = create_verification_token(user["id"], channel, contact)
+        try:
+            if channel == "email":
+                await send_verification_email(contact, token)
+            else:
+                await send_verification_sms(contact, token)
+        except Exception:
+            pass
+        request.session["pending_user_id"] = user["id"]
+        request.session["pending_contact"] = contact
+        request.session["pending_channel"] = channel
+        return RedirectResponse("/verify", status_code=303)
+    request.session["user"] = {"id": user["id"], "username": user["username"], "role": user["role"]}
+    return RedirectResponse(next if next.startswith("/") else "/", status_code=303)
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Self-registration
+# ---------------------------------------------------------------------------
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request):
+    if get_current_user(request):
+        return RedirectResponse("/", status_code=303)
+    return templates.TemplateResponse(request=request, name="register.html", context={"error": None})
+
+@app.post("/register", response_class=HTMLResponse)
+async def register_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    confirm: str = Form(...),
+    channel: str = Form(...),       # "email" or "sms"
+    contact: str = Form(...),       # email address or phone number
+):
+    error = None
+    username = username.strip()
+    contact = contact.strip()
+
+    if password != confirm:
+        error = "Passwords do not match."
+    elif len(password) < 6:
+        error = "Password must be at least 6 characters."
+    elif get_user_by_username(username):
+        error = "Username already taken."
+    elif channel == "email" and get_user_by_email(contact):
+        error = "An account with that email already exists."
+    elif channel == "sms" and get_user_by_phone(contact):
+        error = "An account with that phone number already exists."
+
+    if error:
+        return templates.TemplateResponse(request=request, name="register.html", context={"error": error})
+
+    email = contact if channel == "email" else None
+    phone = contact if channel == "sms" else None
+    uid = create_pending_user(username, password, email=email, phone=phone)
+    token = create_verification_token(uid, channel, contact)
+
+    try:
+        if channel == "email":
+            await send_verification_email(contact, token)
+        else:
+            await send_verification_sms(contact, token)
+    except Exception as e:
+        error = str(e)
+        return templates.TemplateResponse(request=request, name="register.html", context={"error": error})
+
+    request.session["pending_user_id"] = uid
+    request.session["pending_contact"] = contact
+    request.session["pending_channel"] = channel
+    return RedirectResponse("/verify", status_code=303)
+
+@app.get("/verify", response_class=HTMLResponse)
+async def verify_page(request: Request):
+    if get_current_user(request):
+        return RedirectResponse("/", status_code=303)
+    if not request.session.get("pending_user_id"):
+        return RedirectResponse("/register", status_code=303)
+    return templates.TemplateResponse(request=request, name="verify.html", context={
+        "contact": request.session.get("pending_contact"),
+        "channel": request.session.get("pending_channel"),
+        "error": None,
+    })
+
+@app.post("/verify", response_class=HTMLResponse)
+async def verify_submit(request: Request, code: str = Form(...)):
+    uid = request.session.get("pending_user_id")
+    if not uid:
+        return RedirectResponse("/register", status_code=303)
+
+    if not check_and_consume_token(uid, code.strip()):
+        return templates.TemplateResponse(request=request, name="verify.html", context={
+            "contact": request.session.get("pending_contact"),
+            "channel": request.session.get("pending_channel"),
+            "error": "Invalid or expired code. Request a new one.",
+        })
+
+    activate_user(uid)
+    from database import DB_FILE
+    import sqlite3 as _sq
+    conn = _sq.connect(DB_FILE)
+    row = conn.execute("SELECT id, username, role FROM users WHERE id=?", (uid,)).fetchone()
+    conn.close()
+
+    for key in ("pending_user_id", "pending_contact", "pending_channel"):
+        request.session.pop(key, None)
+    if row:
+        request.session["user"] = {"id": row[0], "username": row[1], "role": row[2]}
+    return RedirectResponse("/", status_code=303)
+
+@app.post("/verify/resend")
+async def verify_resend(request: Request):
+    uid = request.session.get("pending_user_id")
+    channel = request.session.get("pending_channel")
+    contact = request.session.get("pending_contact")
+    if uid and channel and contact:
+        token = create_verification_token(uid, channel, contact)
+        try:
+            if channel == "email":
+                await send_verification_email(contact, token)
+            else:
+                await send_verification_sms(contact, token)
+        except Exception:
+            pass
+    return RedirectResponse("/verify", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# User management (admin only)
+# ---------------------------------------------------------------------------
+
+@app.get("/users", response_class=HTMLResponse)
+async def users_page(request: Request, user: dict = Depends(require_admin)):
+    users = list_users()
+    return templates.TemplateResponse(request=request, name="users.html",
+                                      context={"users": users, "current_user": user})
+
+@app.post("/users")
+async def create_user_route(
+    username: str = Form(...),
+    password: str = Form(...),
+    role: str = Form("viewer"),
+    _user: dict = Depends(require_admin),
+):
+    try:
+        create_user(username, password, role)
+    except Exception:
+        pass  # duplicate username — silently ignore for now
+    return RedirectResponse("/users", status_code=303)
+
+@app.post("/users/{uid}/delete")
+async def delete_user_route(uid: int, current: dict = Depends(require_admin)):
+    if uid != current["id"]:  # prevent self-deletion
+        delete_user(uid)
+    return RedirectResponse("/users", status_code=303)
+
+@app.post("/users/{uid}/password")
+async def change_password_route(
+    uid: int,
+    new_password: str = Form(...),
+    _user: dict = Depends(require_admin),
+):
+    update_user_password(uid, new_password)
+    return RedirectResponse("/users", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Main app routes
+# ---------------------------------------------------------------------------
+
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
+async def home(request: Request, user: dict = Depends(require_login)):
     tournaments = get_tournaments()
-    return templates.TemplateResponse(request=request, name="tournament_list.html", context={"tournaments": tournaments})
+    return templates.TemplateResponse(request=request, name="tournament_list.html",
+                                      context={"tournaments": tournaments, "current_user": user})
 
 @app.post("/tournament")
-async def new_tournament(name: str = Form(...), rounds: int = Form(5), system: str = Form("dutch")):
+async def new_tournament(
+    name: str = Form(...),
+    rounds: int = Form(5),
+    system: str = Form("dutch"),
+    _user: dict = Depends(require_td),
+):
     tid = create_tournament(name, rounds, system)
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.get("/tournament/{tid}", response_class=HTMLResponse)
-async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None):
+async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None,
+                             user: dict = Depends(require_login)):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -50,6 +290,7 @@ async def tournament_detail(request: Request, tid: int, imported: Optional[int] 
         "players": players,
         "current_round": current_round,
         "imported": imported,
+        "current_user": user,
     })
 
 def _parse_uscf_thin3(body: str) -> dict:
@@ -93,7 +334,7 @@ def _lookup_oob(full_name: str, rating: int, source: str = "", fide_id: str = ""
     return preview + name_oob + rating_oob + fide_oob
 
 @app.get("/api/uscf-lookup", response_class=HTMLResponse)
-async def uscf_lookup(uscf_id: str = ""):
+async def uscf_lookup(uscf_id: str = "", _user: dict = Depends(require_login)):
     uscf_id = uscf_id.strip()
     empty = '<div id="uscf-preview"></div>'
     if len(uscf_id) < 7:
@@ -143,7 +384,7 @@ def _suggestions_html(results: list) -> str:
     )
 
 @app.get("/api/uscf-search", response_class=HTMLResponse)
-async def uscf_search(name: str = ""):
+async def uscf_search(name: str = "", _user: dict = Depends(require_login)):
     q = name.strip()
     empty = '<div id="uscf-suggestions"></div>'
     if len(q) < 2:
@@ -175,12 +416,12 @@ async def uscf_search(name: str = ""):
 @app.post("/tournament/{tid}/player")
 async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
                           rating: Optional[int] = Form(None), email: Optional[str] = Form(None),
-                          fide_id: Optional[str] = Form(None)):
+                          fide_id: Optional[str] = Form(None), _user: dict = Depends(require_td)):
     add_player(tid, name, uscf_id, rating, email, fide_id or None)
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.post("/tournament/{tid}/import-players")
-async def import_players_csv(tid: int, file: UploadFile = File(...)):
+async def import_players_csv(tid: int, file: UploadFile = File(...), _user: dict = Depends(require_td)):
     content = await file.read()
     text = content.decode("utf-8-sig", errors="replace")
     added = 0
@@ -238,13 +479,14 @@ async def import_players_csv(tid: int, file: UploadFile = File(...)):
     return RedirectResponse(f"/tournament/{tid}?imported={added}", status_code=303)
 
 @app.post("/player/{pid}/delete")
-async def remove_player(pid: int):
+async def remove_player(pid: int, _user: dict = Depends(require_td)):
     tid = delete_player(pid)
     return RedirectResponse(f"/tournament/{tid}" if tid else "/", status_code=303)
 
 # HTMX: Round table fragment
 @app.get("/tournament/{tid}/round/{round_num}/table", response_class=HTMLResponse)
-async def round_table_fragment(request: Request, tid: int, round_num: int):
+async def round_table_fragment(request: Request, tid: int, round_num: int,
+                                user: dict = Depends(require_login)):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -254,7 +496,8 @@ async def round_table_fragment(request: Request, tid: int, round_num: int):
         "tournament": tournament,
         "round_num": round_num,
         "pairings": pairings,
-        "standings": standings
+        "standings": standings,
+        "current_user": user,
     })
 
 # Submit normal result (HTMX)
@@ -265,7 +508,8 @@ async def submit_result_htmx(
     round_num: int = Form(...),
     white_id: int = Form(...),
     black_id: int = Form(...),
-    result: str = Form(...)
+    result: str = Form(...),
+    _user: dict = Depends(require_td),
 ):
     record_result(tid, round_num, white_id, black_id, result)
     return await round_table_fragment(request, tid, round_num)
@@ -279,7 +523,8 @@ async def submit_bye(
     player_id: int = Form(...),
     bye_type: str = Form(...),  # full, half, zero
     is_forfeit: bool = Form(False),
-    opponent_id: Optional[int] = Form(None)
+    opponent_id: Optional[int] = Form(None),
+    _user: dict = Depends(require_td),
 ):
     if is_forfeit and opponent_id:
         result_str = "1F-0F" if bye_type == "full" else "0F-1F"
@@ -290,7 +535,7 @@ async def submit_bye(
 
 # Generate next round
 @app.post("/tournament/{tid}/next-round", response_class=HTMLResponse)
-async def generate_next_round(request: Request, tid: int):
+async def generate_next_round(request: Request, tid: int, _user: dict = Depends(require_td)):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -298,7 +543,10 @@ async def generate_next_round(request: Request, tid: int):
     next_r = current + 1
 
     # Build TRF with only the completed rounds (before advancing current_round)
-    trf_text = build_trf(tid, rounds_to_include=current)
+    try:
+        trf_text = build_trf(tid, rounds_to_include=current)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">TRF build error: {html.escape(str(e))}</div>')
     rank_map = get_player_rank_map(tid)
 
     trf_fd, trf_path = tempfile.mkstemp(suffix=".trf")
@@ -312,7 +560,8 @@ async def generate_next_round(request: Request, tid: int):
             capture_output=True, text=True, timeout=30
         )
         if proc.returncode != 0:
-            raise HTTPException(500, detail=f"bbpPairings error: {proc.stderr.strip() or proc.stdout.strip()}")
+            err = proc.stderr.strip() or proc.stdout.strip() or f"exit code {proc.returncode}"
+            return HTMLResponse(f'<div class="alert alert-danger">Pairing error: {html.escape(err)}<pre>{html.escape(trf_text)}</pre></div>')
 
         with open(out_path) as f:
             pairing_lines = f.read().strip().splitlines()
@@ -335,53 +584,76 @@ async def generate_next_round(request: Request, tid: int):
 
 # Download TRF-2026
 @app.get("/tournament/{tid}/trf")
-async def download_trf(tid: int):
+async def download_trf(tid: int, _user: dict = Depends(require_login)):
     trf_text = build_trf(tid)
     file_path = f"trf_{tid}.trf"
     Path(file_path).write_text(trf_text)
     return FileResponse(file_path, media_type="text/plain", filename=f"tournament_{tid}.trf")
 
+@app.get("/tournament/{tid}/trf-debug")
+async def trf_debug(tid: int, _user: dict = Depends(require_admin)):
+    results = {}
+    # bbpPairings version
+    proc = subprocess.run([BBP_PATH, "--help"], capture_output=True, text=True, timeout=5)
+    results["bbp_help"] = (proc.stdout + proc.stderr)[:500]
+
+    def run_trf(trf_text):
+        fd, path = tempfile.mkstemp(suffix=".trf")
+        out = path + ".out"
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(trf_text)
+            p = subprocess.run([BBP_PATH, "--dutch", path, "-p", out],
+                               capture_output=True, text=True, timeout=10)
+            return {"rc": p.returncode, "err": p.stderr.strip(), "out": p.stdout.strip()}
+        finally:
+            Path(path).unlink(missing_ok=True)
+            Path(out).unlink(missing_ok=True)
+
+    # Test A: 2 players with same format as real TRF
+    trf_2p = build_trf(tid, rounds_to_include=0)
+    lines = trf_2p.splitlines()
+    trf_2p_short = "\n".join(lines[:6] + lines[5:7]) + "\n"  # header + first 2 players
+    results["test_2players"] = run_trf(trf_2p_short)
+    results["test_2players_trf"] = trf_2p_short
+
+    # Test B: full real TRF
+    results["test_full"] = run_trf(trf_2p)
+    return results
+
 # Standings
 @app.get("/tournament/{tid}/standings", response_class=HTMLResponse)
-async def view_standings(request: Request, tid: int):
+async def view_standings(request: Request, tid: int, user: dict = Depends(require_login)):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
     standings = get_standings(tid)
     return templates.TemplateResponse(request=request, name="standings.html", context={
         "tournament": tournament,
-        "standings": standings
+        "standings": standings,
+        "current_user": user,
     })
 
 @app.get("/uscf-db", response_class=HTMLResponse)
-async def uscf_db_page(request: Request, imported: Optional[int] = None):
+async def uscf_db_page(request: Request, imported: Optional[int] = None,
+                        user: dict = Depends(require_admin)):
     count = get_uscf_db_count()
     return templates.TemplateResponse(request=request, name="uscf_db.html", context={
         "count": count,
         "imported": imported,
+        "current_user": user,
     })
 
 @app.post("/uscf-db/upload")
-async def uscf_db_upload(file: UploadFile = File(...)):
+async def uscf_db_upload(file: UploadFile = File(...), _user: dict = Depends(require_admin)):
     import asyncio
     content = await file.read()
     loop = asyncio.get_event_loop()
     count = await loop.run_in_executor(None, import_uscf_members, content)
     return {"imported": count}
 
-
-@app.get("/api/uscf-live-debug/{uscf_id}")
-async def uscf_live_debug(uscf_id: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        r = await client.get(f"http://www.uschess.org/msa/MbrDtlTnmtHist.php?{uscf_id}", headers=headers)
-    # Find section around first rating-looking number
-    body = r.text
-    idx = body.find("1584")
-    return {"status": r.status_code, "found_at": idx, "snippet": body[max(0,idx-300):idx+300]}
-
 @app.get("/api/uscf-col-debug")
-async def uscf_col_debug():
+async def uscf_col_debug(_user: dict = Depends(require_admin)):
     import json
     from database import DB_FILE
     debug_path = DB_FILE.replace(".db", "_col_debug.json")

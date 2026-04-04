@@ -4,7 +4,7 @@
     {% for game in pairings %}
     <tr>
         <td>{{ loop.index }}</td>
-        <td>{{ game.white_name }}</td>
+        <td>{{ game.white_name }} <span class="text-muted small">({{ game.white_rating or '—' }}{% if game.white_fide_rating %} / {{ game.white_fide_rating }}{% endif %})</span></td>
         <td>
             {% if game.result and game.result != '*' %}
                 <span class="badge bg-secondary">{{ game.result }}</span>
@@ -12,7 +12,7 @@
                 <span class="text-muted">—</span>
             {% endif %}
         </td>
-        <td>{{ game.black_name or '<em>bye</em>' }}</td>
+        <td>{% if game.black_name %}{{ game.black_name }} <span class="text-muted small">({{ game.black_rating or '—' }}{% if game.black_fide_rating %} / {{ game.black_fide_rating }}{% endif %})</span>{% else %}<em>bye</em>{% endif %}</td>
         <td>
             {% if game.result and game.result != '*' %}
                 <span class="text-success small">✓ Recorded</span>
