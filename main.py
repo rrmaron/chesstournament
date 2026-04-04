@@ -380,15 +380,15 @@ async def fide_debug(fide_id: str):
     async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
         r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
     body = r.text
-    # Show 600 chars around each occurrence of "1570" (the known rating)
     snippets = []
-    idx = 0
-    while True:
-        idx = body.find("1570", idx)
-        if idx == -1:
-            break
-        snippets.append(body[max(0, idx-200):idx+200])
-        idx += 4
+    for target in ["1593"]:
+        idx = 0
+        while True:
+            idx = body.find(target, idx)
+            if idx == -1:
+                break
+            snippets.append(body[max(0, idx-300):idx+300])
+            idx += len(target)
     return {"status": r.status_code, "snippets": snippets}
 
 @app.get("/api/uscf-col-debug")
