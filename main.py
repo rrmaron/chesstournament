@@ -369,27 +369,6 @@ async def uscf_db_upload(file: UploadFile = File(...)):
     count = await loop.run_in_executor(None, import_uscf_members, content)
     return {"imported": count}
 
-@app.get("/api/uscf-member/{uscf_id}")
-async def uscf_member_debug(uscf_id: str):
-    from database import lookup_uscf_member
-    return lookup_uscf_member(uscf_id) or {"error": "not found"}
-
-@app.get("/api/fide-debug/{fide_id}")
-async def fide_debug(fide_id: str):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
-    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-        r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
-    body = r.text
-    snippets = []
-    for target in ["1593"]:
-        idx = 0
-        while True:
-            idx = body.find(target, idx)
-            if idx == -1:
-                break
-            snippets.append(body[max(0, idx-300):idx+300])
-            idx += len(target)
-    return {"status": r.status_code, "snippets": snippets}
 
 @app.get("/api/uscf-col-debug")
 async def uscf_col_debug():

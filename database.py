@@ -224,15 +224,16 @@ def get_tournament(tid: int) -> Optional[Dict]:
     return dict(zip([col[0] for col in c.description], row)) if row else None
 
 def _fetch_fide_rating(fide_id: str) -> int:
-    """Fetch standard FIDE rating from app.fide.com API."""
+    """Fetch standard FIDE rating by scraping ratings.fide.com profile page."""
     try:
-        import httpx
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-        r = httpx.get(f"https://app.fide.com/api/v1/client/players/{fide_id}",
-                      timeout=8, follow_redirects=True, headers=headers)
+        import httpx, re
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+        r = httpx.get(f"https://ratings.fide.com/profile/{fide_id}",
+                      timeout=10, follow_redirects=True, headers=headers)
         if r.status_code == 200:
-            data = r.json()
-            return int(data.get("rating") or data.get("standard_rating") or 0)
+            m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+            if m:
+                return int(m.group(1))
     except Exception:
         pass
     return 0
