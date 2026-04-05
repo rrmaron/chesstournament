@@ -1,6 +1,6 @@
 <div class="card shadow-sm"
      data-opp-name="{{ name }}"
-     data-opp-uscf="{{ rating or '' }}"
+     data-opp-uscf="{{ live_rating or rating or '' }}"
      data-opp-fide="{{ fide_rating or '' }}">
   <div class="card-header bg-primary text-white fw-semibold fs-5">{{ name }}</div>
   <div class="card-body p-0">
@@ -62,7 +62,7 @@
           class="d-flex align-items-center gap-2">
       <input type="hidden" name="uscf_id"     value="{{ uscf_id or '' }}">
       <input type="hidden" name="fide_id"     value="{{ fide_id or '' }}">
-      <input type="hidden" name="uscf_rating" value="{{ rating or '' }}">
+      <input type="hidden" name="uscf_rating" value="{{ live_rating or rating or '' }}">
       <input type="hidden" name="fide_rating" value="{{ fide_rating or '' }}">
       <button type="submit" class="btn btn-outline-secondary btn-sm">
         Use as my profile
