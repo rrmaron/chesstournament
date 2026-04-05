@@ -49,7 +49,7 @@ export default function MyRatingsScreen() {
 
         <View style={styles.card}>
           <View style={styles.field}>
-            <Text style={styles.label}>My USCF Rating</Text>
+            <Text style={styles.label}>My Live USCF Rating</Text>
             <TextInput
               style={styles.input}
               value={uscfRating}

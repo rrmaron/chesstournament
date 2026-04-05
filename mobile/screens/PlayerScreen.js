@@ -29,7 +29,7 @@ const fideK = (r) => r < 1600 ? 40 : r < 2400 ? 20 : 10;
 function ImpactTable({ myRatings, player, navigation }) {
   const myUscf = myRatings?.uscfRating;
   const myFide = myRatings?.fideRating;
-  const oppUscf = player?.uscf_rating;
+  const oppUscf = player?.live_uscf_rating || player?.uscf_rating;
   const oppFide = player?.fide_rating;
 
   const hasProfile = myUscf || myFide;
@@ -81,7 +81,7 @@ function ImpactTable({ myRatings, player, navigation }) {
         <Text style={[impactStyles.headerCell, { flex: 1 }]}>Outcome</Text>
         {uscfImpact && (
           <Text style={impactStyles.headerCell}>
-            USCF{'\n'}
+            Live USCF{'\n'}
             <Text style={impactStyles.subHeader}>Me:{myUscf} / Opp:{oppUscf}</Text>
           </Text>
         )}
