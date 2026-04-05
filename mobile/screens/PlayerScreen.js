@@ -4,7 +4,8 @@ import {
   ActivityIndicator, Linking, TouchableOpacity,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { loadMyRatings } from './MyRatingsScreen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loadMyRatings, RATINGS_KEY } from './MyRatingsScreen';
 
 const API_BASE = 'https://mychessrating.fly.dev';
 
@@ -133,6 +134,16 @@ export default function PlayerScreen({ route, navigation }) {
   const [error, setError] = useState('');
   const [myRatings, setMyRatings] = useState(null);
   const [showImpact, setShowImpact] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  const useAsMyProfile = useCallback(async () => {
+    const uscfRating = player?.live_uscf_rating || player?.uscf_rating || 0;
+    const fideRating = player?.fide_rating || 0;
+    await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify({ uscfRating, fideRating }));
+    setMyRatings({ uscfRating, fideRating });
+    setProfileSaved(true);
+    setTimeout(() => setProfileSaved(false), 2000);
+  }, [player]);
 
   useEffect(() => {
     (async () => {
@@ -206,6 +217,13 @@ export default function PlayerScreen({ route, navigation }) {
         ))}
       </View>
 
+      {/* Use as my profile */}
+      <TouchableOpacity style={styles.profileBtn} onPress={useAsMyProfile}>
+        <Text style={styles.profileBtnText}>
+          {profileSaved ? '✓ Saved as my profile' : 'Use as my profile'}
+        </Text>
+      </TouchableOpacity>
+
       {/* Rating impact button */}
       <TouchableOpacity
         style={styles.impactBtn}
@@ -262,6 +280,16 @@ const styles = StyleSheet.create({
   label: { fontSize: 14, color: '#555', fontWeight: '500', flex: 1 },
   value: { fontSize: 15, color: '#1a1a2e', fontWeight: '600', textAlign: 'right' },
   link: { fontSize: 15, color: '#0066cc', fontWeight: '600', textDecorationLine: 'underline' },
+  profileBtn: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 14,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#1a1a2e',
+  },
+  profileBtnText: { color: '#1a1a2e', fontSize: 15, fontWeight: '600' },
   impactBtn: {
     backgroundColor: '#1a1a2e',
     borderRadius: 10,
