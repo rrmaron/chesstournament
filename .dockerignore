@@ -1,0 +1,6 @@
+mobile/node_modules
+mobile/.expo
+__pycache__
+*.pyc
+.git
+.claude
