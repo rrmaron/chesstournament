@@ -14,7 +14,12 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.mychessrating.playerlookup",
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,18 +27,25 @@
         "backgroundColor": "#1a1a2e"
       },
       "package": "com.mychessrating.playerlookup",
-      "versionCode": 1
+      "versionCode": 1,
+      "permissions": []
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "plugins": [
+      "expo-asset",
+      [
+        "@react-native-async-storage/async-storage",
+        {
+          "exclude": []
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "YOUR_EAS_PROJECT_ID"
       }
-    },
-    "plugins": [
-      "expo-asset"
-    ]
+    }
   }
 }
