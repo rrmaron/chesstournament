@@ -34,18 +34,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset",
-      [
-        "@react-native-async-storage/async-storage",
-        {
-          "exclude": []
-        }
-      ]
+      "expo-asset"
     ],
     "extra": {
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "de0ac37d-cf89-4719-9c4c-9893961d6eed"
       }
-    }
+    },
+    "owner": "rrmaron"
   }
 }
