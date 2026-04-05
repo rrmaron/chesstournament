@@ -966,10 +966,10 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
 def _elo_impact(my_rating: int, opp_rating: int, k: int) -> dict:
     expected = 1 / (1 + 10 ** ((opp_rating - my_rating) / 400))
     return {
-        "win":  round(k * (1.0 - expected)),
-        "draw": round(k * (0.5 - expected)),
-        "loss": round(k * (0.0 - expected)),
-        "expected_pct": round(expected * 100),
+        "win":  round(k * (1.0 - expected), 1),
+        "draw": round(k * (0.5 - expected), 1),
+        "loss": round(k * (0.0 - expected), 1),
+        "expected_pct": round(expected * 100, 1),
     }
 
 def _uscf_k(rating: int) -> int:

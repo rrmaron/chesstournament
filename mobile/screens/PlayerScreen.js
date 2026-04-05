@@ -14,11 +14,12 @@ const API_BASE = 'https://mychessrating.fly.dev';
 // ---------------------------------------------------------------------------
 function eloImpact(myRating, oppRating, k) {
   const expected = 1 / (1 + Math.pow(10, (oppRating - myRating) / 400));
+  const r1 = (v) => Math.round(v * 10) / 10;
   return {
-    win:  Math.round(k * (1 - expected)),
-    draw: Math.round(k * (0.5 - expected)),
-    loss: Math.round(k * (0 - expected)),
-    pct:  Math.round(expected * 100),
+    win:  r1(k * (1 - expected)),
+    draw: r1(k * (0.5 - expected)),
+    loss: r1(k * (0 - expected)),
+    pct:  r1(expected * 100),
   };
 }
 const uscfK = (r) => r < 2100 ? 32 : r < 2400 ? 24 : 16;
@@ -72,7 +73,7 @@ function ImpactTable({ myRatings, player, navigation }) {
 
   const fmt = (n, sign) => {
     if (n === undefined || n === null) return '—';
-    return (sign && n > 0 ? '+' : '') + n;
+    return (sign && n > 0 ? '+' : '') + n.toFixed(1);
   };
 
   return (
