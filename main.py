@@ -1274,7 +1274,7 @@ async def update_bye_request(
 
 @app.get("/privacy", response_class=HTMLResponse)
 async def privacy(request: Request):
-    return templates.TemplateResponse("privacy.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="privacy.html")
 
 
 if __name__ == "__main__":
