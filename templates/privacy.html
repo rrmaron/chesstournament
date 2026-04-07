@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Privacy Policy{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <h1 class="mb-1">Privacy Policy</h1>
+    <p class="text-muted mb-4">Last updated: April 6, 2026</p>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Overview</h5>
+        <p>
+          MyChessRating.com ("we", "our", "the service") provides chess tournament management
+          and player rating lookup tools. This policy explains what data we collect, how we use
+          it, and your rights.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Information We Collect</h5>
+
+        <h6 class="mt-3">Account registration</h6>
+        <p>When you create an account we collect:</p>
+        <ul>
+          <li>Username</li>
+          <li>Email address and/or phone number (used for account verification)</li>
+          <li>Password (stored as a one-way hash — we cannot read it)</li>
+          <li>Your USCF ID, FIDE ID, and ratings (optional — used for rating impact calculations)</li>
+        </ul>
+
+        <h6 class="mt-3">Tournament registration</h6>
+        <p>
+          When you register for a tournament we collect your name and any information
+          entered by the tournament director (ratings, section, etc.).
+        </p>
+
+        <h6 class="mt-3">Usage data</h6>
+        <p>
+          We store server-side session tokens (in an HTTP-only cookie) to keep you logged in.
+          We do not use third-party analytics or tracking cookies.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Information We Do Not Collect</h5>
+        <ul>
+          <li>Payment card details — payments are handled entirely by Stripe. We never see or store card numbers.</li>
+          <li>Location data</li>
+          <li>Device identifiers or advertising IDs</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Mobile App (Chess Player Lookup)</h5>
+        <p>
+          The mobile app does not require an account and does not transmit any personal
+          data to our servers. Ratings you enter in "My Ratings" are stored locally on
+          your device using your phone's secure storage and are never uploaded.
+        </p>
+        <p>
+          The app fetches publicly available player data from USCF and FIDE via our
+          server-side API. No identifying information about you is sent during these lookups.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>How We Use Your Information</h5>
+        <ul>
+          <li>To verify your account and maintain your login session</li>
+          <li>To pre-fill rating impact calculations on the player lookup and FIDE calculator pages</li>
+          <li>To allow tournament directors to manage their events</li>
+          <li>To send you a one-time verification code when you register (we do not send marketing emails)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Data Sharing</h5>
+        <p>We do not sell or share your personal data with third parties, except:</p>
+        <ul>
+          <li><strong>Stripe</strong> — processes tournament entry payments. Subject to <a href="https://stripe.com/privacy" target="_blank" rel="noopener">Stripe's Privacy Policy</a>.</li>
+          <li><strong>Legal requirement</strong> — if required by law or court order.</li>
+        </ul>
+        <p>
+          Player names and ratings displayed in tournament standings and entry lists are
+          visible to other logged-in users of the service, consistent with how chess
+          tournament results are publicly reported.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Data Retention</h5>
+        <p>
+          Your account and profile data are retained for as long as your account is active.
+          Tournament records are retained indefinitely as part of the historical record.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Your Rights</h5>
+        <p>You may at any time:</p>
+        <ul>
+          <li>Update your profile information from the <a href="/profile">My Profile</a> page</li>
+          <li>Request deletion of your account and associated personal data by emailing us</li>
+          <li>Request a copy of the personal data we hold about you</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Security</h5>
+        <p>
+          Passwords are hashed using bcrypt. All traffic is encrypted via HTTPS.
+          Session tokens expire automatically. We do not store any payment credentials.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-5">
+      <div class="card-body">
+        <h5>Contact</h5>
+        <p>
+          Questions about this policy? Email us at
+          <a href="mailto:privacy@mychessrating.com">privacy@mychessrating.com</a>.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

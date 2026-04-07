@@ -1272,6 +1272,11 @@ async def update_bye_request(
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy(request: Request):
+    return templates.TemplateResponse("privacy.html", {"request": request})
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
