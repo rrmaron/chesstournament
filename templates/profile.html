@@ -30,14 +30,34 @@
                  value="{{ profile.fide_id or '' }}" placeholder="e.g. 2000001">
         </div>
         <div class="col-sm-6">
-          <label class="form-label">Live USCF Rating</label>
+          <label class="form-label">USCF Regular (Live)</label>
           <input type="number" name="uscf_rating" class="form-control"
                  value="{{ profile.uscf_rating or '' }}" placeholder="e.g. 1650" min="100" max="3000">
         </div>
         <div class="col-sm-6">
-          <label class="form-label">FIDE Rating</label>
+          <label class="form-label">USCF Quick (Live)</label>
+          <input type="number" name="uscf_quick_rating" class="form-control"
+                 value="{{ profile.uscf_quick_rating or '' }}" placeholder="e.g. 1600" min="100" max="3000">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">USCF Blitz (Live)</label>
+          <input type="number" name="uscf_blitz_rating" class="form-control"
+                 value="{{ profile.uscf_blitz_rating or '' }}" placeholder="e.g. 1550" min="100" max="3000">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">FIDE Standard</label>
           <input type="number" name="fide_rating" class="form-control"
                  value="{{ profile.fide_rating or '' }}" placeholder="e.g. 1600" min="100" max="3000">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">FIDE Rapid</label>
+          <input type="number" name="fide_rapid_rating" class="form-control"
+                 value="{{ profile.fide_rapid_rating or '' }}" placeholder="e.g. 1580" min="100" max="3000">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label">FIDE Blitz</label>
+          <input type="number" name="fide_blitz_rating" class="form-control"
+                 value="{{ profile.fide_blitz_rating or '' }}" placeholder="e.g. 1520" min="100" max="3000">
         </div>
       </div>
       <div class="mt-3">

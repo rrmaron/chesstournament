@@ -1,7 +1,11 @@
 <div class="card shadow-sm"
      data-opp-name="{{ name }}"
      data-opp-uscf="{{ live_rating or rating or '' }}"
-     data-opp-fide="{{ fide_rating or '' }}">
+     data-opp-uscf-quick="{{ live_quick or '' }}"
+     data-opp-uscf-blitz="{{ live_blitz or '' }}"
+     data-opp-fide="{{ fide_rating or '' }}"
+     data-opp-fide-rapid="{{ fide_rapid or '' }}"
+     data-opp-fide-blitz="{{ fide_blitz or '' }}">
   <div class="card-header bg-primary text-white fw-semibold fs-5">{{ name }}</div>
   <div class="card-body p-0">
     <table class="table table-striped mb-0">
@@ -19,14 +23,16 @@
           <td>{{ rating if rating else '—' }}</td>
         </tr>
         <tr>
-          <th class="ps-3">Live USCF Rating</th>
-          <td>
-            {% if live_rating %}
-              {{ live_rating }}
-            {% else %}
-              <span class="text-muted">Not available</span>
-            {% endif %}
-          </td>
+          <th class="ps-3">Live USCF Regular</th>
+          <td>{{ live_rating if live_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">Live USCF Quick</th>
+          <td>{{ live_quick if live_quick else '<span class="text-muted">—</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">Live USCF Blitz</th>
+          <td>{{ live_blitz if live_blitz else '<span class="text-muted">—</span>' | safe }}</td>
         </tr>
         <tr>
           <th class="ps-3">FIDE ID</th>
@@ -39,14 +45,16 @@
           </td>
         </tr>
         <tr>
-          <th class="ps-3">FIDE Rating</th>
-          <td>
-            {% if fide_rating %}
-              {{ fide_rating }}
-            {% else %}
-              <span class="text-muted">{% if fide_id %}Not rated{% else %}No FIDE ID{% endif %}</span>
-            {% endif %}
-          </td>
+          <th class="ps-3">FIDE Standard</th>
+          <td>{{ fide_rating if fide_rating else '<span class="text-muted">' ~ ('Not rated' if fide_id else 'No FIDE ID') ~ '</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">FIDE Rapid</th>
+          <td>{{ fide_rapid if fide_rapid else '<span class="text-muted">—</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">FIDE Blitz</th>
+          <td>{{ fide_blitz if fide_blitz else '<span class="text-muted">—</span>' | safe }}</td>
         </tr>
         <tr>
           <th class="ps-3">USCF Expiry</th>

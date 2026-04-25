@@ -911,8 +911,8 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
         except Exception:
             pass
 
-    # 2. Live USCF rating
-    live_rating = 0
+    # 2. Live USCF ratings (regular, quick, blitz)
+    live_rating = live_quick = live_blitz = 0
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
@@ -927,25 +927,32 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
         if r.status_code == 200:
             for section in r.json().get("items", []):
                 for record in section.get("ratingRecords", []):
-                    if record.get("ratingSource") == "R":
-                        live_rating = record.get("postRating", 0)
-                        break
-                if live_rating:
-                    break
+                    src = record.get("ratingSource")
+                    val = record.get("postRating", 0)
+                    if src == "R" and not live_rating:
+                        live_rating = val
+                    elif src == "Q" and not live_quick:
+                        live_quick = val
+                    elif src == "B" and not live_blitz:
+                        live_blitz = val
     except Exception:
         pass
 
-    # 3. FIDE rating
-    fide_rating = 0
+    # 3. FIDE ratings (standard, rapid, blitz)
+    fide_rating = fide_rapid = fide_blitz = 0
     if fide_id:
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
             async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
                 r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
             if r.status_code == 200:
-                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
-                if m:
-                    fide_rating = int(m.group(1))
+                ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+                if ms:
+                    fide_rating = int(ms[0])
+                if len(ms) > 1:
+                    fide_rapid = int(ms[1])
+                if len(ms) > 2:
+                    fide_blitz = int(ms[2])
         except Exception:
             pass
 
@@ -955,7 +962,8 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
         "name": name, "uscf_id": uscf_id, "rating": rating,
         "fide_id": fide_id, "expiry": expiry,
-        "live_rating": live_rating, "fide_rating": fide_rating,
+        "live_rating": live_rating, "live_quick": live_quick, "live_blitz": live_blitz,
+        "fide_rating": fide_rating, "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,
     })
 
 
@@ -987,35 +995,43 @@ def _fide_k(rating: int) -> int:
 async def rating_impact_api(
     request: Request,
     opp_uscf: Optional[int] = None,
+    opp_uscf_quick: Optional[int] = None,
+    opp_uscf_blitz: Optional[int] = None,
     opp_fide: Optional[int] = None,
+    opp_fide_rapid: Optional[int] = None,
+    opp_fide_blitz: Optional[int] = None,
     opp_name: Optional[str] = None,
 ):
     user = get_current_user(request)
     profile = get_user_profile(user["id"]) if user else None
-    my_uscf = profile.get("uscf_rating") if profile else None
-    my_fide = profile.get("fide_rating") if profile else None
+    my_uscf       = profile.get("uscf_rating")       if profile else None
+    my_uscf_quick = profile.get("uscf_quick_rating") if profile else None
+    my_uscf_blitz = profile.get("uscf_blitz_rating") if profile else None
+    my_fide       = profile.get("fide_rating")       if profile else None
+    my_fide_rapid = profile.get("fide_rapid_rating") if profile else None
+    my_fide_blitz = profile.get("fide_blitz_rating") if profile else None
 
-    uscf_impact = (
-        _elo_impact(my_uscf, opp_uscf, _uscf_k(my_uscf))
-        if my_uscf and opp_uscf else None
-    )
-    fide_impact = (
-        _elo_impact(my_fide, opp_fide, _fide_k(my_fide))
-        if my_fide and opp_fide else None
-    )
+    uscf_impact       = _elo_impact(my_uscf,       opp_uscf,       _uscf_k(my_uscf))       if my_uscf and opp_uscf             else None
+    uscf_quick_impact = _elo_impact(my_uscf_quick, opp_uscf_quick, _uscf_k(my_uscf_quick)) if my_uscf_quick and opp_uscf_quick else None
+    uscf_blitz_impact = _elo_impact(my_uscf_blitz, opp_uscf_blitz, _uscf_k(my_uscf_blitz)) if my_uscf_blitz and opp_uscf_blitz else None
+    fide_impact       = _elo_impact(my_fide,       opp_fide,       _fide_k(my_fide))       if my_fide and opp_fide             else None
+    fide_rapid_impact = _elo_impact(my_fide_rapid, opp_fide_rapid, _fide_k(my_fide_rapid)) if my_fide_rapid and opp_fide_rapid else None
+    fide_blitz_impact = _elo_impact(my_fide_blitz, opp_fide_blitz, _fide_k(my_fide_blitz)) if my_fide_blitz and opp_fide_blitz else None
+
+    has_any = bool(profile and any([my_uscf, my_uscf_quick, my_uscf_blitz, my_fide, my_fide_rapid, my_fide_blitz]))
 
     return templates.TemplateResponse(
         request=request,
         name="fragments/rating_impact.html",
         context={
             "opp_name": opp_name,
-            "my_uscf": my_uscf,
-            "my_fide": my_fide,
-            "opp_uscf": opp_uscf,
-            "opp_fide": opp_fide,
-            "uscf_impact": uscf_impact,
-            "fide_impact": fide_impact,
-            "has_profile": bool(profile and (my_uscf or my_fide)),
+            "my_uscf": my_uscf, "my_uscf_quick": my_uscf_quick, "my_uscf_blitz": my_uscf_blitz,
+            "my_fide": my_fide, "my_fide_rapid": my_fide_rapid, "my_fide_blitz": my_fide_blitz,
+            "opp_uscf": opp_uscf, "opp_uscf_quick": opp_uscf_quick, "opp_uscf_blitz": opp_uscf_blitz,
+            "opp_fide": opp_fide, "opp_fide_rapid": opp_fide_rapid, "opp_fide_blitz": opp_fide_blitz,
+            "uscf_impact": uscf_impact, "uscf_quick_impact": uscf_quick_impact, "uscf_blitz_impact": uscf_blitz_impact,
+            "fide_impact": fide_impact, "fide_rapid_impact": fide_rapid_impact, "fide_blitz_impact": fide_blitz_impact,
+            "has_profile": has_any,
             "logged_in": bool(user),
         },
     )
@@ -1036,14 +1052,18 @@ async def update_profile(
     fide_id: Optional[str] = Form(None),
     uscf_rating: Optional[int] = Form(None),
     fide_rating: Optional[int] = Form(None),
+    uscf_quick_rating: Optional[int] = Form(None),
+    uscf_blitz_rating: Optional[int] = Form(None),
+    fide_rapid_rating: Optional[int] = Form(None),
+    fide_blitz_rating: Optional[int] = Form(None),
     user: dict = Depends(require_login),
 ):
     update_user_profile(
         user["id"],
         uscf_id.strip() if uscf_id else None,
         fide_id.strip() if fide_id else None,
-        uscf_rating,
-        fide_rating,
+        uscf_rating, fide_rating,
+        uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating,
     )
     return RedirectResponse("/profile?saved=1", status_code=303)
 

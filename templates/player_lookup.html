@@ -51,13 +51,21 @@ function selectPlayer(name, uscfId) {
 
 function loadRatingImpact(btn) {
   var card = btn.closest("[data-opp-name]");
-  var oppUscf = card.dataset.oppUscf;
-  var oppFide = card.dataset.oppFide;
-  var oppName = card.dataset.oppName;
+  var oppName      = card.dataset.oppName;
+  var oppUscf      = card.dataset.oppUscf;
+  var oppUscfQuick = card.dataset.oppUscfQuick;
+  var oppUscfBlitz = card.dataset.oppUscfBlitz;
+  var oppFide      = card.dataset.oppFide;
+  var oppFideRapid = card.dataset.oppFideRapid;
+  var oppFideBlitz = card.dataset.oppFideBlitz;
   var params = new URLSearchParams();
-  if (oppUscf) params.set("opp_uscf", oppUscf);
-  if (oppFide) params.set("opp_fide", oppFide);
-  if (oppName) params.set("opp_name", oppName);
+  if (oppName)      params.set("opp_name", oppName);
+  if (oppUscf)      params.set("opp_uscf", oppUscf);
+  if (oppUscfQuick) params.set("opp_uscf_quick", oppUscfQuick);
+  if (oppUscfBlitz) params.set("opp_uscf_blitz", oppUscfBlitz);
+  if (oppFide)      params.set("opp_fide", oppFide);
+  if (oppFideRapid) params.set("opp_fide_rapid", oppFideRapid);
+  if (oppFideBlitz) params.set("opp_fide_blitz", oppFideBlitz);
   htmx.ajax("GET", "/api/rating-impact?" + params.toString(), {
     target: "#rating-impact"
   });
