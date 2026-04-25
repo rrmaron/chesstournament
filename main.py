@@ -460,25 +460,31 @@ async def tournament_detail(request: Request, tid: int, imported: Optional[int] 
     })
 
 def _parse_uscf_thin3(body: str) -> dict:
-    """Parse name and rating from USCF thin3.php HTML response."""
-    # Attributes appear between name= and value= so match across them: name=memname ...attrs... value='...'
+    """Parse name and ratings from USCF thin3.php HTML response."""
     name_m = re.search(r"name=memname[^>]+value='([^']+)'", body)
-    rating_m = re.search(r"name=rating1[^>]+value='([^']+)'", body)
     name = ""
     if name_m:
         raw = name_m.group(1).strip()
-        if ", " in raw:  # "DOE, JOHN" → "John Doe"
+        if ", " in raw:
             parts = raw.split(", ", 1)
             name = f"{parts[1]} {parts[0]}".title()
         else:
             name = raw.title()
-    rating = 0
-    if rating_m:
-        # Value is like "1478* 2025-12-01" — extract leading digits only
-        num_m = re.search(r"(\d+)", rating_m.group(1))
-        if num_m:
-            rating = int(num_m.group(1))
-    return {"name": name, "rating": rating}
+
+    def _extract_rating(field: str) -> int:
+        m = re.search(rf"name={field}[^>]+value='([^']+)'", body)
+        if m:
+            num = re.search(r"(\d+)", m.group(1))
+            if num:
+                return int(num.group(1))
+        return 0
+
+    return {
+        "name": name,
+        "rating": _extract_rating("rating1"),
+        "quick":  _extract_rating("rating2"),
+        "blitz":  _extract_rating("rating3"),
+    }
 
 def _format_uscf_name(raw: str) -> str:
     """Convert 'DOE, JOHN' → 'John Doe', or title-case if no comma."""
@@ -891,25 +897,28 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     if not uscf_id:
         return HTMLResponse("")
 
-    # 1. Local DB
+    # 1. Local DB for name/regular rating/fide_id/expiry; thin3.php for monthly quick+blitz
     name, rating, fide_id, expiry = "", 0, "", ""
+    monthly_quick = monthly_blitz = 0
     local = lookup_uscf_member(uscf_id)
     if local:
         name    = _format_uscf_name(local["name"])
         rating  = local.get("rating") or 0
         fide_id = local.get("fide_id") or ""
         expiry  = local.get("expiry") or ""
-    else:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
-            if r.status_code == 200 and "memname" in r.text:
-                data = _parse_uscf_thin3(r.text)
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+        if r.status_code == 200 and "memname" in r.text:
+            data = _parse_uscf_thin3(r.text)
+            if not name:
                 name   = data["name"]
                 rating = data["rating"]
-        except Exception:
-            pass
+            monthly_quick = data["quick"]
+            monthly_blitz = data["blitz"]
+    except Exception:
+        pass
 
     # 2. Live USCF ratings (regular, quick, blitz)
     live_rating = live_quick = live_blitz = 0
@@ -961,6 +970,7 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
 
     return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
         "name": name, "uscf_id": uscf_id, "rating": rating,
+        "monthly_quick": monthly_quick, "monthly_blitz": monthly_blitz,
         "fide_id": fide_id, "expiry": expiry,
         "live_rating": live_rating, "live_quick": live_quick, "live_blitz": live_blitz,
         "fide_rating": fide_rating, "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,

@@ -19,8 +19,16 @@
           </td>
         </tr>
         <tr>
-          <th class="ps-3">USCF Rating</th>
+          <th class="ps-3">USCF Regular</th>
           <td>{{ rating if rating else '—' }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">USCF Quick</th>
+          <td>{{ monthly_quick if monthly_quick else '<span class="text-muted">—</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">USCF Blitz</th>
+          <td>{{ monthly_blitz if monthly_blitz else '<span class="text-muted">—</span>' | safe }}</td>
         </tr>
         <tr>
           <th class="ps-3">Live USCF Regular</th>
