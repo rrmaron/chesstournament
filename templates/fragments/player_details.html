@@ -1,5 +1,7 @@
 <div class="card shadow-sm"
      data-opp-name="{{ name }}"
+     data-uscf-id="{{ uscf_id or '' }}"
+     data-fide-id="{{ fide_id or '' }}"
      data-opp-uscf="{{ live_rating or rating or '' }}"
      data-opp-uscf-quick=""
      data-opp-uscf-blitz=""
@@ -60,22 +62,35 @@
     </div>
   </div>
   <div class="card-footer bg-white d-flex flex-column gap-2">
-    <form hx-post="/profile/populate"
-          hx-target="#profile-set-feedback"
-          hx-swap="innerHTML"
-          class="d-flex align-items-center gap-2">
-      <input type="hidden" name="uscf_id"     value="{{ uscf_id or '' }}">
-      <input type="hidden" name="fide_id"     value="{{ fide_id or '' }}">
-      <input type="hidden" name="uscf_rating" value="{{ live_rating or rating or '' }}">
-      <input type="hidden" name="fide_rating" value="{{ fide_rating or '' }}">
-      <button type="submit" class="btn btn-outline-secondary btn-sm">
+    <div class="d-flex align-items-center gap-2">
+      <button class="btn btn-outline-secondary btn-sm"
+              hx-post="/profile/populate"
+              hx-target="#profile-set-feedback"
+              hx-swap="innerHTML"
+              hx-vals="js:collectProfileData(this)">
         Use as my profile
       </button>
       <span id="profile-set-feedback" class="small"></span>
-    </form>
+    </div>
     <button class="btn btn-outline-primary btn-sm w-100"
             onclick="loadRatingImpact(this)">
       What will happen to my ratings if I play this player?
     </button>
   </div>
+<script>
+function collectProfileData(btn) {
+  var card = btn.closest('[data-opp-name]');
+  return {
+    player_name:       card.dataset.oppName      || '',
+    uscf_id:           card.dataset.uscfId        || '',
+    fide_id:           card.dataset.fideId        || '',
+    uscf_rating:       card.dataset.oppUscf       || '',
+    uscf_quick_rating: card.dataset.oppUscfQuick  || '',
+    uscf_blitz_rating: card.dataset.oppUscfBlitz  || '',
+    fide_rating:       card.dataset.oppFide       || '',
+    fide_rapid_rating: card.dataset.oppFideRapid  || '',
+    fide_blitz_rating: card.dataset.oppFideBlitz  || '',
+  };
+}
+</script>
 </div>

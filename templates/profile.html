@@ -19,6 +19,11 @@
     <p class="text-muted small">Set your current ratings so the "What will happen to my ratings?" tool works on the Player Lookup page.</p>
     <form method="post" action="/profile">
       <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label">Your Name (as it appears in tournaments)</label>
+          <input type="text" name="player_name" class="form-control"
+                 value="{{ profile.player_name or '' }}" placeholder="e.g. John Smith">
+        </div>
         <div class="col-sm-6">
           <label class="form-label">USCF ID</label>
           <input type="text" name="uscf_id" class="form-control"

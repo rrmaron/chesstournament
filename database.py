@@ -140,6 +140,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN uscf_blitz_rating INTEGER",
         "ALTER TABLE users ADD COLUMN fide_rapid_rating INTEGER",
         "ALTER TABLE users ADD COLUMN fide_blitz_rating INTEGER",
+        "ALTER TABLE users ADD COLUMN player_name TEXT",
     ]:
         try:
             c.execute(sql)
@@ -263,7 +264,7 @@ def get_user_profile(uid: int) -> Optional[Dict]:
     c = conn.cursor()
     c.execute(
         "SELECT id, username, role, email, phone, uscf_id, fide_id, uscf_rating, fide_rating, "
-        "uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating FROM users WHERE id=?",
+        "uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating, player_name FROM users WHERE id=?",
         (uid,)
     )
     row = c.fetchone()
@@ -271,19 +272,20 @@ def get_user_profile(uid: int) -> Optional[Dict]:
     if not row:
         return None
     cols = ["id", "username", "role", "email", "phone", "uscf_id", "fide_id", "uscf_rating", "fide_rating",
-            "uscf_quick_rating", "uscf_blitz_rating", "fide_rapid_rating", "fide_blitz_rating"]
+            "uscf_quick_rating", "uscf_blitz_rating", "fide_rapid_rating", "fide_blitz_rating", "player_name"]
     return dict(zip(cols, row))
 
 def update_user_profile(uid: int, uscf_id: Optional[str], fide_id: Optional[str],
                          uscf_rating: Optional[int], fide_rating: Optional[int],
                          uscf_quick_rating: Optional[int] = None, uscf_blitz_rating: Optional[int] = None,
-                         fide_rapid_rating: Optional[int] = None, fide_blitz_rating: Optional[int] = None):
+                         fide_rapid_rating: Optional[int] = None, fide_blitz_rating: Optional[int] = None,
+                         player_name: Optional[str] = None):
     conn = sqlite3.connect(DB_FILE)
     conn.execute(
         "UPDATE users SET uscf_id=?, fide_id=?, uscf_rating=?, fide_rating=?, "
-        "uscf_quick_rating=?, uscf_blitz_rating=?, fide_rapid_rating=?, fide_blitz_rating=? WHERE id=?",
+        "uscf_quick_rating=?, uscf_blitz_rating=?, fide_rapid_rating=?, fide_blitz_rating=?, player_name=? WHERE id=?",
         (uscf_id, fide_id, uscf_rating, fide_rating,
-         uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating, uid)
+         uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating, player_name, uid)
     )
     conn.commit()
     conn.close()

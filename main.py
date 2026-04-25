@@ -1104,7 +1104,7 @@ async def rating_impact_api(
     fide_blitz_impact = _elo_impact(my_fide_blitz, opp_fide_blitz, _fide_k(my_fide_blitz)) if my_fide_blitz and opp_fide_blitz else None
 
     has_any = bool(profile and any([my_uscf, my_uscf_quick, my_uscf_blitz, my_fide, my_fide_rapid, my_fide_blitz]))
-    my_name = profile.get("username", "You") if profile else "You"
+    my_name = (profile.get("player_name") or profile.get("username") or "You") if profile else "You"
 
     return templates.TemplateResponse(
         request=request,
@@ -1134,6 +1134,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
 
 @app.post("/profile")
 async def update_profile(
+    player_name: Optional[str] = Form(None),
     uscf_id: Optional[str] = Form(None),
     fide_id: Optional[str] = Form(None),
     uscf_rating: Optional[int] = Form(None),
@@ -1150,24 +1151,32 @@ async def update_profile(
         fide_id.strip() if fide_id else None,
         uscf_rating, fide_rating,
         uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating,
+        player_name.strip() if player_name else None,
     )
     return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 @app.post("/profile/populate", response_class=HTMLResponse)
 async def profile_populate(
+    player_name: Optional[str] = Form(None),
     uscf_id: Optional[str] = Form(None),
     fide_id: Optional[str] = Form(None),
     uscf_rating: Optional[int] = Form(None),
     fide_rating: Optional[int] = Form(None),
+    uscf_quick_rating: Optional[int] = Form(None),
+    uscf_blitz_rating: Optional[int] = Form(None),
+    fide_rapid_rating: Optional[int] = Form(None),
+    fide_blitz_rating: Optional[int] = Form(None),
     user: dict = Depends(require_login),
 ):
     update_user_profile(
         user["id"],
         uscf_id.strip() if uscf_id else None,
         fide_id.strip() if fide_id else None,
-        uscf_rating or None,
-        fide_rating or None,
+        uscf_rating or None, fide_rating or None,
+        uscf_quick_rating or None, uscf_blitz_rating or None,
+        fide_rapid_rating or None, fide_blitz_rating or None,
+        player_name.strip() if player_name else None,
     )
     return HTMLResponse('<span class="text-success fw-semibold">&#10003; Profile updated</span>')
 
