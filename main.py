@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -920,7 +921,7 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     except Exception:
         pass
 
-    # 2. Live USCF ratings (regular, quick, blitz)
+    # 2. Live USCF ratings — sections API for Regular live; member API for Q/B published
     live_rating = live_quick = live_blitz = 0
     try:
         headers = {
@@ -929,12 +930,13 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
             "Origin": "https://ratings.uschess.org",
         }
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            r = await client.get(
-                f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections",
-                headers=headers,
+            sections_r, member_r = await asyncio.gather(
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers),
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=headers),
             )
-        if r.status_code == 200:
-            for section in r.json().get("items", []):
+        # Live regular from sections (most up-to-date post-game rating)
+        if sections_r.status_code == 200:
+            for section in sections_r.json().get("items", []):
                 for record in section.get("ratingRecords", []):
                     src = record.get("ratingSource")
                     val = record.get("postRating", 0)
@@ -944,6 +946,15 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
                         live_quick = val
                     elif src == "B" and not live_blitz:
                         live_blitz = val
+        # Published Q/B from member endpoint as fallback
+        if member_r.status_code == 200:
+            for entry in member_r.json().get("ratings", []):
+                rs = entry.get("ratingSystem")
+                val = entry.get("rating", 0)
+                if rs == "Q" and not live_quick and val:
+                    live_quick = val
+                elif rs == "B" and not live_blitz and val:
+                    live_blitz = val
     except Exception:
         pass
 
