@@ -1104,12 +1104,13 @@ async def rating_impact_api(
     fide_blitz_impact = _elo_impact(my_fide_blitz, opp_fide_blitz, _fide_k(my_fide_blitz)) if my_fide_blitz and opp_fide_blitz else None
 
     has_any = bool(profile and any([my_uscf, my_uscf_quick, my_uscf_blitz, my_fide, my_fide_rapid, my_fide_blitz]))
+    my_name = profile.get("username", "You") if profile else "You"
 
     return templates.TemplateResponse(
         request=request,
         name="fragments/rating_impact.html",
         context={
-            "opp_name": opp_name,
+            "my_name": my_name, "opp_name": opp_name,
             "my_uscf": my_uscf, "my_uscf_quick": my_uscf_quick, "my_uscf_blitz": my_uscf_blitz,
             "my_fide": my_fide, "my_fide_rapid": my_fide_rapid, "my_fide_blitz": my_fide_blitz,
             "opp_uscf": opp_uscf, "opp_uscf_quick": opp_uscf_quick, "opp_uscf_blitz": opp_uscf_blitz,

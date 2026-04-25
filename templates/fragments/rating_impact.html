@@ -1,6 +1,6 @@
 <div class="card shadow-sm">
   <div class="card-header bg-success text-white fw-semibold">
-    Rating Impact{% if opp_name %}: You vs {{ opp_name }}{% endif %}
+    Rating Impact{% if opp_name %}: {{ my_name }} vs {{ opp_name }}{% endif %}
   </div>
   <div class="card-body">
     {% if not logged_in %}
@@ -23,12 +23,12 @@
           <thead class="table-light">
             <tr>
               <th>Outcome</th>
-              {% if uscf_impact %}<th>USCF Regular<br><small class="text-muted fw-normal">You: {{ my_uscf }} / Opp: {{ opp_uscf }}</small></th>{% endif %}
-              {% if uscf_quick_impact %}<th>USCF Quick<br><small class="text-muted fw-normal">You: {{ my_uscf_quick }} / Opp: {{ opp_uscf_quick }}</small></th>{% endif %}
-              {% if uscf_blitz_impact %}<th>USCF Blitz<br><small class="text-muted fw-normal">You: {{ my_uscf_blitz }} / Opp: {{ opp_uscf_blitz }}</small></th>{% endif %}
-              {% if fide_impact %}<th>FIDE Standard<br><small class="text-muted fw-normal">You: {{ my_fide }} / Opp: {{ opp_fide }}</small></th>{% endif %}
-              {% if fide_rapid_impact %}<th>FIDE Rapid<br><small class="text-muted fw-normal">You: {{ my_fide_rapid }} / Opp: {{ opp_fide_rapid }}</small></th>{% endif %}
-              {% if fide_blitz_impact %}<th>FIDE Blitz<br><small class="text-muted fw-normal">You: {{ my_fide_blitz }} / Opp: {{ opp_fide_blitz }}</small></th>{% endif %}
+              {% if uscf_impact %}<th>USCF Regular<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf }} / {{ opp_name }}: {{ opp_uscf }}</small></th>{% endif %}
+              {% if uscf_quick_impact %}<th>USCF Quick<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_quick }} / {{ opp_name }}: {{ opp_uscf_quick }}</small></th>{% endif %}
+              {% if uscf_blitz_impact %}<th>USCF Blitz<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_blitz }} / {{ opp_name }}: {{ opp_uscf_blitz }}</small></th>{% endif %}
+              {% if fide_impact %}<th>FIDE Standard<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide }} / {{ opp_name }}: {{ opp_fide }}</small></th>{% endif %}
+              {% if fide_rapid_impact %}<th>FIDE Rapid<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide_rapid }} / {{ opp_name }}: {{ opp_fide_rapid }}</small></th>{% endif %}
+              {% if fide_blitz_impact %}<th>FIDE Blitz<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide_blitz }} / {{ opp_name }}: {{ opp_fide_blitz }}</small></th>{% endif %}
             </tr>
           </thead>
           <tbody>
