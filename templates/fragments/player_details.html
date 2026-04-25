@@ -1,11 +1,11 @@
 <div class="card shadow-sm"
      data-opp-name="{{ name }}"
      data-opp-uscf="{{ live_rating or rating or '' }}"
-     data-opp-uscf-quick="{{ live_quick or '' }}"
-     data-opp-uscf-blitz="{{ live_blitz or '' }}"
+     data-opp-uscf-quick=""
+     data-opp-uscf-blitz=""
      data-opp-fide="{{ fide_rating or '' }}"
-     data-opp-fide-rapid="{{ fide_rapid or '' }}"
-     data-opp-fide-blitz="{{ fide_blitz or '' }}">
+     data-opp-fide-rapid=""
+     data-opp-fide-blitz="">
   <div class="card-header bg-primary text-white fw-semibold fs-5">{{ name }}</div>
   <div class="card-body p-0">
     <table class="table table-striped mb-0">
@@ -23,24 +23,8 @@
           <td>{{ rating if rating else '—' }}</td>
         </tr>
         <tr>
-          <th class="ps-3">USCF Quick</th>
-          <td>{{ monthly_quick if monthly_quick else '<span class="text-muted">—</span>' | safe }}</td>
-        </tr>
-        <tr>
-          <th class="ps-3">USCF Blitz</th>
-          <td>{{ monthly_blitz if monthly_blitz else '<span class="text-muted">—</span>' | safe }}</td>
-        </tr>
-        <tr>
           <th class="ps-3">Live USCF Regular</th>
           <td>{{ live_rating if live_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
-        </tr>
-        <tr>
-          <th class="ps-3">Live USCF Quick</th>
-          <td>{{ live_quick if live_quick else '<span class="text-muted">—</span>' | safe }}</td>
-        </tr>
-        <tr>
-          <th class="ps-3">Live USCF Blitz</th>
-          <td>{{ live_blitz if live_blitz else '<span class="text-muted">—</span>' | safe }}</td>
         </tr>
         <tr>
           <th class="ps-3">FIDE ID</th>
@@ -57,19 +41,23 @@
           <td>{{ fide_rating if fide_rating else '<span class="text-muted">' ~ ('Not rated' if fide_id else 'No FIDE ID') ~ '</span>' | safe }}</td>
         </tr>
         <tr>
-          <th class="ps-3">FIDE Rapid</th>
-          <td>{{ fide_rapid if fide_rapid else '<span class="text-muted">—</span>' | safe }}</td>
-        </tr>
-        <tr>
-          <th class="ps-3">FIDE Blitz</th>
-          <td>{{ fide_blitz if fide_blitz else '<span class="text-muted">—</span>' | safe }}</td>
-        </tr>
-        <tr>
           <th class="ps-3">USCF Expiry</th>
           <td>{{ expiry if expiry else '—' }}</td>
         </tr>
       </tbody>
     </table>
+    <div id="qb-{{ uscf_id }}">
+      <div class="px-3 py-2 border-top">
+        <button class="btn btn-sm btn-outline-secondary"
+                hx-get="/api/player-quick-blitz?uscf_id={{ uscf_id }}&fide_id={{ fide_id or '' }}"
+                hx-target="#qb-{{ uscf_id }}"
+                hx-swap="outerHTML"
+                hx-indicator="#qb-spin-{{ uscf_id }}">
+          Load Quick &amp; Blitz ratings
+          <span id="qb-spin-{{ uscf_id }}" class="htmx-indicator spinner-border spinner-border-sm ms-1" role="status"></span>
+        </button>
+      </div>
+    </div>
   </div>
   <div class="card-footer bg-white d-flex flex-column gap-2">
     <form hx-post="/profile/populate"

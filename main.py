@@ -898,31 +898,28 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     if not uscf_id:
         return HTMLResponse("")
 
-    # 1. Local DB for name/regular rating/fide_id/expiry; thin3.php for monthly quick+blitz
+    # 1. Local DB for name/regular rating/fide_id/expiry
     name, rating, fide_id, expiry = "", 0, "", ""
-    monthly_quick = monthly_blitz = 0
     local = lookup_uscf_member(uscf_id)
     if local:
         name    = _format_uscf_name(local["name"])
         rating  = local.get("rating") or 0
         fide_id = local.get("fide_id") or ""
         expiry  = local.get("expiry") or ""
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
-        if r.status_code == 200 and "memname" in r.text:
-            data = _parse_uscf_thin3(r.text)
-            if not name:
+    else:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+            if r.status_code == 200 and "memname" in r.text:
+                data = _parse_uscf_thin3(r.text)
                 name   = data["name"]
                 rating = data["rating"]
-            monthly_quick = data["quick"]
-            monthly_blitz = data["blitz"]
-    except Exception:
-        pass
+        except Exception:
+            pass
 
-    # 2. Live USCF ratings — sections API for Regular live; member API for Q/B published
-    live_rating = live_quick = live_blitz = 0
+    # 2. Live USCF Regular from sections API
+    live_rating = 0
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
@@ -930,49 +927,32 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
             "Origin": "https://ratings.uschess.org",
         }
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            sections_r, member_r = await asyncio.gather(
-                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers),
-                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=headers),
+            r = await client.get(
+                f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections",
+                headers=headers,
             )
-        # Live regular from sections (most up-to-date post-game rating)
-        if sections_r.status_code == 200:
-            for section in sections_r.json().get("items", []):
+        if r.status_code == 200:
+            for section in r.json().get("items", []):
                 for record in section.get("ratingRecords", []):
-                    src = record.get("ratingSource")
-                    val = record.get("postRating", 0)
-                    if src == "R" and not live_rating:
-                        live_rating = val
-                    elif src == "Q" and not live_quick:
-                        live_quick = val
-                    elif src == "B" and not live_blitz:
-                        live_blitz = val
-        # Published Q/B from member endpoint as fallback
-        if member_r.status_code == 200:
-            for entry in member_r.json().get("ratings", []):
-                rs = entry.get("ratingSystem")
-                val = entry.get("rating", 0)
-                if rs == "Q" and not live_quick and val:
-                    live_quick = val
-                elif rs == "B" and not live_blitz and val:
-                    live_blitz = val
+                    if record.get("ratingSource") == "R":
+                        live_rating = record.get("postRating", 0)
+                        break
+                if live_rating:
+                    break
     except Exception:
         pass
 
-    # 3. FIDE ratings (standard, rapid, blitz)
-    fide_rating = fide_rapid = fide_blitz = 0
+    # 3. FIDE Standard rating only
+    fide_rating = 0
     if fide_id:
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
             async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
                 r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
             if r.status_code == 200:
-                ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
-                if ms:
-                    fide_rating = int(ms[0])
-                if len(ms) > 1:
-                    fide_rapid = int(ms[1])
-                if len(ms) > 2:
-                    fide_blitz = int(ms[2])
+                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+                if m:
+                    fide_rating = int(m.group(1))
         except Exception:
             pass
 
@@ -981,10 +961,94 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
 
     return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
         "name": name, "uscf_id": uscf_id, "rating": rating,
-        "monthly_quick": monthly_quick, "monthly_blitz": monthly_blitz,
         "fide_id": fide_id, "expiry": expiry,
-        "live_rating": live_rating, "live_quick": live_quick, "live_blitz": live_blitz,
-        "fide_rating": fide_rating, "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,
+        "live_rating": live_rating, "fide_rating": fide_rating,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Quick / Blitz on-demand loader
+# ---------------------------------------------------------------------------
+
+@app.get("/api/player-quick-blitz", response_class=HTMLResponse)
+async def player_quick_blitz(
+    request: Request,
+    uscf_id: str = "",
+    fide_id: str = "",
+    _user: dict = Depends(require_login),
+):
+    uscf_id = uscf_id.strip()
+    fide_id = fide_id.strip()
+
+    # USCF monthly quick/blitz from thin3.php
+    monthly_quick = monthly_blitz = 0
+    if uscf_id:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+            if r.status_code == 200 and "memname" in r.text:
+                data = _parse_uscf_thin3(r.text)
+                monthly_quick = data["quick"]
+                monthly_blitz = data["blitz"]
+        except Exception:
+            pass
+
+    # USCF live quick/blitz: sections then member API fallback
+    live_quick = live_blitz = 0
+    if uscf_id:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+                "Accept": "application/json",
+                "Origin": "https://ratings.uschess.org",
+            }
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                sections_r, member_r = await asyncio.gather(
+                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers),
+                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=headers),
+                )
+            if sections_r.status_code == 200:
+                for section in sections_r.json().get("items", []):
+                    for record in section.get("ratingRecords", []):
+                        src = record.get("ratingSource")
+                        val = record.get("postRating", 0)
+                        if src == "Q" and not live_quick:
+                            live_quick = val
+                        elif src == "B" and not live_blitz:
+                            live_blitz = val
+            if member_r.status_code == 200:
+                for entry in member_r.json().get("ratings", []):
+                    rs = entry.get("ratingSystem")
+                    val = entry.get("rating", 0)
+                    if rs == "Q" and not live_quick and val:
+                        live_quick = val
+                    elif rs == "B" and not live_blitz and val:
+                        live_blitz = val
+        except Exception:
+            pass
+
+    # FIDE rapid/blitz
+    fide_rapid = fide_blitz = 0
+    if fide_id:
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
+            if r.status_code == 200:
+                ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+                if len(ms) > 1:
+                    fide_rapid = int(ms[1])
+                if len(ms) > 2:
+                    fide_blitz = int(ms[2])
+        except Exception:
+            pass
+
+    return templates.TemplateResponse(request=request, name="fragments/player_quick_blitz.html", context={
+        "uscf_id": uscf_id, "fide_id": fide_id,
+        "monthly_quick": monthly_quick, "monthly_blitz": monthly_blitz,
+        "live_quick": live_quick, "live_blitz": live_blitz,
+        "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,
     })
 
 

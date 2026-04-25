@@ -1,0 +1,44 @@
+<div id="qb-{{ uscf_id }}">
+  <table class="table table-striped mb-0">
+    <tbody>
+      <tr>
+        <th class="ps-3" style="width:40%">USCF Quick (monthly)</th>
+        <td>{{ monthly_quick if monthly_quick else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
+        <th class="ps-3">USCF Quick (live)</th>
+        <td>{{ live_quick if live_quick else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
+        <th class="ps-3">USCF Blitz (monthly)</th>
+        <td>{{ monthly_blitz if monthly_blitz else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
+        <th class="ps-3">USCF Blitz (live)</th>
+        <td>{{ live_blitz if live_blitz else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      {% if fide_id %}
+      <tr>
+        <th class="ps-3">FIDE Rapid</th>
+        <td>{{ fide_rapid if fide_rapid else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
+        <th class="ps-3">FIDE Blitz</th>
+        <td>{{ fide_blitz if fide_blitz else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+  <script>
+    (function() {
+      var div = document.getElementById('qb-{{ uscf_id }}');
+      if (!div) return;
+      var card = div.closest('[data-opp-name]');
+      if (!card) return;
+      {% if live_quick or monthly_quick %}card.dataset.oppUscfQuick = '{{ live_quick or monthly_quick }}';{% endif %}
+      {% if live_blitz or monthly_blitz %}card.dataset.oppUscfBlitz = '{{ live_blitz or monthly_blitz }}';{% endif %}
+      {% if fide_rapid %}card.dataset.oppFideRapid = '{{ fide_rapid }}';{% endif %}
+      {% if fide_blitz %}card.dataset.oppFideBlitz = '{{ fide_blitz }}';{% endif %}
+    })();
+  </script>
+</div>
