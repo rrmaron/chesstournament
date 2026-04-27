@@ -16,7 +16,13 @@
       {% set u = request.session.get("user") %}
       {% if u %}
         <a class="nav-link text-light" href="/player-lookup">Player Lookup</a>
-        <a class="nav-link text-light" href="/fide-calculator">FIDE Calculator</a>
+        <div class="dropdown">
+          <a class="nav-link text-light dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">FIDE</a>
+          <ul class="dropdown-menu dropdown-menu-dark">
+            <li><a class="dropdown-item" href="/fide-calculator">FIDE Calculator</a></li>
+            <li><a class="dropdown-item" href="https://docs.google.com/forms/d/e/1FAIpQLSc60v_VmaEiYBG0uMWJJ46mMOVnPEzpw1b2kG5ZMcw_SOvQvg/viewform" target="_blank" rel="noopener">Get USA FIDE Rating</a></li>
+          </ul>
+        </div>
         <a class="nav-link text-light" href="/profile">My Profile</a>
         {% if u.role in ("td", "admin") %}
           <a class="nav-link text-light" href="/tournaments">Tournaments</a>
