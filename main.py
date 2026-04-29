@@ -326,28 +326,15 @@ async def public_player_search(name: str = ""):
     q = name.strip()
     if len(q) < 2:
         return []
-    local = search_uscf_members(q)
-    if not local:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            parts = q.split()
-            data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
-            rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
-            for uid, raw_name, info in rows[:12]:
-                rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
-                local.append({
-                    "uscf_id": uid,
-                    "name": raw_name.strip(),
-                    "rating": int(rating_m.group(1)) if rating_m else 0,
-                    "fide_id": None,
-                })
-        except Exception:
-            pass
+    local, live = await asyncio.gather(
+        asyncio.get_event_loop().run_in_executor(None, search_uscf_members, q),
+        _uscf_live_search(q),
+    )
+    local_ids = {p["uscf_id"] for p in local}
+    merged = local + [p for p in live if p["uscf_id"] not in local_ids]
     return [
         {"uscf_id": p["uscf_id"], "name": _format_uscf_name(p["name"]), "rating": p.get("rating") or 0}
-        for p in local
+        for p in merged[:12]
     ]
 
 
@@ -459,6 +446,29 @@ async def tournament_detail(request: Request, tid: int, imported: Optional[int] 
         "imported": imported,
         "current_user": user,
     })
+
+async def _uscf_live_search(q: str) -> list:
+    """Search USCF thin2.php for players not yet in the local DB (e.g. new registrations)."""
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+        parts = q.split()
+        data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]) if len(parts) > 1 else "", "mode": "Search"}
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+        rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
+        results = []
+        for uid, raw_name, info in rows[:12]:
+            rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
+            results.append({
+                "uscf_id": uid,
+                "name": raw_name.strip(),
+                "rating": int(rating_m.group(1)) if rating_m else 0,
+                "fide_id": None,
+            })
+        return results
+    except Exception:
+        return []
+
 
 def _parse_uscf_thin3(body: str) -> dict:
     """Parse name and ratings from USCF thin3.php HTML response."""
@@ -852,26 +862,12 @@ async def player_lookup_search(name: str = "", _user: dict = Depends(require_log
     if len(q) < 2:
         return HTMLResponse(empty)
 
-    local = search_uscf_members(q)
-    if not local:
-        # Fall back to USCF thin2.php
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            parts = q.split()
-            data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
-            rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
-            for uid, raw_name, info in rows[:12]:
-                rating_m = re.search(r'(\d{3,4})\*?(?:\s|$)', info)
-                local.append({
-                    "uscf_id": uid,
-                    "name": raw_name.strip(),
-                    "rating": int(rating_m.group(1)) if rating_m else 0,
-                    "fide_id": None,
-                })
-        except Exception:
-            pass
+    local, live = await asyncio.gather(
+        asyncio.get_event_loop().run_in_executor(None, search_uscf_members, q),
+        _uscf_live_search(q),
+    )
+    local_ids = {p["uscf_id"] for p in local}
+    local = local + [p for p in live if p["uscf_id"] not in local_ids]
 
     if not local:
         return HTMLResponse('<div id="lookup-suggestions"><p class="text-muted small mt-1">No results found.</p></div>')
