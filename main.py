@@ -1157,21 +1157,24 @@ async def profile_populate(
     player_name: Optional[str] = Form(None),
     uscf_id: Optional[str] = Form(None),
     fide_id: Optional[str] = Form(None),
-    uscf_rating: Optional[int] = Form(None),
-    fide_rating: Optional[int] = Form(None),
-    uscf_quick_rating: Optional[int] = Form(None),
-    uscf_blitz_rating: Optional[int] = Form(None),
-    fide_rapid_rating: Optional[int] = Form(None),
-    fide_blitz_rating: Optional[int] = Form(None),
+    uscf_rating: Optional[str] = Form(None),
+    fide_rating: Optional[str] = Form(None),
+    uscf_quick_rating: Optional[str] = Form(None),
+    uscf_blitz_rating: Optional[str] = Form(None),
+    fide_rapid_rating: Optional[str] = Form(None),
+    fide_blitz_rating: Optional[str] = Form(None),
     user: dict = Depends(require_login),
 ):
+    def _int(v):
+        try: return int(v) if v and v.strip() else None
+        except (ValueError, TypeError): return None
     update_user_profile(
         user["id"],
         uscf_id.strip() if uscf_id else None,
         fide_id.strip() if fide_id else None,
-        uscf_rating or None, fide_rating or None,
-        uscf_quick_rating or None, uscf_blitz_rating or None,
-        fide_rapid_rating or None, fide_blitz_rating or None,
+        _int(uscf_rating), _int(fide_rating),
+        _int(uscf_quick_rating), _int(uscf_blitz_rating),
+        _int(fide_rapid_rating), _int(fide_blitz_rating),
         player_name.strip() if player_name else None,
     )
     return HTMLResponse('<span class="text-success fw-semibold">&#10003; Profile updated</span>')
