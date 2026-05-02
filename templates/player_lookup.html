@@ -81,9 +81,10 @@ document.addEventListener("click", function(e) {
   }
 });
 
-function collectProfileData(btn) {
+async function saveAsMyProfile(btn) {
   var card = btn.closest('[data-opp-name]');
-  return {
+  var feedback = document.getElementById('profile-set-feedback');
+  var body = new URLSearchParams({
     player_name:       card.dataset.oppName      || '',
     uscf_id:           card.dataset.uscfId        || '',
     fide_id:           card.dataset.fideId        || '',
@@ -93,7 +94,16 @@ function collectProfileData(btn) {
     fide_rating:       card.dataset.oppFide       || '',
     fide_rapid_rating: card.dataset.oppFideRapid  || '',
     fide_blitz_rating: card.dataset.oppFideBlitz  || '',
-  };
+  });
+  btn.disabled = true;
+  try {
+    var resp = await fetch('/profile/populate', {method: 'POST', body: body});
+    feedback.innerHTML = await resp.text();
+  } catch(e) {
+    feedback.innerHTML = '<span class="text-danger">Error saving profile</span>';
+  } finally {
+    btn.disabled = false;
+  }
 }
 </script>
 {% endblock %}

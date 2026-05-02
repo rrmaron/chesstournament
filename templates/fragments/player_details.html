@@ -63,11 +63,7 @@
   </div>
   <div class="card-footer bg-white d-flex flex-column gap-2">
     <div class="d-flex align-items-center gap-2">
-      <button class="btn btn-outline-secondary btn-sm"
-              hx-post="/profile/populate"
-              hx-target="#profile-set-feedback"
-              hx-swap="innerHTML"
-              hx-vals="js:collectProfileData(this)">
+      <button class="btn btn-outline-secondary btn-sm" onclick="saveAsMyProfile(this)">
         Use as my profile
       </button>
       <span id="profile-set-feedback" class="small"></span>
