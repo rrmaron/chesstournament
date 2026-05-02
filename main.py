@@ -24,6 +24,7 @@ from database import (
     verify_password, create_user, create_pending_user, list_users,
     delete_user, update_user_password,
     create_verification_token, check_and_consume_token, activate_user,
+    create_password_reset_token, check_and_consume_reset_token,
     get_setting, set_setting,
     update_tournament_settings, get_player,
     register_player_public, set_player_status,
@@ -32,7 +33,7 @@ from database import (
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
-from notify import send_verification_email, send_verification_sms
+from notify import send_verification_email, send_verification_sms, send_password_reset_email
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
@@ -250,6 +251,63 @@ async def verify_resend(request: Request):
         except Exception:
             pass
     return RedirectResponse("/verify", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Forgot / Reset password
+# ---------------------------------------------------------------------------
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+async def forgot_password_page(request: Request):
+    return templates.TemplateResponse(request=request, name="forgot_password.html", context={})
+
+@app.post("/forgot-password", response_class=HTMLResponse)
+async def forgot_password_submit(request: Request, email: str = Form(...)):
+    email = email.strip().lower()
+    user = get_user_by_email(email)
+    # Always show the same message to prevent email enumeration
+    msg = "If that email is registered, a reset link has been sent. Check your inbox."
+    if user and user.get("status") == "active":
+        try:
+            token = create_password_reset_token(user["id"])
+            base = str(request.base_url).rstrip("/")
+            reset_url = f"{base}/reset-password?token={token}"
+            await send_password_reset_email(email, reset_url)
+        except Exception:
+            pass
+    return templates.TemplateResponse(request=request, name="forgot_password.html",
+                                      context={"sent": True, "message": msg})
+
+@app.get("/reset-password", response_class=HTMLResponse)
+async def reset_password_page(request: Request, token: str = ""):
+    if not token:
+        return RedirectResponse("/forgot-password", status_code=303)
+    return templates.TemplateResponse(request=request, name="reset_password.html",
+                                      context={"token": token})
+
+@app.post("/reset-password", response_class=HTMLResponse)
+async def reset_password_submit(
+    request: Request,
+    token: str = Form(...),
+    password: str = Form(...),
+    confirm: str = Form(...),
+):
+    error = None
+    if len(password) < 6:
+        error = "Password must be at least 6 characters."
+    elif password != confirm:
+        error = "Passwords do not match."
+    if error:
+        return templates.TemplateResponse(request=request, name="reset_password.html",
+                                          context={"token": token, "error": error})
+    uid = check_and_consume_reset_token(token)
+    if not uid:
+        return templates.TemplateResponse(request=request, name="reset_password.html",
+                                          context={"token": token,
+                                                   "error": "This reset link has expired or already been used. Please request a new one."})
+    update_user_password(uid, password)
+    return templates.TemplateResponse(request=request, name="reset_password.html",
+                                      context={"token": "", "success": True})
 
 
 # ---------------------------------------------------------------------------

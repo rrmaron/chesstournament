@@ -114,6 +114,13 @@ def init_db():
         expires_at TEXT NOT NULL,
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )''')
 
     # Migrations for existing DBs
     for sql in [
@@ -258,6 +265,35 @@ def update_user_password(uid: int, new_password: str):
     conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(new_password), uid))
     conn.commit()
     conn.close()
+
+def create_password_reset_token(user_id: int) -> str:
+    from datetime import timedelta
+    token = secrets.token_urlsafe(32)
+    expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM password_reset_tokens WHERE user_id=?", (user_id,))
+    conn.execute("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",
+                 (user_id, token, expires))
+    conn.commit()
+    conn.close()
+    return token
+
+def check_and_consume_reset_token(token: str) -> Optional[int]:
+    """Returns user_id if token is valid, None otherwise. Always deletes the token."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT user_id, expires_at FROM password_reset_tokens WHERE token=?", (token,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    user_id, expires_at = row
+    conn.execute("DELETE FROM password_reset_tokens WHERE token=?", (token,))
+    conn.commit()
+    conn.close()
+    if datetime.utcnow().isoformat() > expires_at:
+        return None
+    return user_id
 
 def get_user_profile(uid: int) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)

@@ -34,6 +34,36 @@ async def send_verification_email(to: str, code: str):
         raise RuntimeError("Email could not be sent. Please try again.")
 
 
+async def send_password_reset_email(to: str, reset_url: str):
+    if not RESEND_API_KEY:
+        logging.warning(f"[DEV] Password reset link for {to}: {reset_url}  (set RESEND_API_KEY to send real emails)")
+        return
+    html = f"""
+    <div style="font-family:sans-serif;max-width:440px">
+      <h2>♟️ MyChessRating</h2>
+      <p>We received a request to reset your password.</p>
+      <p style="margin:24px 0">
+        <a href="{reset_url}"
+           style="background:#003087;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+          Reset my password
+        </a>
+      </p>
+      <p style="color:#888;font-size:0.9em">This link expires in 1 hour. If you didn't request this, ignore it.</p>
+      <p style="color:#aaa;font-size:0.85em;word-break:break-all">{reset_url}</p>
+    </div>
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={"from": RESEND_FROM, "to": [to],
+                  "subject": "Reset your MyChessRating password", "html": html},
+        )
+    if r.status_code not in (200, 201):
+        logging.error(f"Resend error {r.status_code}: {r.text}")
+        raise RuntimeError("Email could not be sent. Please try again.")
+
+
 async def send_verification_sms(to: str, code: str):
     if not TWILIO_SID:
         logging.warning(f"[DEV] SMS OTP for {to}: {code}  (set TWILIO_* vars to send real SMS)")
