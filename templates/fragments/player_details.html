@@ -77,20 +77,4 @@
       What will happen to my ratings if I play this player?
     </button>
   </div>
-<script>
-function collectProfileData(btn) {
-  var card = btn.closest('[data-opp-name]');
-  return {
-    player_name:       card.dataset.oppName      || '',
-    uscf_id:           card.dataset.uscfId        || '',
-    fide_id:           card.dataset.fideId        || '',
-    uscf_rating:       card.dataset.oppUscf       || '',
-    uscf_quick_rating: card.dataset.oppUscfQuick  || '',
-    uscf_blitz_rating: card.dataset.oppUscfBlitz  || '',
-    fide_rating:       card.dataset.oppFide       || '',
-    fide_rapid_rating: card.dataset.oppFideRapid  || '',
-    fide_blitz_rating: card.dataset.oppFideBlitz  || '',
-  };
-}
-</script>
 </div>
