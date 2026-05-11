@@ -13,6 +13,13 @@
 </div>
 {% endif %}
 
+{% if uscf_refreshed %}
+<div class="alert alert-info alert-dismissible fade show py-2" role="alert">
+  <small>USCF ratings refreshed from live data.</small>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <div class="card mb-3">
   <div class="card-header fw-semibold">Account</div>
   <div class="card-body">

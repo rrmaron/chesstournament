@@ -1273,9 +1273,60 @@ async def rating_impact_api(
 @app.get("/profile", response_class=HTMLResponse)
 async def profile_page(request: Request, saved: Optional[str] = None, user: dict = Depends(require_login)):
     profile = get_user_profile(user["id"])
+    uscf_refreshed = False
+    uscf_id = (profile.get("uscf_id") or "").strip()
+    if uscf_id:
+        try:
+            api_headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+                "Accept": "application/json",
+                "Origin": "https://ratings.uschess.org",
+            }
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+                member_r, sections_r = await asyncio.gather(
+                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers),
+                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers),
+                )
+            live_regular = monthly_quick = monthly_blitz = live_quick = live_blitz = 0
+            if member_r.status_code == 200:
+                for entry in member_r.json().get("ratings", []):
+                    rs = entry.get("ratingSystem")
+                    val = entry.get("rating", 0)
+                    if rs == "Q" and val:
+                        monthly_quick = val
+                    elif rs == "B" and val:
+                        monthly_blitz = val
+            if sections_r.status_code == 200:
+                for section in sections_r.json().get("items", []):
+                    for record in section.get("ratingRecords", []):
+                        src = record.get("ratingSource")
+                        val = record.get("postRating", 0)
+                        if src == "R" and not live_regular:
+                            live_regular = val
+                        elif src == "Q" and not live_quick:
+                            live_quick = val
+                        elif src == "B" and not live_blitz:
+                            live_blitz = val
+            new_uscf = live_regular or profile.get("uscf_rating")
+            new_quick = (live_quick or monthly_quick) or profile.get("uscf_quick_rating")
+            new_blitz = (live_blitz or monthly_blitz) or profile.get("uscf_blitz_rating")
+            if any([new_uscf, new_quick, new_blitz]):
+                update_user_profile(
+                    user["id"],
+                    profile.get("uscf_id"), profile.get("fide_id"),
+                    new_uscf, profile.get("fide_rating"),
+                    new_quick, new_blitz,
+                    profile.get("fide_rapid_rating"), profile.get("fide_blitz_rating"),
+                    profile.get("player_name"),
+                )
+                profile = get_user_profile(user["id"])
+                uscf_refreshed = True
+        except Exception:
+            pass
     return templates.TemplateResponse(request=request, name="profile.html", context={
         "profile": profile,
         "saved": saved == "1",
+        "uscf_refreshed": uscf_refreshed,
     })
 
 
