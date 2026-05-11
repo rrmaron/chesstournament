@@ -31,6 +31,7 @@ from database import (
     update_player_payment, update_player_bye_request,
     get_user_profile, update_user_profile,
     save_user_tournament, list_user_tournaments, update_user_tournament, delete_user_tournament,
+    update_user_contact,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -1276,6 +1277,18 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
         "profile": profile,
         "saved": saved == "1",
     })
+
+
+@app.post("/profile/contact")
+async def update_contact(
+    email: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    user: dict = Depends(require_login),
+):
+    update_user_contact(user["id"],
+                        email.strip() if email else None,
+                        phone.strip() if phone else None)
+    return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 @app.post("/profile")

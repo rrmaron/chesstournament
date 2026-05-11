@@ -375,6 +375,13 @@ def list_user_tournaments(user_id: int) -> List[Dict]:
     cols = ["id", "name", "start_rating", "end_rating", "games_json", "created_at"]
     return [dict(zip(cols, r)) for r in rows]
 
+def update_user_contact(uid: int, email: Optional[str], phone: Optional[str]):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET email=?, phone=? WHERE id=?",
+                 (email or None, phone or None, uid))
+    conn.commit()
+    conn.close()
+
 def update_user_tournament(tournament_id: int, user_id: int, name: str,
                             start_rating: Optional[int], end_rating: Optional[int],
                             games_json: str) -> bool:

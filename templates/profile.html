@@ -16,12 +16,33 @@
 <div class="card mb-3">
   <div class="card-header fw-semibold">Account</div>
   <div class="card-body">
-    <p class="mb-1 small"><span class="text-muted">Email:</span>
-      {% if profile.email %}{{ profile.email }}{% else %}<span class="text-muted">—</span>{% endif %}
-    </p>
-    <p class="mb-0 small"><span class="text-muted">Phone:</span>
-      {% if profile.phone %}{{ profile.phone }}{% else %}<span class="text-muted">—</span>{% endif %}
-    </p>
+    {% if profile.email %}
+      <p class="mb-1 small"><span class="text-muted">Email:</span> {{ profile.email }}</p>
+    {% endif %}
+    {% if profile.phone %}
+      <p class="mb-1 small"><span class="text-muted">Phone:</span> {{ profile.phone }}</p>
+    {% endif %}
+    {% if not profile.email or not profile.phone %}
+      <form method="post" action="/profile/contact" class="mt-2">
+        {% if not profile.email %}
+          <div class="mb-2">
+            <label class="form-label small mb-1">Add email address</label>
+            <input type="email" name="email" class="form-control form-control-sm" placeholder="e.g. you@example.com">
+          </div>
+        {% else %}
+          <input type="hidden" name="email" value="{{ profile.email }}">
+        {% endif %}
+        {% if not profile.phone %}
+          <div class="mb-2">
+            <label class="form-label small mb-1">Add phone number</label>
+            <input type="tel" name="phone" class="form-control form-control-sm" placeholder="e.g. +14155551234">
+          </div>
+        {% else %}
+          <input type="hidden" name="phone" value="{{ profile.phone }}">
+        {% endif %}
+        <button type="submit" class="btn btn-sm btn-primary">Save</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 
