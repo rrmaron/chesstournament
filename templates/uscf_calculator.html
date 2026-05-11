@@ -99,8 +99,9 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
 
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
-let tournaments  = [];
-let searchTimers = {};
+let tournaments      = [];
+let searchTimers     = {};
+let _myIsEstablished = null; // set by USCF lookup; null = unknown
 
 // ── USCF Live Lookup ───────────────────────────────────────────────────────────
 async function lookupMyUSCF() {
@@ -121,15 +122,14 @@ async function lookupMyUSCF() {
     // Use live rating if available, fall back to monthly
     const displayRating = data.live_rating || data.rating || '';
     document.getElementById('start-rating').value = displayRating;
-    document.getElementById('prior-games').value  = data.games !== null ? data.games : '';
+    // For provisional players the API returns gamesPlayed; established players don't get it
+    document.getElementById('prior-games').value = data.games !== null ? data.games : '';
 
     const isProvisional = data.provisional;
+    _myIsEstablished = !isProvisional;
     pb.textContent   = isProvisional ? 'Provisional' : 'Established';
     pb.className     = 'input-group-text small ' + (isProvisional ? 'text-warning bg-warning-subtle' : 'text-success bg-success-subtle');
     pb.style.display = '';
-    if (!isProvisional) {
-      document.getElementById('prior-games').value = '26'; // established = 26+ games
-    }
 
     const monthlyNote = (data.rating && data.live_rating && data.live_rating !== data.rating)
       ? ` (monthly: ${data.rating}, live: ${data.live_rating})` : '';
@@ -187,9 +187,15 @@ function calcTournament(myRating, priorGames, games) {
 }
 
 // ── Render ────────────────────────────────────────────────────────────────────
+function effectivePriorGames() {
+  const raw = parseInt(document.getElementById('prior-games').value);
+  // blank field + established player → Infinity so priorGames<26 stays false
+  return isNaN(raw) ? (_myIsEstablished === true ? Infinity : 0) : raw;
+}
+
 function renderAll() {
   const startRating = parseInt(document.getElementById('start-rating').value) || null;
-  const priorGames  = parseInt(document.getElementById('prior-games').value)  || 0;
+  const priorGames  = effectivePriorGames();
   const container   = document.getElementById('tournaments-container');
 
   let curRating = startRating, curGames = priorGames;
@@ -374,10 +380,10 @@ function renderSummary(prog, startRating, priorGames, finalRating, finalGames) {
       <tbody>${rows}</tbody>
     </table></div>
     <div class="text-center">
-      <span>Starting: <strong>${startRating}</strong> (${priorGames} prior games)</span>
+      <span>Starting: <strong>${startRating}</strong> (${priorGames === Infinity ? 'established' : priorGames + ' prior games'})</span>
       <span class="mx-3">→</span>
       <span class="fs-4 fw-bold ${tcl}">${finalRating}</span>
-      <span class="text-muted ms-2">${totalChange >= 0 ? '+' : ''}${totalChange} overall · ${finalGames} total games</span>
+      <span class="text-muted ms-2">${totalChange >= 0 ? '+' : ''}${totalChange} overall${finalGames !== Infinity ? ' · ' + finalGames + ' total games' : ''}</span>
     </div>`;
 }
 
@@ -386,7 +392,7 @@ let saveTimers = {};
 
 function ratingsBefore(ti) {
   const startRating = parseInt(document.getElementById('start-rating').value) || null;
-  const priorGames  = parseInt(document.getElementById('prior-games').value) || 0;
+  const priorGames  = effectivePriorGames();
   let r = startRating, g = priorGames;
   for (let i = 0; i < ti; i++) {
     const c = (r && tournaments[i].games.length) ? calcTournament(r, g, tournaments[i].games) : null;
