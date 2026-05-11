@@ -163,7 +163,7 @@ function perfRating(games, actual) {
 }
 
 function calcTournament(myRating, priorGames, games) {
-  const valid = games.filter(g => g.rating);
+  const valid = games.filter(g => g.rating && !g.bye);
   if (!valid.length) return null;
   const m = valid.length;
   const provisional = priorGames < 26;
@@ -240,8 +240,10 @@ function renderAll() {
           <option value="0">Loss</option>
         </select>
       </div>
-      <div class="col-sm-2">
-        <button class="btn btn-primary btn-sm w-100" onclick="addGame(${ti})">Add</button>
+      <div class="col-sm-2 d-flex flex-column gap-1">
+        <button class="btn btn-primary btn-sm" onclick="addGame(${ti})">Add Game</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="addBye(${ti},0.5)">+ ½ Bye</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="addBye(${ti},1)">+ Full Bye</button>
       </div>
     </div>
     ${renderGamesTable(ti, t.games, rBefore, calc)}
@@ -257,6 +259,20 @@ function renderGamesTable(ti, games, myRating, calc) {
   if (!games.length) return '<p class="text-muted small mb-2">No games added yet.</p>';
   const K = calc ? calc.K : null;
   const rows = games.map((g, gi) => {
+    if (g.bye) {
+      const byeLabel = parseFloat(g.result) === 1
+        ? '<span class="badge bg-secondary">Full Bye</span>'
+        : '<span class="badge bg-secondary">½ Bye</span>';
+      const byeScore = parseFloat(g.result) === 1 ? '1' : '½';
+      return `<tr class="table-secondary">
+        <td>${gi+1}</td>
+        <td colspan="3" class="small">${byeLabel} <span class="text-muted">(unrated — not included in rating calculation)</span></td>
+        <td class="text-center fw-semibold">${byeScore}</td>
+        <td class="text-center text-muted">—</td>
+        <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
+                    onclick="removeGame(${ti},${gi})">✕</button></td>
+      </tr>`;
+    }
     const expVal = (myRating && g.rating) ? Ep(myRating, g.rating) : null;
     const exp    = expVal !== null ? expVal.toFixed(3) : '—';
     let impact = '—', impactCls = '';
@@ -498,6 +514,12 @@ function addGame(ti) {
   scheduleSave(ti);
 }
 
+function addBye(ti, points) {
+  const name = points === 1 ? 'Full Bye' : '½ Bye';
+  tournaments[ti].games.push({ name, rating: null, result: String(points), bye: true, provisional: null });
+  renderAll();
+  scheduleSave(ti);
+}
 function removeGame(ti, gi)    { tournaments[ti].games.splice(gi, 1); renderAll(); scheduleSave(ti); }
 function updateRating(ti,gi,v) { tournaments[ti].games[gi].rating = parseInt(v)||null; renderAll(); scheduleSave(ti); }
 function updateResult(ti,gi,v) { tournaments[ti].games[gi].result = v; renderAll(); scheduleSave(ti); }
