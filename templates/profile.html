@@ -13,6 +13,18 @@
 </div>
 {% endif %}
 
+<div class="card mb-3">
+  <div class="card-header fw-semibold">Account</div>
+  <div class="card-body">
+    <p class="mb-1 small"><span class="text-muted">Email:</span>
+      {% if profile.email %}{{ profile.email }}{% else %}<span class="text-muted">—</span>{% endif %}
+    </p>
+    <p class="mb-0 small"><span class="text-muted">Phone:</span>
+      {% if profile.phone %}{{ profile.phone }}{% else %}<span class="text-muted">—</span>{% endif %}
+    </p>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header fw-semibold">Ratings</div>
   <div class="card-body">

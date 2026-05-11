@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -22,7 +22,7 @@ from database import (
     import_uscf_members, search_uscf_members, lookup_uscf_member, get_uscf_db_count,
     get_user_by_username, get_user_by_email, get_user_by_phone,
     verify_password, create_user, create_pending_user, list_users,
-    delete_user, update_user_password,
+    delete_user, update_user_password, update_user_info,
     create_verification_token, check_and_consume_token, activate_user,
     create_password_reset_token, check_and_consume_reset_token,
     get_setting, set_setting,
@@ -30,6 +30,7 @@ from database import (
     register_player_public, set_player_status,
     update_player_payment, update_player_bye_request,
     get_user_profile, update_user_profile,
+    save_user_tournament, list_user_tournaments, update_user_tournament, delete_user_tournament,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -43,6 +44,7 @@ app = FastAPI(title="MyChessRating Pairings")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+templates.env.filters["from_json"] = __import__("json").loads
 
 BBP_PATH = "./bbpPairings"
 if os.name == "nt":
@@ -374,6 +376,19 @@ async def change_password_route(
     update_user_password(uid, new_password)
     return RedirectResponse("/users", status_code=303)
 
+@app.post("/users/{uid}/edit")
+async def edit_user_route(
+    uid: int,
+    username: str = Form(...),
+    email: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    role: str = Form("viewer"),
+    status: str = Form("active"),
+    current: dict = Depends(require_admin),
+):
+    update_user_info(uid, username, email, phone, role, status)
+    return RedirectResponse("/users", status_code=303)
+
 
 # ---------------------------------------------------------------------------
 # Public JSON API (used by mobile app — no auth required)
@@ -529,7 +544,11 @@ async def _uscf_live_search(q: str) -> list:
 
 
 def _parse_uscf_thin3(body: str) -> dict:
-    """Parse name and ratings from USCF thin3.php HTML response."""
+    """Parse name, ratings, and game counts from USCF thin3.php HTML response.
+
+    Rating field format: '{rating}/{games} {date}' for provisional,
+                         '{rating} {date}' or '{rating}* {date}' for established.
+    """
     name_m = re.search(r"name=memname[^>]+value='([^']+)'", body)
     name = ""
     if name_m:
@@ -540,19 +559,36 @@ def _parse_uscf_thin3(body: str) -> dict:
         else:
             name = raw.title()
 
-    def _extract_rating(field: str) -> int:
+    def _extract_rating_full(field: str) -> dict:
         m = re.search(rf"name={field}[^>]+value='([^']+)'", body)
-        if m:
-            num = re.search(r"(\d+)", m.group(1))
-            if num:
-                return int(num.group(1))
-        return 0
+        if not m:
+            return {"rating": 0, "games": None, "provisional": False}
+        val = m.group(1).strip()
+        # Provisional format: "1156/16 2005-04-01"
+        prov_m = re.match(r"(\d+)/(\d+)", val)
+        if prov_m:
+            return {"rating": int(prov_m.group(1)), "games": int(prov_m.group(2)), "provisional": True}
+        # Established format: "1500 2024-01-01" or "1500* 2024-01-01"
+        est_m = re.match(r"(\d+)", val)
+        if est_m:
+            return {"rating": int(est_m.group(1)), "games": None, "provisional": False}
+        return {"rating": 0, "games": None, "provisional": False}
+
+    r1 = _extract_rating_full("rating1")
+    r2 = _extract_rating_full("rating2")
+    r3 = _extract_rating_full("rating3")
 
     return {
-        "name": name,
-        "rating": _extract_rating("rating1"),
-        "quick":  _extract_rating("rating2"),
-        "blitz":  _extract_rating("rating3"),
+        "name":              name,
+        "rating":            r1["rating"],
+        "rating_games":      r1["games"],
+        "rating_provisional": r1["provisional"],
+        "quick":             r2["rating"],
+        "quick_games":       r2["games"],
+        "quick_provisional": r2["provisional"],
+        "blitz":             r3["rating"],
+        "blitz_games":       r3["games"],
+        "blitz_provisional": r3["provisional"],
     }
 
 def _format_uscf_name(raw: str) -> str:
@@ -598,6 +634,75 @@ async def uscf_lookup(uscf_id: str = "", _user: dict = Depends(require_login)):
         import logging
         logging.exception("USCF lookup failed")
         return HTMLResponse(f'<div id="uscf-preview"><span class="text-danger small">Lookup failed: {html.escape(str(e))}</span></div>')
+
+@app.get("/api/uscf-player-status")
+async def uscf_player_status(uscf_id: str = "", _user: dict = Depends(require_login)):
+    """Return current rating, provisional status, and game count for a USCF ID.
+
+    Uses ratings-api.uschess.org/api/v1/members which returns the current
+    published monthly rating and isProvisional flag directly — much more
+    accurate than thin3.php which can lag several months behind.
+    """
+    uscf_id = uscf_id.strip()
+    if len(uscf_id) < 5:
+        return {"error": "Invalid USCF ID"}
+    try:
+        api_headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+            "Accept": "application/json",
+            "Origin": "https://ratings.uschess.org",
+        }
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            member_r, sections_r = await asyncio.gather(
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers),
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers),
+            )
+
+        if member_r.status_code != 200:
+            return {"error": "USCF ID not found"}
+        m = member_r.json()
+
+        name = f"{m.get('firstName', '')} {m.get('lastName', '')}".strip().title()
+        if not name:
+            return {"error": "USCF ID not found"}
+
+        def _find_rating(system: str) -> dict:
+            for entry in m.get("ratings", []):
+                if entry.get("ratingSystem") == system:
+                    return entry
+            return {}
+
+        reg   = _find_rating("R")
+        quick = _find_rating("Q")
+        blitz = _find_rating("B")
+
+        # Live rating from sections API (most recent post-rating for regular)
+        live_rating = 0
+        if sections_r.status_code == 200:
+            for section in sections_r.json().get("items", []):
+                for record in section.get("ratingRecords", []):
+                    if record.get("ratingSource") == "R":
+                        live_rating = record.get("postRating", 0)
+                        break
+                if live_rating:
+                    break
+
+        return {
+            "name":              name,
+            "rating":            reg.get("rating") or 0,
+            "live_rating":       live_rating or reg.get("rating") or 0,
+            "provisional":       reg.get("isProvisional", False),
+            "games":             reg.get("gamesPlayed"),   # only present when provisional
+            "floor":             reg.get("floor"),
+            "quick":             quick.get("rating") or 0,
+            "quick_provisional": quick.get("isProvisional", False),
+            "quick_games":       quick.get("gamesPlayed"),
+            "blitz":             blitz.get("rating") or 0,
+            "blitz_provisional": blitz.get("isProvisional", False),
+            "blitz_games":       blitz.get("gamesPlayed"),
+        }
+    except Exception:
+        return {"error": "Lookup failed"}
 
 def _suggestions_html(results: list) -> str:
     if not results:
@@ -952,41 +1057,37 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     if not uscf_id:
         return HTMLResponse("")
 
-    # 1. Local DB for name/regular rating/fide_id/expiry
+    # 1. Local DB for name/fide_id/expiry; member API for current monthly rating
     name, rating, fide_id, expiry = "", 0, "", ""
     local = lookup_uscf_member(uscf_id)
     if local:
         name    = _format_uscf_name(local["name"])
-        rating  = local.get("rating") or 0
         fide_id = local.get("fide_id") or ""
         expiry  = local.get("expiry") or ""
-    else:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
-            if r.status_code == 200 and "memname" in r.text:
-                data = _parse_uscf_thin3(r.text)
-                name   = data["name"]
-                rating = data["rating"]
-        except Exception:
-            pass
 
-    # 2. Live USCF Regular from sections API
+    # 2. Member API for current monthly rating + sections API for live rating (parallel)
     live_rating = 0
     try:
-        headers = {
+        api_headers = {
             "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
             "Accept": "application/json",
             "Origin": "https://ratings.uschess.org",
         }
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            r = await client.get(
-                f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections",
-                headers=headers,
+            member_r, sections_r = await asyncio.gather(
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers),
+                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers),
             )
-        if r.status_code == 200:
-            for section in r.json().get("items", []):
+        if member_r.status_code == 200:
+            m = member_r.json()
+            if not name:
+                name = f"{m.get('firstName', '')} {m.get('lastName', '')}".strip().title()
+            for entry in m.get("ratings", []):
+                if entry.get("ratingSystem") == "R" and entry.get("rating"):
+                    rating = entry["rating"]
+                    break
+        if sections_r.status_code == 200:
+            for section in sections_r.json().get("items", []):
                 for record in section.get("ratingRecords", []):
                     if record.get("ratingSource") == "R":
                         live_rating = record.get("postRating", 0)
@@ -1034,22 +1135,8 @@ async def player_quick_blitz(
     uscf_id = uscf_id.strip()
     fide_id = fide_id.strip()
 
-    # USCF monthly quick/blitz from thin3.php
-    monthly_quick = monthly_blitz = 0
-    if uscf_id:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
-            if r.status_code == 200 and "memname" in r.text:
-                data = _parse_uscf_thin3(r.text)
-                monthly_quick = data["quick"]
-                monthly_blitz = data["blitz"]
-        except Exception:
-            pass
-
-    # USCF live quick/blitz: sections then member API fallback
-    live_quick = live_blitz = 0
+    # USCF quick/blitz: member API for monthly, sections API for live
+    monthly_quick = monthly_blitz = live_quick = live_blitz = 0
     if uscf_id:
         try:
             headers = {
@@ -1062,6 +1149,14 @@ async def player_quick_blitz(
                     client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers),
                     client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=headers),
                 )
+            if member_r.status_code == 200:
+                for entry in member_r.json().get("ratings", []):
+                    rs  = entry.get("ratingSystem")
+                    val = entry.get("rating", 0)
+                    if rs == "Q" and val:
+                        monthly_quick = val
+                    elif rs == "B" and val:
+                        monthly_blitz = val
             if sections_r.status_code == 200:
                 for section in sections_r.json().get("items", []):
                     for record in section.get("ratingRecords", []):
@@ -1071,14 +1166,11 @@ async def player_quick_blitz(
                             live_quick = val
                         elif src == "B" and not live_blitz:
                             live_blitz = val
-            if member_r.status_code == 200:
-                for entry in member_r.json().get("ratings", []):
-                    rs = entry.get("ratingSystem")
-                    val = entry.get("rating", 0)
-                    if rs == "Q" and not live_quick and val:
-                        live_quick = val
-                    elif rs == "B" and not live_blitz and val:
-                        live_blitz = val
+            # Fall back to monthly if no live found
+            if not live_quick:
+                live_quick = monthly_quick
+            if not live_blitz:
+                live_blitz = monthly_blitz
         except Exception:
             pass
 
@@ -1239,6 +1331,59 @@ async def profile_populate(
 
 
 # ---------------------------------------------------------------------------
+# USCF Tournament Rating Calculator
+# ---------------------------------------------------------------------------
+
+@app.get("/uscf-calculator", response_class=HTMLResponse)
+async def uscf_calculator_page(request: Request, user: dict = Depends(require_login)):
+    profile = get_user_profile(user["id"])
+    saved = list_user_tournaments(user["id"])
+    return templates.TemplateResponse(request=request, name="uscf_calculator.html",
+                                      context={"profile": profile, "saved_tournaments": saved})
+
+@app.post("/api/uscf-tournaments")
+async def api_save_tournament(request: Request, user: dict = Depends(require_login)):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "Tournament name is required"}, status_code=400)
+    import json
+    new_id = save_user_tournament(
+        user_id=user["id"],
+        name=name,
+        start_rating=body.get("start_rating"),
+        end_rating=body.get("end_rating"),
+        games_json=json.dumps(body.get("games", [])),
+    )
+    return {"id": new_id, "name": name}
+
+@app.patch("/api/uscf-tournaments/{tid}")
+async def api_update_tournament(tid: int, request: Request, user: dict = Depends(require_login)):
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "Tournament name is required"}, status_code=400)
+    import json
+    ok = update_user_tournament(
+        tournament_id=tid,
+        user_id=user["id"],
+        name=name,
+        start_rating=body.get("start_rating"),
+        end_rating=body.get("end_rating"),
+        games_json=json.dumps(body.get("games", [])),
+    )
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return {"updated": tid}
+
+@app.delete("/api/uscf-tournaments/{tid}")
+async def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
+    ok = delete_user_tournament(tid, user["id"])
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return {"deleted": tid}
+
+
 # FIDE Initial Rating Calculator
 # ---------------------------------------------------------------------------
 

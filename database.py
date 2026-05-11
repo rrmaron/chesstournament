@@ -122,6 +122,17 @@ def init_db():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS user_tournaments (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        start_rating INTEGER,
+        end_rating INTEGER,
+        games_json TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )''')
+
     # Migrations for existing DBs
     for sql in [
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
@@ -198,10 +209,10 @@ def get_user_by_username(username: str) -> Optional[Dict]:
 def get_user_by_email(email: str) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, username FROM users WHERE email=?", (email.strip(),))
+    c.execute("SELECT id, username, status FROM users WHERE email=?", (email.strip(),))
     row = c.fetchone()
     conn.close()
-    return {"id": row[0], "username": row[1]} if row else None
+    return {"id": row[0], "username": row[1], "status": row[2]} if row else None
 
 def get_user_by_phone(phone: str) -> Optional[Dict]:
     conn = sqlite3.connect(DB_FILE)
@@ -248,10 +259,10 @@ def activate_user(user_id: int):
 def list_users() -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("SELECT id, username, role, status, created_at FROM users ORDER BY created_at")
+    c.execute("SELECT id, username, role, status, created_at, email, phone FROM users ORDER BY created_at")
     rows = c.fetchall()
     conn.close()
-    return [{"id": r[0], "username": r[1], "role": r[2], "status": r[3], "created_at": r[4]} for r in rows]
+    return [{"id": r[0], "username": r[1], "role": r[2], "status": r[3], "created_at": r[4], "email": r[5], "phone": r[6]} for r in rows]
 
 def delete_user(uid: int):
     conn = sqlite3.connect(DB_FILE)
@@ -263,6 +274,15 @@ def delete_user(uid: int):
 def update_user_password(uid: int, new_password: str):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("UPDATE users SET password_hash=? WHERE id=?", (_hash_password(new_password), uid))
+    conn.commit()
+    conn.close()
+
+def update_user_info(uid: int, username: str, email: Optional[str], phone: Optional[str], role: str, status: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "UPDATE users SET username=?, email=?, phone=?, role=?, status=? WHERE id=?",
+        (username.strip(), email or None, phone or None, role, status, uid)
+    )
     conn.commit()
     conn.close()
 
@@ -325,6 +345,58 @@ def update_user_profile(uid: int, uscf_id: Optional[str], fide_id: Optional[str]
     )
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# User saved tournaments (USCF calculator)
+# ---------------------------------------------------------------------------
+
+def save_user_tournament(user_id: int, name: str, start_rating: Optional[int],
+                          end_rating: Optional[int], games_json: str) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO user_tournaments (user_id, name, start_rating, end_rating, games_json) VALUES (?,?,?,?,?)",
+        (user_id, name.strip(), start_rating, end_rating, games_json)
+    )
+    new_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+def list_user_tournaments(user_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, name, start_rating, end_rating, games_json, created_at "
+        "FROM user_tournaments WHERE user_id=? ORDER BY created_at DESC",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "name", "start_rating", "end_rating", "games_json", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def update_user_tournament(tournament_id: int, user_id: int, name: str,
+                            start_rating: Optional[int], end_rating: Optional[int],
+                            games_json: str) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "UPDATE user_tournaments SET name=?, start_rating=?, end_rating=?, games_json=? "
+        "WHERE id=? AND user_id=?",
+        (name.strip(), start_rating, end_rating, games_json, tournament_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+def delete_user_tournament(tournament_id: int, user_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "DELETE FROM user_tournaments WHERE id=? AND user_id=?", (tournament_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
 
 def ensure_admin_exists():
     """Create a default admin/admin account if no users exist yet."""

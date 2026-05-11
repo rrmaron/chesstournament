@@ -1,0 +1,591 @@
+{% extends "base.html" %}
+{% block title %}USCF Tournament Rating Calculator{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-10">
+
+<h2 class="text-center mb-1">USCF Tournament Rating Calculator</h2>
+<p class="text-center text-muted mb-4">Add tournaments sequentially. Rating and provisional status verified live from USCF.</p>
+
+<!-- Starting point -->
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Your USCF Profile</div>
+  <div class="card-body">
+    <div class="row g-3 align-items-start">
+      <div class="col-sm-4">
+        <label class="form-label small">USCF ID</label>
+        <div class="input-group">
+          <input type="text" id="my-uscf-id" class="form-control" placeholder="e.g. 12345678"
+                 value="{{ profile.uscf_id or '' }}">
+          <button class="btn btn-outline-secondary" type="button" onclick="lookupMyUSCF()">Look up</button>
+        </div>
+        <div id="uscf-lookup-status" class="form-text"></div>
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small">USCF Regular Rating</label>
+        <input type="number" id="start-rating" class="form-control" min="100" max="3000"
+               value="{{ profile.uscf_rating or '' }}" placeholder="e.g. 1500" oninput="renderAll()">
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small">Prior Rated Games</label>
+        <div class="input-group">
+          <input type="number" id="prior-games" class="form-control" min="0" placeholder="—" oninput="renderAll()">
+          <span class="input-group-text" id="prov-badge" style="display:none"></span>
+        </div>
+        <div class="form-text">Verified from USCF when you look up your ID.</div>
+      </div>
+      <div class="col-sm-2 d-flex align-items-end">
+        <button class="btn btn-primary w-100" onclick="addTournament()">+ Add Tournament</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Saved Tournaments data for JS -->
+<script>
+const savedTournamentsData = {{ saved_tournaments | tojson }};
+</script>
+
+<!-- Saved Tournaments -->
+<div class="card mb-4 border-secondary" id="saved-tournaments-card" {% if not saved_tournaments %}style="display:none"{% endif %}>
+  <div class="card-header fw-semibold text-secondary">Saved Tournaments</div>
+  <div class="card-body p-0">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Tournament</th><th class="text-center">Games</th><th class="text-center">Start</th><th class="text-center">End</th><th class="text-center">Δ</th><th>Saved</th><th></th></tr>
+      </thead>
+      <tbody id="saved-tbody">
+        {% for t in saved_tournaments %}
+        <tr id="saved-row-{{ t.id }}">
+          <td class="fw-semibold">{{ t.name }}</td>
+          <td class="text-center text-muted">{{ (t.games_json | from_json) | length }}</td>
+          <td class="text-center">{{ t.start_rating or '—' }}</td>
+          <td class="text-center">{{ t.end_rating or '—' }}</td>
+          <td class="text-center fw-semibold {% if t.end_rating and t.start_rating %}{% if t.end_rating > t.start_rating %}text-success{% elif t.end_rating < t.start_rating %}text-danger{% endif %}{% endif %}">
+            {% if t.end_rating and t.start_rating %}{{ '%+d' % (t.end_rating - t.start_rating) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-muted small">{{ t.created_at[:10] }}</td>
+          <td class="d-flex gap-1">
+            <button class="btn btn-outline-primary btn-sm py-0 px-2"
+                    onclick="loadSavedTournament({{ t.id }})">Load</button>
+            <button class="btn btn-outline-danger btn-sm py-0 px-1"
+                    onclick="deleteSavedTournament({{ t.id }})">✕</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Tournaments -->
+<div id="tournaments-container"></div>
+
+<!-- Summary -->
+<div id="summary-section" class="d-none mb-4">
+  <div class="card border-success">
+    <div class="card-header bg-success text-white fw-semibold">Rating Progression</div>
+    <div class="card-body" id="summary-body"></div>
+  </div>
+</div>
+
+<p class="text-muted small text-center">
+  Formula: K&times;(W&minus;We) + bonus when gain &gt; 10&times;&radic;m (US Chess Jan 2025).
+  Provisional K&nbsp;=&nbsp;max(32,&nbsp;800/(prior+m)). Estimates only — results may differ slightly from official USCF calculations.
+</p>
+
+</div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let tournaments  = [];
+let searchTimers = {};
+
+// ── USCF Live Lookup ───────────────────────────────────────────────────────────
+async function lookupMyUSCF() {
+  const id  = document.getElementById('my-uscf-id').value.trim();
+  const st  = document.getElementById('uscf-lookup-status');
+  const pb  = document.getElementById('prov-badge');
+  if (!id) return;
+  st.textContent = 'Looking up…';
+  st.className   = 'form-text text-muted';
+  try {
+    const r    = await fetch('/api/uscf-player-status?uscf_id=' + encodeURIComponent(id));
+    const data = await r.json();
+    if (data.error) {
+      st.textContent = '✗ ' + data.error;
+      st.className   = 'form-text text-danger';
+      return;
+    }
+    // Use live rating if available, fall back to monthly
+    const displayRating = data.live_rating || data.rating || '';
+    document.getElementById('start-rating').value = displayRating;
+    document.getElementById('prior-games').value  = data.games !== null ? data.games : '';
+
+    const isProvisional = data.provisional;
+    pb.textContent   = isProvisional ? 'Provisional' : 'Established';
+    pb.className     = 'input-group-text small ' + (isProvisional ? 'text-warning bg-warning-subtle' : 'text-success bg-success-subtle');
+    pb.style.display = '';
+    if (!isProvisional) {
+      document.getElementById('prior-games').value = '26'; // established = 26+ games
+    }
+
+    const monthlyNote = (data.rating && data.live_rating && data.live_rating !== data.rating)
+      ? ` (monthly: ${data.rating}, live: ${data.live_rating})` : '';
+    st.textContent = `✓ ${data.name}${monthlyNote}`;
+    st.className   = 'form-text text-success';
+    renderAll();
+  } catch(e) {
+    st.textContent = '✗ Lookup failed';
+    st.className   = 'form-text text-danger';
+  }
+}
+
+// Auto-lookup on page load if USCF ID pre-filled from profile
+window.addEventListener('DOMContentLoaded', () => {
+  if (document.getElementById('my-uscf-id').value.trim())
+    lookupMyUSCF();
+});
+
+// ── USCF Formulas ─────────────────────────────────────────────────────────────
+function uscfK(rating) {
+  if (rating < 2100) return 32;
+  if (rating < 2400) return 24;
+  return 16;
+}
+function Ep(myR, oppR) { return 1 / (1 + Math.pow(10, (oppR - myR) / 400)); }
+function perfRating(games, actual) {
+  const n = games.length, avg = games.reduce((s,g) => s + g.rating, 0) / n;
+  if (actual >= n) return Math.round(avg + 400);
+  if (actual <= 0) return Math.round(avg - 400);
+  return Math.round(avg + 400 * Math.log10(actual / (n - actual)));
+}
+
+function calcTournament(myRating, priorGames, games) {
+  const valid = games.filter(g => g.rating);
+  if (!valid.length) return null;
+  const m = valid.length;
+  const provisional = priorGames < 26;
+  const K = provisional
+    ? Math.max(32, Math.round(800 / (Math.min(priorGames, 50) + m)))
+    : uscfK(myRating);
+  let actual = 0, exp = 0;
+  for (const g of valid) { actual += parseFloat(g.result); exp += Ep(myRating, g.rating); }
+  const baseChange = Math.round(K * (actual - exp));
+  const threshold  = 10 * Math.sqrt(m);
+  const bonus      = (!provisional && baseChange > threshold) ? Math.round(baseChange - threshold) : 0;
+  const totalChange = baseChange + bonus;
+  return {
+    provisional, m, actual, exp: Math.round(exp * 100) / 100,
+    Rp: perfRating(valid, actual), K,
+    threshold: Math.round(threshold * 10) / 10,
+    baseChange, bonus, totalChange,
+    newRating: myRating + totalChange,
+    newPrior: priorGames + m,
+  };
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderAll() {
+  const startRating = parseInt(document.getElementById('start-rating').value) || null;
+  const priorGames  = parseInt(document.getElementById('prior-games').value)  || 0;
+  const container   = document.getElementById('tournaments-container');
+
+  let curRating = startRating, curGames = priorGames;
+  const progression = [];
+
+  container.innerHTML = tournaments.map((t, ti) => {
+    const rBefore = curRating, gBefore = curGames;
+    const calc = (curRating && t.games.length > 0) ? calcTournament(curRating, curGames, t.games) : null;
+    if (calc) { curRating = calc.newRating; curGames = calc.newPrior; progression.push({name: t.name, before: rBefore, calc}); }
+
+    let badge = '';
+    if (calc) {
+      const s = calc.totalChange > 0 ? 'success' : calc.totalChange < 0 ? 'danger' : 'secondary';
+      badge = `<span class="badge bg-${s} ms-2">${calc.totalChange > 0 ? '+' : ''}${calc.totalChange} → ${calc.newRating}</span>`;
+    }
+
+    return `
+<div class="card mb-3" id="tcard-${ti}">
+  <div class="card-header d-flex align-items-center gap-2 flex-wrap">
+    <input type="text" class="form-control form-control-sm fw-semibold" style="max-width:220px"
+           value="${escHtml(t.name)}" oninput="tournaments[${ti}].name=this.value;scheduleSave(${ti})">
+    ${calc ? `<small class="text-muted">${calc.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'} · K=${calc.K} · threshold=${calc.threshold}</small>` : ''}
+    ${badge}
+    <small id="save-status-${ti}" class="small ms-auto ${t.saveStatus==='saved'?'text-success':t.saveStatus==='error'?'text-danger':'text-muted'}">
+      ${t.saveStatus==='saved'?'✓ Saved':t.saveStatus==='saving'?'Saving…':t.saveStatus==='error'?'⚠ Save failed':''}
+    </small>
+    <button class="btn btn-outline-secondary btn-sm" onclick="removeTournament(${ti})">Close</button>
+  </div>
+  <div class="card-body">
+    <div class="row g-2 align-items-end mb-3">
+      <div class="col-sm-5">
+        <div class="position-relative">
+          <input type="text" id="t${ti}-opp" class="form-control form-control-sm"
+                 placeholder="Opponent name (search)…" autocomplete="off"
+                 oninput="searchOpp(${ti},this.value)">
+          <div id="t${ti}-sugg" class="list-group position-absolute w-100 shadow"
+               style="z-index:999;top:100%;display:none"></div>
+        </div>
+      </div>
+      <div class="col-sm-3">
+        <input type="number" id="t${ti}-rat" class="form-control form-control-sm"
+               placeholder="USCF rating" min="100" max="3000">
+      </div>
+      <div class="col-sm-2">
+        <select id="t${ti}-res" class="form-select form-select-sm">
+          <option value="1">Win</option>
+          <option value="0.5">Draw</option>
+          <option value="0">Loss</option>
+        </select>
+      </div>
+      <div class="col-sm-2">
+        <button class="btn btn-primary btn-sm w-100" onclick="addGame(${ti})">Add</button>
+      </div>
+    </div>
+    ${renderGamesTable(ti, t.games, rBefore, calc)}
+    ${calc ? renderBreakdown(calc) : ''}
+  </div>
+</div>`;
+  }).join('');
+
+  renderSummary(progression, startRating, priorGames, curRating, curGames);
+}
+
+function renderGamesTable(ti, games, myRating, calc) {
+  if (!games.length) return '<p class="text-muted small mb-2">No games added yet.</p>';
+  const K = calc ? calc.K : null;
+  const rows = games.map((g, gi) => {
+    const expVal = (myRating && g.rating) ? Ep(myRating, g.rating) : null;
+    const exp    = expVal !== null ? expVal.toFixed(3) : '—';
+    let impact = '—', impactCls = '';
+    if (K !== null && expVal !== null && g.rating) {
+      const raw = Math.round(K * (parseFloat(g.result) - expVal));
+      impact = (raw > 0 ? '+' : '') + raw;
+      impactCls = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
+    }
+    const provBadge = g.provisional === true  ? ' <span class="badge bg-warning text-dark" style="font-size:0.65rem">P</span>'
+                    : g.provisional === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
+                    : '';
+    return `<tr>
+      <td>${gi+1}</td>
+      <td class="small">${escHtml(g.name||'—')}${provBadge}</td>
+      <td><input type="number" class="form-control form-control-sm" style="max-width:80px"
+                 value="${g.rating||''}" min="100" max="3000"
+                 onchange="updateRating(${ti},${gi},this.value)"></td>
+      <td><select class="form-select form-select-sm" style="max-width:90px"
+                  onchange="updateResult(${ti},${gi},this.value)">
+            <option value="1"   ${g.result==='1'  ?'selected':''}>Win</option>
+            <option value="0.5" ${g.result==='0.5'?'selected':''}>Draw</option>
+            <option value="0"   ${g.result==='0'  ?'selected':''}>Loss</option>
+          </select></td>
+      <td class="text-center">${exp}</td>
+      <td class="text-center ${impactCls}">${impact}</td>
+      <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
+                  onclick="removeGame(${ti},${gi})">✕</button></td>
+    </tr>`;
+  }).join('');
+  return `<div class="table-responsive mb-2">
+  <table class="table table-sm table-bordered align-middle mb-0">
+    <thead class="table-light">
+      <tr><th>#</th><th>Opponent</th><th>Rating</th><th>Result</th><th>Expected</th><th>Impact</th><th></th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table></div>`;
+}
+
+function renderBreakdown(c) {
+  const sg  = n => n > 0 ? '+'+n : ''+n;
+  const cls = n => n > 0 ? 'text-success' : n < 0 ? 'text-danger' : '';
+  const bonusCol = c.bonus > 0
+    ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+         <div class="text-muted small">Bonus</div>
+         <div class="fw-bold text-success">+${c.bonus}</div>
+         <div class="text-muted" style="font-size:0.7rem">gain ${c.baseChange} &gt; ${c.threshold}</div>
+       </div></div>` : '';
+  return `<div class="row g-2 flex-wrap mt-1">
+    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
+      <div class="text-muted small">Score</div><div class="fw-bold">${c.actual} / ${c.m}</div>
+    </div></div>
+    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+      <div class="text-muted small">Expected</div><div class="fw-bold">${c.exp}</div>
+    </div></div>
+    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+      <div class="text-muted small">Perf. Rating</div><div class="fw-bold">${c.Rp}</div>
+    </div></div>
+    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+      <div class="text-muted small">Base Δ (K=${c.K})</div>
+      <div class="fw-bold ${cls(c.baseChange)}">${sg(c.baseChange)}</div>
+    </div></div>
+    ${bonusCol}
+    <div class="col-auto"><div class="border rounded p-2 text-center bg-light" style="min-width:100px">
+      <div class="text-muted small">New Rating</div>
+      <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
+      <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} total</div>
+    </div></div>
+  </div>`;
+}
+
+function renderSummary(prog, startRating, priorGames, finalRating, finalGames) {
+  const sec = document.getElementById('summary-section');
+  if (!prog.length || !startRating) { sec.classList.add('d-none'); return; }
+  sec.classList.remove('d-none');
+  const totalChange = finalRating - startRating;
+  const rows = prog.map(p => {
+    const c = p.calc, sg = c.totalChange > 0 ? '+' : '';
+    const cl = c.totalChange > 0 ? 'text-success' : c.totalChange < 0 ? 'text-danger' : '';
+    const bonus = c.bonus > 0 ? ` <small class="text-muted">(+${c.bonus} bonus)</small>` : '';
+    return `<tr>
+      <td class="text-start">${escHtml(p.name)}</td>
+      <td>${p.before}</td><td>${c.actual} / ${c.m}</td><td>${c.Rp}</td>
+      <td class="fw-semibold ${cl}">${sg}${c.totalChange}${bonus}</td>
+      <td class="fw-bold">${c.newRating}</td>
+      <td class="text-muted small">${c.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'}</td>
+    </tr>`;
+  }).join('');
+  const tcl = totalChange >= 0 ? 'text-success' : 'text-danger';
+  document.getElementById('summary-body').innerHTML = `
+    <div class="table-responsive mb-3">
+    <table class="table table-sm table-bordered text-center align-middle mb-0">
+      <thead class="table-light">
+        <tr><th class="text-start">Tournament</th><th>Before</th><th>Score</th>
+            <th>Perf.</th><th>Change</th><th>After</th><th>Status</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div class="text-center">
+      <span>Starting: <strong>${startRating}</strong> (${priorGames} prior games)</span>
+      <span class="mx-3">→</span>
+      <span class="fs-4 fw-bold ${tcl}">${finalRating}</span>
+      <span class="text-muted ms-2">${totalChange >= 0 ? '+' : ''}${totalChange} overall · ${finalGames} total games</span>
+    </div>`;
+}
+
+// ── Auto-save helpers ─────────────────────────────────────────────────────────
+let saveTimers = {};
+
+function ratingsBefore(ti) {
+  const startRating = parseInt(document.getElementById('start-rating').value) || null;
+  const priorGames  = parseInt(document.getElementById('prior-games').value) || 0;
+  let r = startRating, g = priorGames;
+  for (let i = 0; i < ti; i++) {
+    const c = (r && tournaments[i].games.length) ? calcTournament(r, g, tournaments[i].games) : null;
+    if (c) { r = c.newRating; g = c.newPrior; }
+  }
+  return { r, g };
+}
+
+async function persistTournament(ti) {
+  const t = tournaments[ti];
+  if (!t) return;
+  const { r: rBefore, g: gBefore } = ratingsBefore(ti);
+  const calc = (rBefore && t.games.length) ? calcTournament(rBefore, gBefore, t.games) : null;
+  const payload = {
+    name: t.name,
+    start_rating: rBefore,
+    end_rating: calc ? calc.newRating : null,
+    games: t.games,
+  };
+  const isNew = !t.savedId;
+  try {
+    if (t.savedId) {
+      await fetch('/api/uscf-tournaments/' + t.savedId, {
+        method: 'PATCH', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const resp = await fetch('/api/uscf-tournaments', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (data.id) t.savedId = data.id;
+    }
+    t.saveStatus = 'saved';
+    // Keep local data in sync so Load button works for newly saved rows
+    const existing = savedTournamentsData.find(s => s.id === t.savedId);
+    const record = { id: t.savedId, name: payload.name, start_rating: payload.start_rating,
+                     end_rating: payload.end_rating, games_json: JSON.stringify(payload.games),
+                     created_at: new Date().toISOString() };
+    if (existing) {
+      Object.assign(existing, record);
+    } else {
+      savedTournamentsData.unshift(record);
+    }
+    updateSavedRow(record);
+  } catch(e) {
+    t.saveStatus = 'error';
+  }
+  const el = document.getElementById(`save-status-${ti}`);
+  if (el) {
+    el.textContent = t.saveStatus === 'saved' ? '✓ Saved' : '⚠ Save failed';
+    el.className   = 'small ms-auto ' + (t.saveStatus === 'saved' ? 'text-success' : 'text-danger');
+  }
+}
+
+function updateSavedRow(record) {
+  const card = document.getElementById('saved-tournaments-card');
+  if (card) card.style.display = '';
+  const tbody = document.getElementById('saved-tbody');
+  if (!tbody) return;
+  let row = document.getElementById('saved-row-' + record.id);
+  const games = JSON.parse(record.games_json || '[]');
+  const delta = (record.end_rating && record.start_rating) ? record.end_rating - record.start_rating : null;
+  const deltaHtml = delta !== null
+    ? `<span class="${delta>0?'text-success':delta<0?'text-danger':''}">${delta>0?'+':''}${delta}</span>` : '—';
+  const html = `
+    <td class="fw-semibold">${escHtml(record.name)}</td>
+    <td class="text-center text-muted">${games.length}</td>
+    <td class="text-center">${record.start_rating || '—'}</td>
+    <td class="text-center">${record.end_rating || '—'}</td>
+    <td class="text-center fw-semibold">${deltaHtml}</td>
+    <td class="text-muted small">${(record.created_at||'').slice(0,10)}</td>
+    <td class="d-flex gap-1">
+      <button class="btn btn-outline-primary btn-sm py-0 px-2" onclick="loadSavedTournament(${record.id})">Load</button>
+      <button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="deleteSavedTournament(${record.id})">✕</button>
+    </td>`;
+  if (row) {
+    row.innerHTML = html;
+  } else {
+    row = document.createElement('tr');
+    row.id = 'saved-row-' + record.id;
+    row.innerHTML = html;
+    tbody.prepend(row);
+  }
+}
+
+function scheduleSave(ti) {
+  const t = tournaments[ti];
+  if (!t) return;
+  t.saveStatus = 'saving';
+  const el = document.getElementById(`save-status-${ti}`);
+  if (el) { el.textContent = 'Saving…'; el.className = 'small ms-auto text-muted'; }
+  clearTimeout(saveTimers[ti]);
+  saveTimers[ti] = setTimeout(() => persistTournament(ti), 800);
+}
+
+// ── Mutations ─────────────────────────────────────────────────────────────────
+async function addTournament() {
+  if (!document.getElementById('start-rating').value) {
+    alert('Look up your USCF ID first (or enter your rating manually).'); return;
+  }
+  const t = { name: 'Tournament ' + (tournaments.length + 1), games: [], savedId: null, saveStatus: 'saving' };
+  tournaments.push(t);
+  renderAll();
+  setTimeout(() => {
+    const cards = document.querySelectorAll('[id^="tcard-"]');
+    if (cards.length) cards[cards.length-1].scrollIntoView({behavior:'smooth', block:'start'});
+  }, 50);
+  await persistTournament(tournaments.length - 1);
+}
+
+function removeTournament(ti) { tournaments.splice(ti, 1); renderAll(); }
+
+function addGame(ti) {
+  const ratEl   = document.getElementById(`t${ti}-rat`);
+  const name    = document.getElementById(`t${ti}-opp`).value.trim();
+  const rating  = parseInt(ratEl.value) || null;
+  const result  = document.getElementById(`t${ti}-res`).value;
+  const provisional = ratEl._provisional !== undefined ? ratEl._provisional : null;
+  const gamesCount  = ratEl._games !== undefined ? ratEl._games : null;
+  ratEl._provisional = undefined; ratEl._games = undefined;
+  tournaments[ti].games.push({ name, rating, result, provisional, games: gamesCount });
+  document.getElementById(`t${ti}-opp`).value = '';
+  ratEl.value = '';
+  document.getElementById(`t${ti}-sugg`).style.display = 'none';
+  renderAll();
+  scheduleSave(ti);
+}
+
+function removeGame(ti, gi)    { tournaments[ti].games.splice(gi, 1); renderAll(); scheduleSave(ti); }
+function updateRating(ti,gi,v) { tournaments[ti].games[gi].rating = parseInt(v)||null; renderAll(); scheduleSave(ti); }
+function updateResult(ti,gi,v) { tournaments[ti].games[gi].result = v; renderAll(); scheduleSave(ti); }
+
+function loadSavedTournament(id) {
+  const saved = savedTournamentsData.find(t => t.id === id);
+  if (!saved) return;
+  if (tournaments.some(t => t.savedId === id)) {
+    alert('This tournament is already open.'); return;
+  }
+  if (!document.getElementById('start-rating').value) {
+    alert('Enter your starting rating first.'); return;
+  }
+  const games = JSON.parse(saved.games_json);
+  tournaments.push({ name: saved.name, games, savedId: id, saveStatus: 'saved' });
+  renderAll();
+  setTimeout(() => {
+    const cards = document.querySelectorAll('[id^="tcard-"]');
+    if (cards.length) cards[cards.length-1].scrollIntoView({behavior:'smooth', block:'start'});
+  }, 50);
+}
+
+// ── Opponent search — verifies provisional status from USCF ──────────────────
+function searchOpp(ti, q) {
+  clearTimeout(searchTimers[ti]);
+  const box = document.getElementById(`t${ti}-sugg`);
+  if (q.length < 2) { box.style.display='none'; return; }
+  searchTimers[ti] = setTimeout(async () => {
+    try {
+      const r    = await fetch('/api/public/player-search?name='+encodeURIComponent(q));
+      const data = await r.json();
+      if (!data.length) { box.style.display='none'; return; }
+      box.innerHTML = data.slice(0,8).map(p => {
+        const rat = p.uscf_rating || p.rating || '';
+        const uid = p.uscf_id || '';
+        return `<button type="button" class="list-group-item list-group-item-action small"
+          onclick="selectOpp(${ti},'${p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',${rat||'null'},'${uid}')"
+          >${escHtml(p.name)}${rat?' ('+rat+')':''}${uid?' · ID:'+uid:''}</button>`;
+      }).join('');
+      box.style.display = 'block';
+    } catch(e) { box.style.display='none'; }
+  }, 300);
+}
+
+async function selectOpp(ti, name, rating, uscfId) {
+  document.getElementById(`t${ti}-opp`).value = name;
+  document.getElementById(`t${ti}-rat`).value = rating || '';
+  document.getElementById(`t${ti}-sugg`).style.display = 'none';
+  if (uscfId) {
+    try {
+      const r    = await fetch('/api/uscf-player-status?uscf_id='+encodeURIComponent(uscfId));
+      const data = await r.json();
+      if (!data.error) {
+        document.getElementById(`t${ti}-rat`)._provisional = data.provisional;
+        document.getElementById(`t${ti}-rat`)._games       = data.games;
+        const liveRat = data.live_rating || data.rating;
+        if (liveRat) document.getElementById(`t${ti}-rat`).value = liveRat;
+      }
+    } catch(e) {}
+  }
+}
+
+document.addEventListener('click', e => {
+  tournaments.forEach((_, ti) => {
+    const sugg = document.getElementById(`t${ti}-sugg`);
+    const inp  = document.getElementById(`t${ti}-opp`);
+    if (sugg && inp && !inp.contains(e.target) && !sugg.contains(e.target))
+      sugg.style.display = 'none';
+  });
+});
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function deleteSavedTournament(id) {
+  if (!confirm('Delete this saved tournament?')) return;
+  const resp = await fetch('/api/uscf-tournaments/' + id, {method: 'DELETE'});
+  if (resp.ok) {
+    // Also close if currently open
+    const idx = tournaments.findIndex(t => t.savedId === id);
+    if (idx !== -1) { tournaments.splice(idx, 1); renderAll(); }
+    const row = document.getElementById('saved-row-' + id);
+    if (row) row.remove();
+    // Remove from local data
+    const di = savedTournamentsData.findIndex(t => t.id === id);
+    if (di !== -1) savedTournamentsData.splice(di, 1);
+  }
+}
+</script>
+{% endblock %}
