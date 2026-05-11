@@ -285,7 +285,7 @@ function renderGamesTable(ti, games, myRating, calc) {
                     : g.provisional === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
                     : '';
     const nameHtml = g.uscfId
-      ? `<a href="https://www.uschess.org/msa/MbrDtlMain.php?${encodeURIComponent(g.uscfId)}" target="_blank" rel="noopener">${escHtml(g.name||'—')}</a>`
+      ? `<a href="https://ratings.uschess.org/player/${encodeURIComponent(g.uscfId)}" target="_blank" rel="noopener">${escHtml(g.name||'—')}</a>`
       : escHtml(g.name||'—');
     return `<tr>
       <td>${gi+1}</td>
