@@ -29,7 +29,7 @@
       <div class="col-sm-3">
         <label class="form-label small">Prior Rated Games</label>
         <div class="input-group">
-          <input type="number" id="prior-games" class="form-control" min="0" placeholder="—" oninput="renderAll()">
+          <input type="text" id="prior-games" class="form-control" placeholder="—" oninput="renderAll()">
           <span class="input-group-text" id="prov-badge" style="display:none"></span>
         </div>
         <div class="form-text">Verified from USCF when you look up your ID.</div>
@@ -122,11 +122,12 @@ async function lookupMyUSCF() {
     // Use live rating if available, fall back to monthly
     const displayRating = data.live_rating || data.rating || '';
     document.getElementById('start-rating').value = displayRating;
-    // For provisional players the API returns gamesPlayed; established players don't get it
-    document.getElementById('prior-games').value = data.games !== null ? data.games : '';
-
     const isProvisional = data.provisional;
     _myIsEstablished = !isProvisional;
+    // API only returns gamesPlayed for provisional players
+    document.getElementById('prior-games').value = isProvisional
+      ? (data.games !== null ? data.games : '')
+      : '>26';
     pb.textContent   = isProvisional ? 'Provisional' : 'Established';
     pb.className     = 'input-group-text small ' + (isProvisional ? 'text-warning bg-warning-subtle' : 'text-success bg-success-subtle');
     pb.style.display = '';
