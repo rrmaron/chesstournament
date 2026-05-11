@@ -284,9 +284,12 @@ function renderGamesTable(ti, games, myRating, calc) {
     const provBadge = g.provisional === true  ? ' <span class="badge bg-warning text-dark" style="font-size:0.65rem">P</span>'
                     : g.provisional === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
                     : '';
+    const nameHtml = g.uscfId
+      ? `<a href="https://www.uschess.org/msa/MbrDtlMain.php?${encodeURIComponent(g.uscfId)}" target="_blank" rel="noopener">${escHtml(g.name||'—')}</a>`
+      : escHtml(g.name||'—');
     return `<tr>
       <td>${gi+1}</td>
-      <td class="small">${escHtml(g.name||'—')}${provBadge}</td>
+      <td class="small">${nameHtml}${provBadge}</td>
       <td><input type="number" class="form-control form-control-sm" style="max-width:80px"
                  value="${g.rating||''}" min="100" max="3000"
                  onchange="updateRating(${ti},${gi},this.value)"></td>
@@ -505,8 +508,9 @@ function addGame(ti) {
   const result  = document.getElementById(`t${ti}-res`).value;
   const provisional = ratEl._provisional !== undefined ? ratEl._provisional : null;
   const gamesCount  = ratEl._games !== undefined ? ratEl._games : null;
-  ratEl._provisional = undefined; ratEl._games = undefined;
-  tournaments[ti].games.push({ name, rating, result, provisional, games: gamesCount });
+  const uscfId      = ratEl._uscfId !== undefined ? ratEl._uscfId : null;
+  ratEl._provisional = undefined; ratEl._games = undefined; ratEl._uscfId = undefined;
+  tournaments[ti].games.push({ name, rating, result, provisional, games: gamesCount, uscfId });
   document.getElementById(`t${ti}-opp`).value = '';
   ratEl.value = '';
   document.getElementById(`t${ti}-sugg`).style.display = 'none';
@@ -575,6 +579,7 @@ async function selectOpp(ti, name, rating, uscfId) {
       if (!data.error) {
         document.getElementById(`t${ti}-rat`)._provisional = data.provisional;
         document.getElementById(`t${ti}-rat`)._games       = data.games;
+        document.getElementById(`t${ti}-rat`)._uscfId      = uscfId || null;
         const liveRat = data.live_rating || data.rating;
         if (liveRat) document.getElementById(`t${ti}-rat`).value = liveRat;
       }
