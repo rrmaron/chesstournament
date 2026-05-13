@@ -332,7 +332,8 @@ function renderAll() {
       </div>
       <div class="col-sm-3">
         <input type="number" id="t${ti}-rat" class="form-control form-control-sm"
-               placeholder="Live ${primLabel} rating" min="100" max="3000">
+               placeholder="Live ${primLabel} rating" min="100" max="3000"
+               oninput="this.classList.remove('border-info');this.title=''">
       </div>
       <div class="col-sm-2">
         <select id="t${ti}-res" class="form-select form-select-sm">
@@ -673,11 +674,11 @@ function addGame(ti) {
   const ratingsMap   = ratEl._ratings     !== undefined ? ratEl._ratings     : {};
   ratEl._provisional = ratEl._games = ratEl._uscfId = ratEl._ratings = undefined;
 
-  // Merge manually typed primary value into map
+  // Always use the displayed input value for the primary type (allows manual override of live rating)
   const primaryType = primaryTypeOf(ti);
   const manualVal   = parseInt(ratEl.value) || null;
-  if (manualVal && !ratingsMap[primaryType]) ratingsMap[primaryType] = manualVal;
-  const primaryRating = ratingsMap[primaryType] || manualVal || null;
+  if (manualVal) ratingsMap[primaryType] = manualVal;
+  const primaryRating = ratingsMap[primaryType] || null;
 
   tournaments[ti].games.push({
     name, rating: primaryRating, result, provisional, games: gamesCount, uscfId,
@@ -777,13 +778,18 @@ async function selectOpp(ti, name, rating, uscfId) {
           } catch(e) {}
         }
         ratEl._ratings = map;
-        // Fill input with primary type rating
+        // Fill input with primary type rating; user can edit to override
         const primary = map[primaryTypeOf(ti)] || data.live_rating || data.rating;
-        if (primary) ratEl.value = primary;
+        if (primary) {
+          ratEl.value = primary;
+          ratEl.title = 'Live rating fetched — edit to override';
+          ratEl.classList.add('border-info');
+        }
       }
     } catch(e) {}
   }
 }
+
 
 document.addEventListener('click', e => {
   tournaments.forEach((_, ti) => {
