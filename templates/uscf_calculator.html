@@ -137,23 +137,28 @@ let myPriorGames     = { standard: null, quick: null, blitz: null, fide: null };
 
 const RATING_TYPE_LABELS = { standard: 'USCF', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
 
-// Track which starting rating fields the user has manually edited this session
-const _manualRatingFields = new Set();
+// Last live-fetched starting ratings — restored when adding a new tournament
+const _liveRatings = { standard: null, quick: null, blitz: null, fide: null };
 
 function markManualRating(inputId, srcId) {
-  _manualRatingFields.add(inputId);
   const src = document.getElementById(srcId);
   if (src) src.textContent = 'manual';
 }
 
 function setLiveRating(inputId, srcId, value) {
-  if (_manualRatingFields.has(inputId)) return; // don't overwrite user's edit
   const el = document.getElementById(inputId);
   if (el && value) {
     el.value = value;
     const src = document.getElementById(srcId);
     if (src) src.textContent = 'live';
   }
+}
+
+function restoreLiveRatings() {
+  if (_liveRatings.standard) setLiveRating('start-rating',       'start-rating-src',       _liveRatings.standard);
+  if (_liveRatings.quick)    setLiveRating('start-rating-quick', 'start-rating-quick-src', _liveRatings.quick);
+  if (_liveRatings.blitz)    setLiveRating('start-rating-blitz', 'start-rating-blitz-src', _liveRatings.blitz);
+  if (_liveRatings.fide)     setLiveRating('start-rating-fide',  'start-rating-fide-src',  _liveRatings.fide);
 }
 
 // ── Per-type helpers ───────────────────────────────────────────────────────────
@@ -205,10 +210,13 @@ async function lookupMyUSCF() {
       st.className   = 'form-text text-danger';
       return;
     }
-    // Use live rating if available; skip fields the user has manually edited
-    setLiveRating('start-rating',       'start-rating-src',       data.live_rating || data.rating || '');
-    setLiveRating('start-rating-quick', 'start-rating-quick-src', data.live_quick  || data.quick  || '');
-    setLiveRating('start-rating-blitz', 'start-rating-blitz-src', data.live_blitz  || data.blitz  || '');
+    // Save live values then populate fields (always overwrites, including manual edits)
+    _liveRatings.standard = data.live_rating || data.rating || null;
+    _liveRatings.quick    = data.live_quick  || data.quick  || null;
+    _liveRatings.blitz    = data.live_blitz  || data.blitz  || null;
+    setLiveRating('start-rating',       'start-rating-src',       _liveRatings.standard);
+    setLiveRating('start-rating-quick', 'start-rating-quick-src', _liveRatings.quick);
+    setLiveRating('start-rating-blitz', 'start-rating-blitz-src', _liveRatings.blitz);
     const isProvisional = data.provisional;
     _myIsEstablished = !isProvisional;
     // Track per-type prior game counts for provisional status
@@ -687,6 +695,9 @@ async function addTournament() {
   if (!document.getElementById('start-rating').value) {
     alert('Look up your USCF ID first (or enter your rating manually).'); return;
   }
+  // Reset to live ratings so new tournament starts from live baseline
+  restoreLiveRatings();
+  renderAll();
   const t = { name: 'Tournament ' + (tournaments.length + 1), games: [], savedId: null, saveStatus: 'saving', ratingTypes: ['standard'] };
   tournaments.push(t);
   renderAll();
