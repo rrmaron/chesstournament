@@ -682,7 +682,8 @@ async function persistTournament(ti) {
   const t = tournaments[ti];
   if (!t) return;
   const { r: rBefore, g: gBefore } = ratingsBefore(ti);
-  const calc = (rBefore && t.games.length) ? calcTournament(rBefore, gBefore, t.games) : null;
+  const primType = primaryTypeOf(ti);
+  const calc = (rBefore && t.games.length) ? calcTournamentForType(rBefore, gBefore, t.games, primType) : null;
   const payload = {
     name: t.name,
     tournament_type: (t.ratingTypes || ['standard']).join(','),
