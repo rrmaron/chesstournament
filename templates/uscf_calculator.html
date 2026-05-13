@@ -33,24 +33,40 @@
         <button class="btn btn-primary w-100" onclick="addTournament()">+ Add Tournament</button>
       </div>
       <div class="col-6 col-sm-3">
-        <label class="form-label small">Standard Rating</label>
-        <input type="number" id="start-rating" class="form-control" min="100" max="3000"
-               value="{{ profile.uscf_rating or '' }}" placeholder="—" oninput="renderAll()">
+        <label class="form-label small d-flex justify-content-between">
+          Standard Rating
+          <span id="start-rating-src" class="text-muted" style="font-size:0.7rem"></span>
+        </label>
+        <input type="number" id="start-rating" class="form-control" min="0" max="9999"
+               value="{{ profile.uscf_rating or '' }}" placeholder="—"
+               oninput="markManualRating('start-rating','start-rating-src');renderAll()">
       </div>
       <div class="col-6 col-sm-3">
-        <label class="form-label small">Quick Rating</label>
-        <input type="number" id="start-rating-quick" class="form-control" min="100" max="3000"
-               value="{{ profile.uscf_quick_rating or '' }}" placeholder="—" oninput="renderAll()">
+        <label class="form-label small d-flex justify-content-between">
+          Quick Rating
+          <span id="start-rating-quick-src" class="text-muted" style="font-size:0.7rem"></span>
+        </label>
+        <input type="number" id="start-rating-quick" class="form-control" min="0" max="9999"
+               value="{{ profile.uscf_quick_rating or '' }}" placeholder="—"
+               oninput="markManualRating('start-rating-quick','start-rating-quick-src');renderAll()">
       </div>
       <div class="col-6 col-sm-3">
-        <label class="form-label small">Blitz Rating</label>
-        <input type="number" id="start-rating-blitz" class="form-control" min="100" max="3000"
-               value="{{ profile.uscf_blitz_rating or '' }}" placeholder="—" oninput="renderAll()">
+        <label class="form-label small d-flex justify-content-between">
+          Blitz Rating
+          <span id="start-rating-blitz-src" class="text-muted" style="font-size:0.7rem"></span>
+        </label>
+        <input type="number" id="start-rating-blitz" class="form-control" min="0" max="9999"
+               value="{{ profile.uscf_blitz_rating or '' }}" placeholder="—"
+               oninput="markManualRating('start-rating-blitz','start-rating-blitz-src');renderAll()">
       </div>
       <div class="col-6 col-sm-3">
-        <label class="form-label small">FIDE Rating</label>
-        <input type="number" id="start-rating-fide" class="form-control" min="100" max="3000"
-               value="{{ profile.fide_rating or '' }}" placeholder="—" oninput="renderAll()">
+        <label class="form-label small d-flex justify-content-between">
+          FIDE Rating
+          <span id="start-rating-fide-src" class="text-muted" style="font-size:0.7rem"></span>
+        </label>
+        <input type="number" id="start-rating-fide" class="form-control" min="0" max="9999"
+               value="{{ profile.fide_rating or '' }}" placeholder="—"
+               oninput="markManualRating('start-rating-fide','start-rating-fide-src');renderAll()">
       </div>
     </div>
   </div>
@@ -121,6 +137,25 @@ let myPriorGames     = { standard: null, quick: null, blitz: null, fide: null };
 
 const RATING_TYPE_LABELS = { standard: 'USCF', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
 
+// Track which starting rating fields the user has manually edited this session
+const _manualRatingFields = new Set();
+
+function markManualRating(inputId, srcId) {
+  _manualRatingFields.add(inputId);
+  const src = document.getElementById(srcId);
+  if (src) src.textContent = 'manual';
+}
+
+function setLiveRating(inputId, srcId, value) {
+  if (_manualRatingFields.has(inputId)) return; // don't overwrite user's edit
+  const el = document.getElementById(inputId);
+  if (el && value) {
+    el.value = value;
+    const src = document.getElementById(srcId);
+    if (src) src.textContent = 'live';
+  }
+}
+
 // ── Per-type helpers ───────────────────────────────────────────────────────────
 function gameRating(g, rType) {
   if (g.ratings && g.ratings[rType] != null) return g.ratings[rType];
@@ -170,10 +205,10 @@ async function lookupMyUSCF() {
       st.className   = 'form-text text-danger';
       return;
     }
-    // Use live rating if available, fall back to monthly
-    document.getElementById('start-rating').value       = data.live_rating || data.rating || '';
-    document.getElementById('start-rating-quick').value = data.live_quick  || data.quick  || '';
-    document.getElementById('start-rating-blitz').value = data.live_blitz  || data.blitz  || '';
+    // Use live rating if available; skip fields the user has manually edited
+    setLiveRating('start-rating',       'start-rating-src',       data.live_rating || data.rating || '');
+    setLiveRating('start-rating-quick', 'start-rating-quick-src', data.live_quick  || data.quick  || '');
+    setLiveRating('start-rating-blitz', 'start-rating-blitz-src', data.live_blitz  || data.blitz  || '');
     const isProvisional = data.provisional;
     _myIsEstablished = !isProvisional;
     // Track per-type prior game counts for provisional status
