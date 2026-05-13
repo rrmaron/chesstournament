@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "mychesspairings",
+  "project_id": "d1b3f2f2-1a80-4b66-ac45-3df67ebfa88f"
+}
