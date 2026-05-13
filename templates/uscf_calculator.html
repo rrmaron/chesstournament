@@ -666,6 +666,14 @@ async function selectOpp(ti, name, rating, uscfId) {
         if (data.live_rating || data.rating) map.standard = data.live_rating || data.rating;
         if (data.live_quick  || data.quick)  map.quick    = data.live_quick  || data.quick;
         if (data.live_blitz  || data.blitz)  map.blitz    = data.live_blitz  || data.blitz;
+        // Auto-fetch FIDE rating when FIDE checkbox is checked and player has a FIDE ID
+        if (ratingTypesOf(ti).includes('fide') && data.fide_id) {
+          try {
+            const fr = await fetch('/api/player-fide-rating?fide_id='+encodeURIComponent(data.fide_id));
+            const fd = await fr.json();
+            if (fd.fide_rating) map.fide = fd.fide_rating;
+          } catch(e) {}
+        }
         ratEl._ratings = map;
         // Fill input with primary type rating
         const primary = map[primaryTypeOf(ti)] || data.live_rating || data.rating;

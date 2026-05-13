@@ -703,9 +703,29 @@ async def uscf_player_status(uscf_id: str = "", _user: dict = Depends(require_lo
             "live_blitz":        live_blitz or blitz.get("rating") or 0,
             "blitz_provisional": blitz.get("isProvisional", False),
             "blitz_games":       blitz.get("gamesPlayed"),
+            "fide_id":           m.get("fideId") or "",
         }
     except Exception:
         return {"error": "Lookup failed"}
+
+
+@app.get("/api/player-fide-rating")
+async def player_fide_rating(fide_id: str = "", _user: dict = Depends(require_login)):
+    fide_id = fide_id.strip()
+    if not fide_id:
+        return {"fide_rating": 0, "fide_id": ""}
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
+        if r.status_code == 200:
+            m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
+            if m:
+                return {"fide_rating": int(m.group(1)), "fide_id": fide_id}
+    except Exception:
+        pass
+    return {"fide_rating": 0, "fide_id": fide_id}
+
 
 def _suggestions_html(results: list) -> str:
     if not results:
