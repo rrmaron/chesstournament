@@ -22,11 +22,6 @@
         <div id="uscf-lookup-status" class="form-text"></div>
       </div>
       <div class="col-sm-3">
-        <label class="form-label small">Live USCF Regular Rating</label>
-        <input type="number" id="start-rating" class="form-control" min="100" max="3000"
-               value="{{ profile.uscf_rating or '' }}" placeholder="e.g. 1500" oninput="renderAll()">
-      </div>
-      <div class="col-sm-3">
         <label class="form-label small">Prior Rated Games</label>
         <div class="input-group">
           <input type="text" id="prior-games" class="form-control" placeholder="—" oninput="renderAll()">
@@ -36,6 +31,26 @@
       </div>
       <div class="col-sm-2 d-flex align-items-end">
         <button class="btn btn-primary w-100" onclick="addTournament()">+ Add Tournament</button>
+      </div>
+      <div class="col-6 col-sm-3">
+        <label class="form-label small">Standard Rating</label>
+        <input type="number" id="start-rating" class="form-control" min="100" max="3000"
+               value="{{ profile.uscf_rating or '' }}" placeholder="—" oninput="renderAll()">
+      </div>
+      <div class="col-6 col-sm-3">
+        <label class="form-label small">Quick Rating</label>
+        <input type="number" id="start-rating-quick" class="form-control" min="100" max="3000"
+               value="{{ profile.uscf_quick_rating or '' }}" placeholder="—" oninput="renderAll()">
+      </div>
+      <div class="col-6 col-sm-3">
+        <label class="form-label small">Blitz Rating</label>
+        <input type="number" id="start-rating-blitz" class="form-control" min="100" max="3000"
+               value="{{ profile.uscf_blitz_rating or '' }}" placeholder="—" oninput="renderAll()">
+      </div>
+      <div class="col-6 col-sm-3">
+        <label class="form-label small">FIDE Rating</label>
+        <input type="number" id="start-rating-fide" class="form-control" min="100" max="3000"
+               value="{{ profile.fide_rating or '' }}" placeholder="—" oninput="renderAll()">
       </div>
     </div>
   </div>
@@ -102,8 +117,29 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
 let tournaments      = [];
 let searchTimers     = {};
 let _myIsEstablished = null; // set by USCF lookup; null = unknown
+let myPriorGames     = { standard: null, quick: null, blitz: null, fide: null };
 
 const RATING_TYPE_LABELS = { standard: 'USCF', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
+
+// ── Per-type helpers ───────────────────────────────────────────────────────────
+function gameRating(g, rType) {
+  if (g.ratings && g.ratings[rType] != null) return g.ratings[rType];
+  if (rType === 'standard') return g.rating || null;
+  return null;
+}
+
+function myRatingFor(rType) {
+  const ids = { standard: 'start-rating', quick: 'start-rating-quick', blitz: 'start-rating-blitz', fide: 'start-rating-fide' };
+  const el = document.getElementById(ids[rType]);
+  return el ? (parseInt(el.value) || null) : null;
+}
+
+function effectivePriorGamesFor(rType) {
+  if (_myIsEstablished === true) return Infinity;
+  const pg = myPriorGames[rType];
+  if (pg !== null && pg !== undefined) return pg;
+  return effectivePriorGames();
+}
 
 function ratingTypesOf(ti) { return (tournaments[ti] && tournaments[ti].ratingTypes) || ['standard']; }
 function primaryTypeOf(ti) { return ratingTypesOf(ti)[0] || 'standard'; }
@@ -135,10 +171,16 @@ async function lookupMyUSCF() {
       return;
     }
     // Use live rating if available, fall back to monthly
-    const displayRating = data.live_rating || data.rating || '';
-    document.getElementById('start-rating').value = displayRating;
+    document.getElementById('start-rating').value       = data.live_rating || data.rating || '';
+    document.getElementById('start-rating-quick').value = data.live_quick  || data.quick  || '';
+    document.getElementById('start-rating-blitz').value = data.live_blitz  || data.blitz  || '';
     const isProvisional = data.provisional;
     _myIsEstablished = !isProvisional;
+    // Track per-type prior game counts for provisional status
+    myPriorGames.standard = isProvisional ? (data.games ?? null) : Infinity;
+    myPriorGames.quick    = data.quick_provisional ? (data.quick_games ?? null) : (data.live_quick || data.quick ? Infinity : null);
+    myPriorGames.blitz    = data.blitz_provisional ? (data.blitz_games ?? null) : (data.live_blitz || data.blitz ? Infinity : null);
+    myPriorGames.fide     = null; // FIDE uses same established status as standard
     // API only returns gamesPlayed for provisional players
     document.getElementById('prior-games').value = isProvisional
       ? (data.games !== null ? data.games : '')
@@ -178,8 +220,9 @@ function perfRating(games, actual) {
   return Math.round(avg + 400 * Math.log10(actual / (n - actual)));
 }
 
-function calcTournament(myRating, priorGames, games) {
-  const valid = games.filter(g => g.rating && !g.bye);
+function calcTournamentForType(myRating, priorGames, games, rType) {
+  if (!myRating) return null;
+  const valid = games.filter(g => !g.bye && gameRating(g, rType) != null);
   if (!valid.length) return null;
   const m = valid.length;
   const provisional = priorGames < 26;
@@ -187,15 +230,15 @@ function calcTournament(myRating, priorGames, games) {
     ? Math.max(32, Math.round(800 / (Math.min(priorGames, 50) + m)))
     : uscfK(myRating);
   let actual = 0, exp = 0;
-  for (const g of valid) { actual += parseFloat(g.result); exp += Ep(myRating, g.rating); }
+  for (const g of valid) { actual += parseFloat(g.result); exp += Ep(myRating, gameRating(g, rType)); }
   const baseChange = Math.round(K * (actual - exp));
   const threshold  = 10 * Math.sqrt(m);
   const bonus      = (!provisional && baseChange > threshold) ? Math.round(baseChange - threshold) : 0;
   const totalChange = baseChange + bonus;
   return {
-    provisional, m, actual, exp: Math.round(exp * 100) / 100,
-    Rp: perfRating(valid, actual), K,
-    threshold: Math.round(threshold * 10) / 10,
+    rType, provisional, m, actual, exp: Math.round(exp * 100) / 100,
+    Rp: perfRating(valid.map(g => ({...g, rating: gameRating(g, rType)})), actual),
+    K, threshold: Math.round(threshold * 10) / 10,
     baseChange, bonus, totalChange,
     newRating: myRating + totalChange,
     newPrior: priorGames + m,
@@ -210,27 +253,48 @@ function effectivePriorGames() {
 }
 
 function renderAll() {
-  const startRating = parseInt(document.getElementById('start-rating').value) || null;
-  const priorGames  = effectivePriorGames();
-  const container   = document.getElementById('tournaments-container');
+  const container = document.getElementById('tournaments-container');
+  const ALL_TYPES = ['standard', 'quick', 'blitz', 'fide'];
 
-  let curRating = startRating, curGames = priorGames;
+  // Per-type current state
+  const curRatings = {}, curPrior = {};
+  ALL_TYPES.forEach(rt => {
+    curRatings[rt] = myRatingFor(rt);
+    curPrior[rt]   = effectivePriorGamesFor(rt);
+  });
+
   const progression = [];
 
   container.innerHTML = tournaments.map((t, ti) => {
-    const rBefore = curRating, gBefore = curGames;
-    const calc = (curRating && t.games.length > 0) ? calcTournament(curRating, curGames, t.games) : null;
-    if (calc) { curRating = calc.newRating; curGames = calc.newPrior; progression.push({name: t.name, before: rBefore, calc}); }
+    const types      = ratingTypesOf(ti);
+    const prevRatings = {...curRatings};
+    const prevPrior   = {...curPrior};
 
-    let badge = '';
-    if (calc) {
-      const s = calc.totalChange > 0 ? 'success' : calc.totalChange < 0 ? 'danger' : 'secondary';
-      badge = `<span class="badge bg-${s} ms-2">${calc.totalChange > 0 ? '+' : ''}${calc.totalChange} → ${calc.newRating}</span>`;
-    }
+    // Calc per type
+    const calcs = {};
+    types.forEach(rt => {
+      calcs[rt] = calcTournamentForType(curRatings[rt], curPrior[rt], t.games, rt);
+      if (calcs[rt]) {
+        curRatings[rt] = calcs[rt].newRating;
+        curPrior[rt]   = calcs[rt].newPrior;
+      }
+    });
 
-    const types     = ratingTypesOf(ti);
-    const primType  = types[0];
-    const primLabel = RATING_TYPE_LABELS[primType] || primType;
+    progression.push({ name: t.name, types, calcs, before: prevRatings, beforePrior: prevPrior });
+
+    // Build header badges, one per type
+    const badgeParts = types.filter(rt => calcs[rt]).map(rt => {
+      const c = calcs[rt], lbl = RATING_TYPE_LABELS[rt];
+      const s = c.totalChange > 0 ? 'success' : c.totalChange < 0 ? 'danger' : 'secondary';
+      return `<span class="badge bg-${s} ms-1">${lbl}: ${c.totalChange > 0 ? '+' : ''}${c.totalChange} → ${c.newRating}</span>`;
+    });
+
+    const primCalc  = calcs[types[0]];
+    const primLabel = RATING_TYPE_LABELS[types[0]] || types[0];
+    const statusInfo = primCalc
+      ? `<small class="text-muted">${primCalc.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'} · K=${primCalc.K}</small>`
+      : '';
+
     const typeCheckboxes = ['standard','quick','blitz','fide'].map(rt =>
       `<label class="form-check-label d-flex align-items-center gap-1 small" style="cursor:pointer">
          <input type="checkbox" class="form-check-input" style="margin-top:0"
@@ -248,8 +312,8 @@ function renderAll() {
       <span class="text-muted" style="font-size:0.75rem">Rated:</span>
       ${typeCheckboxes}
     </div>
-    ${calc ? `<small class="text-muted">${calc.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'} · K=${calc.K} · threshold=${calc.threshold}</small>` : ''}
-    ${badge}
+    ${statusInfo}
+    ${badgeParts.join('')}
     <small id="save-status-${ti}" class="small ms-auto ${t.saveStatus==='saved'?'text-success':t.saveStatus==='error'?'text-danger':'text-muted'}">
       ${t.saveStatus==='saved'?'✓ Saved':t.saveStatus==='saving'?'Saving…':t.saveStatus==='error'?'⚠ Save failed':''}
     </small>
@@ -283,27 +347,22 @@ function renderAll() {
         <button class="btn btn-outline-secondary btn-sm" onclick="addBye(${ti},1)">+ Full Bye</button>
       </div>
     </div>
-    ${renderGamesTable(ti, t.games, rBefore, calc)}
-    ${calc ? renderBreakdown(calc) : ''}
+    ${renderGamesTable(ti, t.games, prevRatings, calcs)}
+    ${renderBreakdown(calcs, types)}
   </div>
 </div>`;
   }).join('');
 
-  renderSummary(progression, startRating, priorGames, curRating, curGames);
+  renderSummary(progression, curRatings, curPrior);
 }
 
-function renderGamesTable(ti, games, myRating, calc) {
+function renderGamesTable(ti, games, myRatings, calcs) {
   if (!games.length) return '<p class="text-muted small mb-2">No games added yet.</p>';
-  const K     = calc ? calc.K : null;
-  const types = ratingTypesOf(ti);
+  const types    = ratingTypesOf(ti);
   const primType = types[0];
-
-  // Helper: get a game's rating for a given type
-  function gameRating(g, rType) {
-    if (g.ratings && g.ratings[rType] != null) return g.ratings[rType];
-    if (rType === 'standard') return g.rating || null;
-    return null;
-  }
+  const primCalc = calcs[primType];
+  const K        = primCalc ? primCalc.K : null;
+  const myRating = myRatings[primType] || null;
 
   const ratingHeaders = types.map(rt =>
     `<th>Live ${RATING_TYPE_LABELS[rt]}</th>`
@@ -373,85 +432,128 @@ function renderGamesTable(ti, games, myRating, calc) {
   </table></div>`;
 }
 
-function renderBreakdown(c) {
+function renderBreakdown(calcs, types) {
   const sg  = n => n > 0 ? '+'+n : ''+n;
   const cls = n => n > 0 ? 'text-success' : n < 0 ? 'text-danger' : '';
-  const bonusCol = c.bonus > 0
-    ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-         <div class="text-muted small">Bonus</div>
-         <div class="fw-bold text-success">+${c.bonus}</div>
-         <div class="text-muted" style="font-size:0.7rem">gain ${c.baseChange} &gt; ${c.threshold}</div>
-       </div></div>` : '';
-  return `<div class="row g-2 flex-wrap mt-1">
-    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
-      <div class="text-muted small">Score</div><div class="fw-bold">${c.actual} / ${c.m}</div>
-    </div></div>
-    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-      <div class="text-muted small">Expected</div><div class="fw-bold">${c.exp}</div>
-    </div></div>
-    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-      <div class="text-muted small">Perf. Rating</div><div class="fw-bold">${c.Rp}</div>
-    </div></div>
-    <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-      <div class="text-muted small">Base Δ (K=${c.K})</div>
-      <div class="fw-bold ${cls(c.baseChange)}">${sg(c.baseChange)}</div>
-    </div></div>
-    ${bonusCol}
-    <div class="col-auto"><div class="border rounded p-2 text-center bg-light" style="min-width:100px">
-      <div class="text-muted small">New Rating</div>
-      <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
-      <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} total</div>
-    </div></div>
-  </div>`;
+  const activeTypes = types.filter(rt => calcs[rt]);
+  if (!activeTypes.length) return '';
+
+  return activeTypes.map((rt, idx) => {
+    const c   = calcs[rt];
+    const lbl = RATING_TYPE_LABELS[rt];
+    const bonusCol = c.bonus > 0
+      ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+           <div class="text-muted small">Bonus</div>
+           <div class="fw-bold text-success">+${c.bonus}</div>
+           <div class="text-muted" style="font-size:0.7rem">gain ${c.baseChange} &gt; ${c.threshold}</div>
+         </div></div>` : '';
+    const divider = idx > 0 ? ' border-top mt-2 pt-2' : ' mt-1';
+    return `<div class="${divider}">
+      ${activeTypes.length > 1 ? `<div class="text-muted small fw-semibold mb-1">${lbl} Rating</div>` : ''}
+      <div class="row g-2 flex-wrap">
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
+          <div class="text-muted small">Score</div><div class="fw-bold">${c.actual} / ${c.m}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+          <div class="text-muted small">Expected</div><div class="fw-bold">${c.exp}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+          <div class="text-muted small">Perf. Rating</div><div class="fw-bold">${c.Rp}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+          <div class="text-muted small">Base Δ (K=${c.K})</div>
+          <div class="fw-bold ${cls(c.baseChange)}">${sg(c.baseChange)}</div>
+        </div></div>
+        ${bonusCol}
+        <div class="col-auto"><div class="border rounded p-2 text-center bg-light" style="min-width:100px">
+          <div class="text-muted small">New ${lbl}</div>
+          <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
+          <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} total</div>
+        </div></div>
+      </div>
+    </div>`;
+  }).join('');
 }
 
-function renderSummary(prog, startRating, priorGames, finalRating, finalGames) {
+function renderSummary(prog, finalRatings, finalPrior) {
   const sec = document.getElementById('summary-section');
-  if (!prog.length || !startRating) { sec.classList.add('d-none'); return; }
+  if (!prog.length) { sec.classList.add('d-none'); return; }
+
+  // Collect all types that produced at least one calc result
+  const usedTypes = ['standard','quick','blitz','fide'].filter(rt =>
+    prog.some(p => p.calcs[rt])
+  );
+  if (!usedTypes.length) { sec.classList.add('d-none'); return; }
   sec.classList.remove('d-none');
-  const totalChange = finalRating - startRating;
+
+  const sg  = n => (n > 0 ? '+' : '') + n;
+  const cls = n => n > 0 ? 'text-success' : n < 0 ? 'text-danger' : '';
+
+  // Header: Tournament | Score | [Type Change | Type After] per type
+  const typeHeaders    = usedTypes.map(rt => `<th colspan="2">${RATING_TYPE_LABELS[rt]}</th>`).join('');
+  const typeSubHeaders = usedTypes.map(() => '<th>Change</th><th>After</th>').join('');
+
   const rows = prog.map(p => {
-    const c = p.calc, sg = c.totalChange > 0 ? '+' : '';
-    const cl = c.totalChange > 0 ? 'text-success' : c.totalChange < 0 ? 'text-danger' : '';
-    const bonus = c.bonus > 0 ? ` <small class="text-muted">(+${c.bonus} bonus)</small>` : '';
+    const firstCalc = p.types.map(rt => p.calcs[rt]).find(Boolean);
+    const typeCols  = usedTypes.map(rt => {
+      const c = p.calcs[rt];
+      if (!c) return '<td class="text-muted text-center">—</td><td class="text-muted text-center">—</td>';
+      const bonus = c.bonus > 0 ? `<small class="text-muted"> (+${c.bonus})</small>` : '';
+      return `<td class="fw-semibold text-center ${cls(c.totalChange)}">${sg(c.totalChange)}${bonus}</td>
+              <td class="fw-bold text-center">${c.newRating}</td>`;
+    }).join('');
     return `<tr>
       <td class="text-start">${escHtml(p.name)}</td>
-      <td>${p.before}</td><td>${c.actual} / ${c.m}</td><td>${c.Rp}</td>
-      <td class="fw-semibold ${cl}">${sg}${c.totalChange}${bonus}</td>
-      <td class="fw-bold">${c.newRating}</td>
-      <td class="text-muted small">${c.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'}</td>
+      <td class="text-center">${firstCalc ? firstCalc.actual + ' / ' + firstCalc.m : '—'}</td>
+      ${typeCols}
     </tr>`;
   }).join('');
-  const tcl = totalChange >= 0 ? 'text-success' : 'text-danger';
+
+  // Starting line per type
+  const startLine = usedTypes.map(rt => {
+    const r = prog[0]?.before[rt];
+    return r ? `${RATING_TYPE_LABELS[rt]}: <strong>${r}</strong>` : null;
+  }).filter(Boolean).join(' · ');
+
+  // Final summary per type
+  const endParts = usedTypes.map(rt => {
+    const startR = prog[0]?.before[rt];
+    const endR   = finalRatings[rt];
+    if (!startR || !endR) return null;
+    const change = endR - startR;
+    return `<span class="me-3">${RATING_TYPE_LABELS[rt]}: <span class="fw-bold ${cls(change)}">${endR}</span> <span class="text-muted small">(${sg(change)})</span></span>`;
+  }).filter(Boolean).join('');
+
+  const priorText = effectivePriorGames() === Infinity || _myIsEstablished ? 'established' : effectivePriorGames() + ' prior games';
+
   document.getElementById('summary-body').innerHTML = `
     <div class="table-responsive mb-3">
     <table class="table table-sm table-bordered text-center align-middle mb-0">
       <thead class="table-light">
-        <tr><th class="text-start">Tournament</th><th>Before</th><th>Score</th>
-            <th>Perf.</th><th>Change</th><th>After</th><th>Status</th></tr>
+        <tr><th class="text-start" rowspan="2">Tournament</th><th rowspan="2">Score</th>${typeHeaders}</tr>
+        <tr>${typeSubHeaders}</tr>
       </thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div class="text-center">
-      <span>Starting: <strong>${startRating}</strong> (${priorGames === Infinity ? 'established' : priorGames + ' prior games'})</span>
-      <span class="mx-3">→</span>
-      <span class="fs-4 fw-bold ${tcl}">${finalRating}</span>
-      <span class="text-muted ms-2">${totalChange >= 0 ? '+' : ''}${totalChange} overall${finalGames !== Infinity ? ' · ' + finalGames + ' total games' : ''}</span>
-    </div>`;
+    <div class="mb-1 text-muted small text-center">Starting (${priorText}): ${startLine}</div>
+    <div class="text-center fs-5">${endParts}</div>`;
 }
 
 // ── Auto-save helpers ─────────────────────────────────────────────────────────
 let saveTimers = {};
 
 function ratingsBefore(ti) {
-  const startRating = parseInt(document.getElementById('start-rating').value) || null;
-  const priorGames  = effectivePriorGames();
-  let r = startRating, g = priorGames;
+  const ALL_TYPES = ['standard', 'quick', 'blitz', 'fide'];
+  const curR = {}, curP = {};
+  ALL_TYPES.forEach(rt => { curR[rt] = myRatingFor(rt); curP[rt] = effectivePriorGamesFor(rt); });
   for (let i = 0; i < ti; i++) {
-    const c = (r && tournaments[i].games.length) ? calcTournament(r, g, tournaments[i].games) : null;
-    if (c) { r = c.newRating; g = c.newPrior; }
+    ratingTypesOf(i).forEach(rt => {
+      const c = calcTournamentForType(curR[rt], curP[rt], tournaments[i].games, rt);
+      if (c) { curR[rt] = c.newRating; curP[rt] = c.newPrior; }
+    });
   }
-  return { r, g };
+  const primType = primaryTypeOf(ti);
+  return { r: curR[primType], g: curP[primType] };
 }
 
 async function persistTournament(ti) {
