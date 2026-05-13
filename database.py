@@ -126,6 +126,7 @@ def init_db():
         id INTEGER PRIMARY KEY,
         user_id INTEGER NOT NULL,
         name TEXT NOT NULL,
+        tournament_type TEXT DEFAULT 'standard',
         start_rating INTEGER,
         end_rating INTEGER,
         games_json TEXT NOT NULL,
@@ -159,6 +160,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN fide_rapid_rating INTEGER",
         "ALTER TABLE users ADD COLUMN fide_blitz_rating INTEGER",
         "ALTER TABLE users ADD COLUMN player_name TEXT",
+        "ALTER TABLE user_tournaments ADD COLUMN tournament_type TEXT DEFAULT 'standard'",
     ]:
         try:
             c.execute(sql)
@@ -352,12 +354,13 @@ def update_user_profile(uid: int, uscf_id: Optional[str], fide_id: Optional[str]
 # ---------------------------------------------------------------------------
 
 def save_user_tournament(user_id: int, name: str, start_rating: Optional[int],
-                          end_rating: Optional[int], games_json: str) -> int:
+                          end_rating: Optional[int], games_json: str,
+                          tournament_type: str = 'standard') -> int:
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute(
-        "INSERT INTO user_tournaments (user_id, name, start_rating, end_rating, games_json) VALUES (?,?,?,?,?)",
-        (user_id, name.strip(), start_rating, end_rating, games_json)
+        "INSERT INTO user_tournaments (user_id, name, tournament_type, start_rating, end_rating, games_json) VALUES (?,?,?,?,?,?)",
+        (user_id, name.strip(), tournament_type, start_rating, end_rating, games_json)
     )
     new_id = c.lastrowid
     conn.commit()
@@ -367,12 +370,12 @@ def save_user_tournament(user_id: int, name: str, start_rating: Optional[int],
 def list_user_tournaments(user_id: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute(
-        "SELECT id, name, start_rating, end_rating, games_json, created_at "
+        "SELECT id, name, tournament_type, start_rating, end_rating, games_json, created_at "
         "FROM user_tournaments WHERE user_id=? ORDER BY created_at DESC",
         (user_id,)
     ).fetchall()
     conn.close()
-    cols = ["id", "name", "start_rating", "end_rating", "games_json", "created_at"]
+    cols = ["id", "name", "tournament_type", "start_rating", "end_rating", "games_json", "created_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 def update_user_contact(uid: int, email: Optional[str], phone: Optional[str]):
@@ -384,12 +387,12 @@ def update_user_contact(uid: int, email: Optional[str], phone: Optional[str]):
 
 def update_user_tournament(tournament_id: int, user_id: int, name: str,
                             start_rating: Optional[int], end_rating: Optional[int],
-                            games_json: str) -> bool:
+                            games_json: str, tournament_type: str = 'standard') -> bool:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.execute(
-        "UPDATE user_tournaments SET name=?, start_rating=?, end_rating=?, games_json=? "
+        "UPDATE user_tournaments SET name=?, tournament_type=?, start_rating=?, end_rating=?, games_json=? "
         "WHERE id=? AND user_id=?",
-        (name.strip(), start_rating, end_rating, games_json, tournament_id, user_id)
+        (name.strip(), tournament_type, start_rating, end_rating, games_json, tournament_id, user_id)
     )
     conn.commit()
     conn.close()

@@ -677,28 +677,30 @@ async def uscf_player_status(uscf_id: str = "", _user: dict = Depends(require_lo
         quick = _find_rating("Q")
         blitz = _find_rating("B")
 
-        # Live rating from sections API (most recent post-rating for regular)
-        live_rating = 0
+        # Live ratings from sections API
+        live_rating = live_quick = live_blitz = 0
         if sections_r.status_code == 200:
             for section in sections_r.json().get("items", []):
                 for record in section.get("ratingRecords", []):
-                    if record.get("ratingSource") == "R":
-                        live_rating = record.get("postRating", 0)
-                        break
-                if live_rating:
-                    break
+                    src = record.get("ratingSource")
+                    val = record.get("postRating", 0)
+                    if src == "R" and not live_rating:   live_rating = val
+                    elif src == "Q" and not live_quick:  live_quick  = val
+                    elif src == "B" and not live_blitz:  live_blitz  = val
 
         return {
             "name":              name,
             "rating":            reg.get("rating") or 0,
             "live_rating":       live_rating or reg.get("rating") or 0,
             "provisional":       reg.get("isProvisional", False),
-            "games":             reg.get("gamesPlayed"),   # only present when provisional
+            "games":             reg.get("gamesPlayed"),
             "floor":             reg.get("floor"),
             "quick":             quick.get("rating") or 0,
+            "live_quick":        live_quick or quick.get("rating") or 0,
             "quick_provisional": quick.get("isProvisional", False),
             "quick_games":       quick.get("gamesPlayed"),
             "blitz":             blitz.get("rating") or 0,
+            "live_blitz":        live_blitz or blitz.get("rating") or 0,
             "blitz_provisional": blitz.get("isProvisional", False),
             "blitz_games":       blitz.get("gamesPlayed"),
         }
@@ -1418,6 +1420,7 @@ async def api_save_tournament(request: Request, user: dict = Depends(require_log
         start_rating=body.get("start_rating"),
         end_rating=body.get("end_rating"),
         games_json=json.dumps(body.get("games", [])),
+        tournament_type=body.get("tournament_type") or "standard",
     )
     return {"id": new_id, "name": name}
 
@@ -1435,6 +1438,7 @@ async def api_update_tournament(tid: int, request: Request, user: dict = Depends
         start_rating=body.get("start_rating"),
         end_rating=body.get("end_rating"),
         games_json=json.dumps(body.get("games", [])),
+        tournament_type=body.get("tournament_type") or "standard",
     )
     if not ok:
         return JSONResponse({"error": "Not found"}, status_code=404)
