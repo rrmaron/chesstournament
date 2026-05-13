@@ -121,8 +121,8 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
 </div>
 
 <p class="text-muted small text-center">
-  Formula: K&times;(W&minus;We) + bonus when gain &gt; 10&times;&radic;m (US Chess Jan 2025).
-  Provisional K&nbsp;=&nbsp;max(32,&nbsp;800/(prior+m)). Estimates only — results may differ slightly from official USCF calculations.
+  Standard (N&gt;8): K&times;(S&minus;E) + bonus when gain &gt; 14&times;&radic;max(m,4), where K&nbsp;=&nbsp;800/(N*+m) and N*&nbsp;=&nbsp;min(N,&nbsp;50/&radic;(0.662+0.00000739&times;(2569&minus;R)<sup>2</sup>)).
+  Special (N&le;8): provisional winning expectancy method. Estimates only — results may differ slightly from official USCF calculations.
 </p>
 
 </div>
@@ -249,13 +249,25 @@ window.addEventListener('DOMContentLoaded', () => {
     lookupMyUSCF();
 });
 
-// ── USCF Formulas ─────────────────────────────────────────────────────────────
-function uscfK(rating) {
-  if (rating < 2100) return 32;
-  if (rating < 2400) return 24;
-  return 16;
+// ── USCF Formulas (per US Chess Rating System, Sept 2020) ─────────────────────
+
+// Standard winning expectancy
+function We(myR, oppR) { return 1 / (1 + Math.pow(10, (oppR - myR) / 400)); }
+
+// Provisional winning expectancy (Section 4.1)
+function pwe(R, Ri) {
+  if (R - Ri >= 400) return 1;
+  if (Ri - R >= 400) return 0;
+  return 0.5 + (R - Ri) / 800;
 }
-function Ep(myR, oppR) { return 1 / (1 + Math.pow(10, (oppR - myR) / 400)); }
+
+// Effective number of games N* (Section 3)
+function effectiveN(N, R0) {
+  const Np = R0 > 2355 ? 50 : 50 / Math.sqrt(0.662 + 0.00000739 * Math.pow(2569 - R0, 2));
+  return N === Infinity ? Np : Math.min(N, Np);
+}
+
+// Performance rating (display only, not part of USCF spec)
 function perfRating(games, actual) {
   const n = games.length, avg = games.reduce((s,g) => s + g.rating, 0) / n;
   if (actual >= n) return Math.round(avg + 400);
@@ -263,28 +275,70 @@ function perfRating(games, actual) {
   return Math.round(avg + 400 * Math.log10(actual / (n - actual)));
 }
 
+// Special rating formula — bisection on the PWe objective (Section 4.1)
+// Finds R s.t. N* · PWe(R, R0) + Σ PWe(R, Ri) = S + N*/2  ("otherwise" case)
+function calcSpecialRating(R0, Ne, oppRatings, results) {
+  const S  = results.reduce((s, r) => s + parseFloat(r), 0);
+  const Sp = S + Ne / 2;
+  function f(R) {
+    let sum = Ne * pwe(R, R0);
+    for (const ri of oppRatings) sum += pwe(R, ri);
+    return sum - Sp;
+  }
+  const all = [R0, ...oppRatings];
+  let lo = Math.min(...all) - 800, hi = Math.max(...all) + 800;
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2;
+    f(mid) <= 0 ? (lo = mid) : (hi = mid);
+  }
+  return Math.min(2700, Math.max(100, (lo + hi) / 2));
+}
+
 function calcTournamentForType(myRating, priorGames, games, rType) {
   if (!myRating) return null;
   const valid = games.filter(g => !g.bye && gameRating(g, rType) != null);
   if (!valid.length) return null;
-  const m = valid.length;
-  const provisional = priorGames < 26;
-  const K = provisional
-    ? Math.max(32, Math.round(800 / (Math.min(priorGames, 50) + m)))
-    : uscfK(myRating);
-  let actual = 0, exp = 0;
-  for (const g of valid) { actual += parseFloat(g.result); exp += Ep(myRating, gameRating(g, rType)); }
-  const baseChange = Math.round(K * (actual - exp));
-  const threshold  = 10 * Math.sqrt(m);
-  const bonus      = (!provisional && baseChange > threshold) ? Math.round(baseChange - threshold) : 0;
-  const totalChange = baseChange + bonus;
+
+  const m   = valid.length;
+  const S   = valid.reduce((sum, g) => sum + parseFloat(g.result), 0);
+  const Ne  = effectiveN(priorGames, myRating);
+  // Special formula: N ≤ 8 (Section 4.1); Standard: N > 8 (Section 4.2)
+  const isSpecial  = priorGames !== Infinity && priorGames <= 8;
+  const established = priorGames === Infinity || priorGames > 25;
+
+  let newRatingFloat, K = null, E = null, baseChange, bonus = 0, threshold = null;
+
+  if (isSpecial) {
+    const oppRatings = valid.map(g => gameRating(g, rType));
+    newRatingFloat = calcSpecialRating(myRating, Ne, oppRatings, valid.map(g => g.result));
+    baseChange     = newRatingFloat - myRating;
+  } else {
+    // K = 800 / (N* + m)  (Section 4.2)
+    K = 800 / (Ne + m);
+    E = valid.reduce((sum, g) => sum + We(myRating, gameRating(g, rType)), 0);
+    baseChange = K * (S - E);
+    // Bonus applies when m ≥ 3 and no opponent faced more than twice (assumed true here)
+    // B = 14 (effective June 2017), m' = max(m, 4)
+    const mp = Math.max(m, 4);
+    threshold  = 14 * Math.sqrt(mp);
+    bonus      = m >= 3 ? Math.max(0, baseChange - threshold) : 0;
+    newRatingFloat = myRating + baseChange + bonus;
+  }
+
+  const newRating = Math.max(100, Math.round(newRatingFloat));
   return {
-    rType, provisional, m, actual, exp: Math.round(exp * 100) / 100,
-    Rp: perfRating(valid.map(g => ({...g, rating: gameRating(g, rType)})), actual),
-    K, threshold: Math.round(threshold * 10) / 10,
-    baseChange, bonus, totalChange,
-    newRating: myRating + totalChange,
-    newPrior: priorGames + m,
+    rType, isSpecial, established,
+    Ne: Math.round(Ne * 10) / 10,
+    m, actual: S,
+    exp:       E !== null ? Math.round(E * 100) / 100 : null,
+    Rp:        perfRating(valid.map(g => ({...g, rating: gameRating(g, rType)})), S),
+    K:         K !== null ? Math.round(K * 100) / 100 : null,
+    threshold: threshold !== null ? Math.round(threshold * 10) / 10 : null,
+    baseChange: Math.round(baseChange),
+    bonus:      Math.round(bonus),
+    totalChange: Math.round(baseChange + bonus),
+    newRating,
+    newPrior: priorGames === Infinity ? Infinity : priorGames + m,
   };
 }
 
@@ -334,9 +388,14 @@ function renderAll() {
 
     const primCalc  = calcs[types[0]];
     const primLabel = RATING_TYPE_LABELS[types[0]] || types[0];
-    const statusInfo = primCalc
-      ? `<small class="text-muted">${primCalc.provisional ? '<span class="text-warning">Provisional</span>' : 'Established'} · K=${primCalc.K}</small>`
-      : '';
+    const statusInfo = primCalc ? (() => {
+      const statusLbl = primCalc.isSpecial
+        ? '<span class="text-warning">Special (N≤8)</span>'
+        : (primCalc.established ? 'Established' : 'Standard');
+      const kStr  = primCalc.K    !== null ? ` · K=${primCalc.K}` : '';
+      const neStr = ` · N*=${primCalc.Ne}`;
+      return `<small class="text-muted">${statusLbl}${neStr}${kStr}</small>`;
+    })() : '';
 
     const typeCheckboxes = ['standard','quick','blitz','fide'].map(rt =>
       `<label class="form-check-label d-flex align-items-center gap-1 small" style="cursor:pointer">
@@ -431,7 +490,7 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       </tr>`;
     }
     const primRating = gameRating(g, primType);
-    const expVal = (myRating && primRating) ? Ep(myRating, primRating) : null;
+    const expVal = (myRating && primRating) ? We(myRating, primRating) : null;
     const exp    = expVal !== null ? expVal.toFixed(3) : '—';
     let impact = '—', impactCls = '';
     if (K !== null && expVal !== null && primRating) {
@@ -485,16 +544,35 @@ function renderBreakdown(calcs, types) {
   return activeTypes.map((rt, idx) => {
     const c   = calcs[rt];
     const lbl = RATING_TYPE_LABELS[rt];
-    const bonusCol = c.bonus > 0
-      ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-           <div class="text-muted small">Bonus</div>
-           <div class="fw-bold text-success">+${c.bonus}</div>
-           <div class="text-muted" style="font-size:0.7rem">gain ${c.baseChange} &gt; ${c.threshold}</div>
-         </div></div>` : '';
     const divider = idx > 0 ? ' border-top mt-2 pt-2' : ' mt-1';
-    return `<div class="${divider}">
-      ${activeTypes.length > 1 ? `<div class="text-muted small fw-semibold mb-1">${lbl} Rating</div>` : ''}
-      <div class="row g-2 flex-wrap">
+    const header  = activeTypes.length > 1
+      ? `<div class="text-muted small fw-semibold mb-1">${lbl} Rating</div>` : '';
+
+    let inner;
+    if (c.isSpecial) {
+      inner = `
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
+          <div class="text-muted small">Score</div><div class="fw-bold">${c.actual} / ${c.m}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+          <div class="text-muted small">Perf. Rating</div><div class="fw-bold">${c.Rp}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+          <div class="text-muted small">N* (eff. games)</div><div class="fw-bold">${c.Ne}</div>
+        </div></div>
+        <div class="col-auto"><div class="border rounded p-2 text-center bg-light" style="min-width:100px">
+          <div class="text-muted small">New ${lbl}</div>
+          <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
+          <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} · special formula</div>
+        </div></div>`;
+    } else {
+      const bonusCol = c.bonus > 0
+        ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
+             <div class="text-muted small">Bonus</div>
+             <div class="fw-bold text-success">+${c.bonus}</div>
+             <div class="text-muted" style="font-size:0.7rem">${c.baseChange} &gt; ${c.threshold}</div>
+           </div></div>` : '';
+      inner = `
         <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
           <div class="text-muted small">Score</div><div class="fw-bold">${c.actual} / ${c.m}</div>
         </div></div>
@@ -504,8 +582,8 @@ function renderBreakdown(calcs, types) {
         <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
           <div class="text-muted small">Perf. Rating</div><div class="fw-bold">${c.Rp}</div>
         </div></div>
-        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
-          <div class="text-muted small">Base Δ (K=${c.K})</div>
+        <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:110px">
+          <div class="text-muted small">Base Δ · K=${c.K} · N*=${c.Ne}</div>
           <div class="fw-bold ${cls(c.baseChange)}">${sg(c.baseChange)}</div>
         </div></div>
         ${bonusCol}
@@ -513,9 +591,9 @@ function renderBreakdown(calcs, types) {
           <div class="text-muted small">New ${lbl}</div>
           <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
           <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} total</div>
-        </div></div>
-      </div>
-    </div>`;
+        </div></div>`;
+    }
+    return `<div class="${divider}">${header}<div class="row g-2 flex-wrap">${inner}</div></div>`;
   }).join('');
 }
 
