@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+import time
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,6 +42,20 @@ from fide import calculate_rating, generate_pdf as fide_generate_pdf
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+
+# ---------------------------------------------------------------------------
+# Simple in-memory TTL cache for external API responses
+# ---------------------------------------------------------------------------
+_cache: dict = {}
+
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and time.monotonic() < entry[1]:
+        return entry[0]
+    return None
+
+def _cache_set(key: str, value, ttl: int = 300):
+    _cache[key] = (value, time.monotonic() + ttl)
 
 app = FastAPI(title="MyChessRating Pairings")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -401,16 +416,21 @@ async def public_player_search(name: str = ""):
     q = name.strip()
     if len(q) < 2:
         return []
+    cached = _cache_get(f"search_{q.lower()}")
+    if cached is not None:
+        return cached
     local, live = await asyncio.gather(
         asyncio.get_event_loop().run_in_executor(None, search_uscf_members, q),
         _uscf_live_search(q),
     )
     local_ids = {p["uscf_id"] for p in local}
     merged = local + [p for p in live if p["uscf_id"] not in local_ids]
-    return [
+    result = [
         {"uscf_id": p["uscf_id"], "name": _format_uscf_name(p["name"]), "rating": p.get("rating") or 0}
         for p in merged[:12]
     ]
+    _cache_set(f"search_{q.lower()}", result, ttl=120)
+    return result
 
 
 @app.get("/api/public/player-details")
@@ -418,6 +438,11 @@ async def public_player_details(uscf_id: str = ""):
     uscf_id = uscf_id.strip()
     if not uscf_id:
         return {}
+
+    cached = _cache_get(f"pub_details_{uscf_id}")
+    if cached is not None:
+        return cached
+
     name, rating, fide_id, expiry = "", 0, "", ""
     local = lookup_uscf_member(uscf_id)
     if local:
@@ -425,51 +450,60 @@ async def public_player_details(uscf_id: str = ""):
         rating  = local.get("rating") or 0
         fide_id = local.get("fide_id") or ""
         expiry  = local.get("expiry") or ""
-    else:
+
+    api_headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Origin": "https://ratings.uschess.org"}
+    fide_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    async def _fetch_sections():
+        cached = _cache_get(f"uscf_sections_{uscf_id}")
+        if cached is not None:
+            return cached
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
-            if r.status_code == 200 and "memname" in r.text:
-                data = _parse_uscf_thin3(r.text)
-                name   = data["name"]
-                rating = data["rating"]
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers)
+            val = r.json() if r.status_code == 200 else {}
         except Exception:
-            pass
+            val = {}
+        _cache_set(f"uscf_sections_{uscf_id}", val, ttl=240)
+        return val
+
+    async def _fetch_fide():
+        if not fide_id:
+            return 0
+        cached = _cache_get(f"fide_{fide_id}")
+        if cached is not None:
+            return cached
+        try:
+            async with httpx.AsyncClient(timeout=7, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=fide_headers)
+            m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL) if r.status_code == 200 else None
+            val = int(m.group(1)) if m else 0
+        except Exception:
+            val = 0
+        _cache_set(f"fide_{fide_id}", val, ttl=600)
+        return val
+
+    sections_data, fide_rating = await asyncio.gather(_fetch_sections(), _fetch_fide())
+
     live_rating = 0
-    try:
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Origin": "https://ratings.uschess.org"}
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers)
-        if r.status_code == 200:
-            for section in r.json().get("items", []):
-                for record in section.get("ratingRecords", []):
-                    if record.get("ratingSource") == "R":
-                        live_rating = record.get("postRating", 0)
-                        break
-                if live_rating:
-                    break
-    except Exception:
-        pass
-    fide_rating = 0
-    if fide_id:
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
-            if r.status_code == 200:
-                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
-                if m:
-                    fide_rating = int(m.group(1))
-        except Exception:
-            pass
+    for section in sections_data.get("items", []):
+        for record in section.get("ratingRecords", []):
+            if record.get("ratingSource") == "R":
+                live_rating = record.get("postRating", 0)
+                break
+        if live_rating:
+            break
+
     if not name:
         return {}
-    return {
+
+    result = {
         "name": name, "uscf_id": uscf_id, "uscf_rating": rating,
         "live_uscf_rating": live_rating, "fide_id": fide_id,
         "fide_rating": fide_rating, "expiry": expiry,
     }
+    _cache_set(f"pub_details_{uscf_id}", result, ttl=240)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1089,51 +1123,75 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
         fide_id = local.get("fide_id") or ""
         expiry  = local.get("expiry") or ""
 
-    # 2. Member API for current monthly rating + sections API for live rating (parallel)
-    live_rating = 0
-    try:
-        api_headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
-            "Accept": "application/json",
-            "Origin": "https://ratings.uschess.org",
-        }
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-            member_r, sections_r = await asyncio.gather(
-                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers),
-                client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers),
-            )
-        if member_r.status_code == 200:
-            m = member_r.json()
-            if not name:
-                name = f"{m.get('firstName', '')} {m.get('lastName', '')}".strip().title()
-            for entry in m.get("ratings", []):
-                if entry.get("ratingSystem") == "R" and entry.get("rating"):
-                    rating = entry["rating"]
-                    break
-        if sections_r.status_code == 200:
-            for section in sections_r.json().get("items", []):
-                for record in section.get("ratingRecords", []):
-                    if record.get("ratingSource") == "R":
-                        live_rating = record.get("postRating", 0)
-                        break
-                if live_rating:
-                    break
-    except Exception:
-        pass
+    # 2. Member API + sections API + FIDE — all in parallel, with caching
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+        "Accept": "application/json",
+        "Origin": "https://ratings.uschess.org",
+    }
 
-    # 3. FIDE Standard rating only
-    fide_rating = 0
-    if fide_id:
+    async def _fetch_member():
+        cached = _cache_get(f"uscf_member_{uscf_id}")
+        if cached is not None:
+            return cached
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
-            if r.status_code == 200:
-                m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
-                if m:
-                    fide_rating = int(m.group(1))
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers)
+            val = r.json() if r.status_code == 200 else {}
         except Exception:
-            pass
+            val = {}
+        _cache_set(f"uscf_member_{uscf_id}", val, ttl=300)
+        return val
+
+    async def _fetch_sections():
+        cached = _cache_get(f"uscf_sections_{uscf_id}")
+        if cached is not None:
+            return cached
+        try:
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers)
+            val = r.json() if r.status_code == 200 else {}
+        except Exception:
+            val = {}
+        _cache_set(f"uscf_sections_{uscf_id}", val, ttl=240)
+        return val
+
+    async def _fetch_fide():
+        if not fide_id:
+            return 0
+        cached = _cache_get(f"fide_{fide_id}")
+        if cached is not None:
+            return cached
+        try:
+            fide_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with httpx.AsyncClient(timeout=7, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=fide_headers)
+            m = re.search(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL) if r.status_code == 200 else None
+            val = int(m.group(1)) if m else 0
+        except Exception:
+            val = 0
+        _cache_set(f"fide_{fide_id}", val, ttl=600)
+        return val
+
+    member_data, sections_data, fide_rating = await asyncio.gather(
+        _fetch_member(), _fetch_sections(), _fetch_fide()
+    )
+
+    live_rating = 0
+    if member_data:
+        if not name:
+            name = f"{member_data.get('firstName', '')} {member_data.get('lastName', '')}".strip().title()
+        for entry in member_data.get("ratings", []):
+            if entry.get("ratingSystem") == "R" and entry.get("rating"):
+                rating = entry["rating"]
+                break
+    for section in sections_data.get("items", []):
+        for record in section.get("ratingRecords", []):
+            if record.get("ratingSource") == "R":
+                live_rating = record.get("postRating", 0)
+                break
+        if live_rating:
+            break
 
     if not name:
         return HTMLResponse('<div class="alert alert-warning">Player not found.</div>')
@@ -1159,60 +1217,90 @@ async def player_quick_blitz(
     uscf_id = uscf_id.strip()
     fide_id = fide_id.strip()
 
-    # USCF quick/blitz: member API for monthly, sections API for live
+    # USCF quick/blitz + FIDE rapid/blitz — reuse cached API data, fetch in parallel
     monthly_quick = monthly_blitz = live_quick = live_blitz = 0
-    if uscf_id:
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
-                "Accept": "application/json",
-                "Origin": "https://ratings.uschess.org",
-            }
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                sections_r, member_r = await asyncio.gather(
-                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers),
-                    client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=headers),
-                )
-            if member_r.status_code == 200:
-                for entry in member_r.json().get("ratings", []):
-                    rs  = entry.get("ratingSystem")
-                    val = entry.get("rating", 0)
-                    if rs == "Q" and val:
-                        monthly_quick = val
-                    elif rs == "B" and val:
-                        monthly_blitz = val
-            if sections_r.status_code == 200:
-                for section in sections_r.json().get("items", []):
-                    for record in section.get("ratingRecords", []):
-                        src = record.get("ratingSource")
-                        val = record.get("postRating", 0)
-                        if src == "Q" and not live_quick:
-                            live_quick = val
-                        elif src == "B" and not live_blitz:
-                            live_blitz = val
-            # Fall back to monthly if no live found
-            if not live_quick:
-                live_quick = monthly_quick
-            if not live_blitz:
-                live_blitz = monthly_blitz
-        except Exception:
-            pass
-
-    # FIDE rapid/blitz
     fide_rapid = fide_blitz = 0
-    if fide_id:
+
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+        "Accept": "application/json",
+        "Origin": "https://ratings.uschess.org",
+    }
+
+    async def _qb_member():
+        if not uscf_id:
+            return {}
+        cached = _cache_get(f"uscf_member_{uscf_id}")
+        if cached is not None:
+            return cached
         try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=headers)
-            if r.status_code == 200:
-                ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', r.text, re.DOTALL)
-                if len(ms) > 1:
-                    fide_rapid = int(ms[1])
-                if len(ms) > 2:
-                    fide_blitz = int(ms[2])
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}", headers=api_headers)
+            val = r.json() if r.status_code == 200 else {}
         except Exception:
-            pass
+            val = {}
+        _cache_set(f"uscf_member_{uscf_id}", val, ttl=300)
+        return val
+
+    async def _qb_sections():
+        if not uscf_id:
+            return {}
+        cached = _cache_get(f"uscf_sections_{uscf_id}")
+        if cached is not None:
+            return cached
+        try:
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers)
+            val = r.json() if r.status_code == 200 else {}
+        except Exception:
+            val = {}
+        _cache_set(f"uscf_sections_{uscf_id}", val, ttl=240)
+        return val
+
+    async def _qb_fide():
+        if not fide_id:
+            return None
+        cached = _cache_get(f"fide_page_{fide_id}")
+        if cached is not None:
+            return cached
+        try:
+            fide_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            async with httpx.AsyncClient(timeout=7, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=fide_headers)
+            val = r.text if r.status_code == 200 else ""
+        except Exception:
+            val = ""
+        _cache_set(f"fide_page_{fide_id}", val, ttl=600)
+        return val
+
+    member_data, sections_data, fide_page = await asyncio.gather(
+        _qb_member(), _qb_sections(), _qb_fide()
+    )
+
+    for entry in member_data.get("ratings", []):
+        rs, val = entry.get("ratingSystem"), entry.get("rating", 0)
+        if rs == "Q" and val:
+            monthly_quick = val
+        elif rs == "B" and val:
+            monthly_blitz = val
+    for section in sections_data.get("items", []):
+        for record in section.get("ratingRecords", []):
+            src, val = record.get("ratingSource"), record.get("postRating", 0)
+            if src == "Q" and not live_quick:
+                live_quick = val
+            elif src == "B" and not live_blitz:
+                live_blitz = val
+    if not live_quick:
+        live_quick = monthly_quick
+    if not live_blitz:
+        live_blitz = monthly_blitz
+
+    if fide_page:
+        ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', fide_page, re.DOTALL)
+        if len(ms) > 1:
+            fide_rapid = int(ms[1])
+        if len(ms) > 2:
+            fide_blitz = int(ms[2])
 
     return templates.TemplateResponse(request=request, name="fragments/player_quick_blitz.html", context={
         "uscf_id": uscf_id, "fide_id": fide_id,
