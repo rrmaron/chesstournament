@@ -19,6 +19,17 @@
   </div>
 </div>
 
+<!-- How-to instructions -->
+<div class="alert alert-info py-3 px-3 mb-4" style="font-size:0.93rem;line-height:1.6">
+  <p class="mb-2"><strong>How to use this calculator:</strong></p>
+  <ol class="mb-0 ps-3" style="display:flex;flex-direction:column;gap:6px">
+    <li><strong>Add a tournament</strong> — click the <strong>+ Add Tournament</strong> button in your profile card above. A new tournament card will appear below.</li>
+    <li><strong>Choose the time control</strong> — in the tournament card header you'll see checkboxes labeled <strong>Standard</strong>, Quick, Blitz, and FIDE. Check whichever time controls apply to that tournament (most over-the-board tournaments are <em>Standard</em>).</li>
+    <li><strong>Add games</strong> — type your opponent's name in the search box (it will look them up live from USCF), select the result (Win / Draw / Loss), then click <strong>Add Game</strong>. The rating impact appears instantly after each game, showing your projected new rating progressively as you enter results.</li>
+    <li><strong>Attach a scoresheet</strong> — click the 📎 paperclip icon next to any game to attach your notation, either by taking a photo of your scoresheet or uploading a PGN file.</li>
+  </ol>
+</div>
+
 <!-- Starting point -->
 <div class="card mb-4">
   <div class="card-header fw-semibold">Your USCF Profile</div>
@@ -155,6 +166,12 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
         <button class="btn btn-outline-secondary btn-lg" onclick="triggerPgnFile()">
           📁&nbsp; Choose PGN / Image File
         </button>
+        <div id="pgn-progress-wrap" style="display:none">
+          <div class="progress" style="height:18px">
+            <div id="pgn-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated"
+                 role="progressbar" style="width:0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+          </div>
+        </div>
         <p id="pgn-upload-status" class="text-center text-muted small mb-0" style="display:none"></p>
         <!-- hidden inputs -->
         <input type="file" id="pgn-capture-input" accept="image/*" capture="environment"
@@ -173,7 +190,7 @@ let searchTimers     = {};
 let _myIsEstablished = null; // set by USCF lookup; null = unknown
 let myPriorGames     = { standard: null, quick: null, blitz: null, fide: null };
 
-const RATING_TYPE_LABELS = { standard: 'USCF', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
+const RATING_TYPE_LABELS = { standard: 'Standard', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
 
 // Last live-fetched starting ratings — restored when adding a new tournament
 const _liveRatings = { standard: null, quick: null, blitz: null, fide: null };
@@ -1002,42 +1019,111 @@ function openPgnAttach(ti, gi) {
   const statusEl = document.getElementById('pgn-upload-status');
   statusEl.style.display = 'none';
   statusEl.textContent = '';
+  setProgress(null);
+  const bar = document.getElementById('pgn-progress-bar');
+  bar.classList.add('progress-bar-animated');
   bootstrap.Modal.getOrCreateInstance(document.getElementById('pgnModal')).show();
 }
 
 function triggerPgnCapture() { document.getElementById('pgn-capture-input').click(); }
 function triggerPgnFile()    { document.getElementById('pgn-file-input').click(); }
 
+async function compressImage(file, maxPx = 1400, quality = 0.82) {
+  if (!file.type.startsWith('image/')) return file;
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width <= maxPx && height <= maxPx) { resolve(file); return; }
+      const scale  = Math.min(maxPx / width, maxPx / height);
+      width  = Math.round(width  * scale);
+      height = Math.round(height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width  = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+function setProgress(pct) {
+  const bar  = document.getElementById('pgn-progress-bar');
+  const wrap = document.getElementById('pgn-progress-wrap');
+  wrap.style.display = pct == null ? 'none' : 'block';
+  if (pct != null) {
+    bar.style.width      = pct + '%';
+    bar.setAttribute('aria-valuenow', pct);
+    bar.textContent      = pct + '%';
+    if (pct >= 100) {
+      bar.classList.remove('progress-bar-animated');
+      bar.textContent = 'Done!';
+    }
+  }
+}
+
 async function uploadPgnFile(input) {
   if (!input.files.length || !_pgnTarget) return;
   const { ti, gi } = _pgnTarget;
-
   const modal    = bootstrap.Modal.getInstance(document.getElementById('pgnModal'));
   const statusEl = document.getElementById('pgn-upload-status');
-  statusEl.textContent = 'Uploading…';
-  statusEl.className   = 'text-center text-muted small mb-0';
+  const rawFile  = input.files[0];
+  input.value    = '';
+
+  statusEl.textContent   = 'Compressing…';
+  statusEl.className     = 'text-center text-muted small mb-0';
   statusEl.style.display = 'block';
+  setProgress(0);
 
-  const body = new FormData();
-  body.append('file', input.files[0]);
-  input.value = '';
+  let blob;
+  try { blob = await compressImage(rawFile); }
+  catch { blob = rawFile; }
 
+  const isImage = rawFile.type.startsWith('image/');
+  const ext     = isImage ? '.jpg' : (rawFile.name.endsWith('.pgn') ? '.pgn' : '.txt');
+
+  statusEl.textContent = 'Requesting upload URL…';
+  let presign;
   try {
-    const resp = await fetch('/api/pgn/upload', { method: 'POST', body });
-    const data = await resp.json();
-    if (data.url) {
-      tournaments[ti].games[gi].pgnUrl = data.url;
-      modal?.hide();
-      renderAll();
-      scheduleSave(ti);
-    } else {
-      statusEl.textContent = 'Upload failed: ' + (data.detail || data.error || 'Unknown error');
-      statusEl.className   = 'text-center text-danger small mb-0';
-    }
-  } catch {
-    statusEl.textContent = 'Upload failed — check your connection.';
+    const r = await fetch('/api/pgn/presign?ext=' + encodeURIComponent(ext));
+    if (!r.ok) throw new Error('presign ' + r.status);
+    presign = await r.json();
+  } catch (e) {
+    statusEl.textContent = 'Upload failed: ' + e.message;
     statusEl.className   = 'text-center text-danger small mb-0';
+    setProgress(null);
+    return;
   }
+
+  statusEl.textContent = 'Uploading…';
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', presign.upload_url);
+    xhr.setRequestHeader('Content-Type', isImage ? 'image/jpeg' : (ext === '.pgn' ? 'text/plain' : 'text/plain'));
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) setProgress(Math.round(ev.loaded / ev.total * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error('S3 ' + xhr.status));
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(blob);
+  }).then(() => {
+    tournaments[ti].games[gi].pgnUrl = presign.public_url;
+    setProgress(100);
+    setTimeout(() => { modal?.hide(); setProgress(null); }, 600);
+    renderAll();
+    scheduleSave(ti);
+  }).catch((e) => {
+    statusEl.textContent = 'Upload failed: ' + e.message;
+    statusEl.className   = 'text-center text-danger small mb-0';
+    setProgress(null);
+  });
 }
 
 function removePgn(ti, gi) {

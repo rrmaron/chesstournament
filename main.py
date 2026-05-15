@@ -1592,6 +1592,38 @@ async def upload_pgn_file(file: UploadFile = File(...), user: dict = Depends(req
     return {"url": f"https://{bucket}.s3.amazonaws.com/{key}"}
 
 
+@app.get("/api/pgn/presign")
+async def pgn_presign(ext: str = ".jpg", user: dict = Depends(require_login)):
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket = os.environ.get("AWS_S3_BUCKET", "occ-webhook-photos-2026")
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    key_id = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if not key_id or not secret:
+        raise HTTPException(500, "S3 credentials not configured on server")
+
+    safe_ext = ext.lower() if ext.lower() in {".jpg", ".jpeg", ".png", ".webp", ".pgn", ".txt"} else ".jpg"
+    ct_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+              ".webp": "image/webp", ".pgn": "text/plain", ".txt": "text/plain"}
+    content_type = ct_map.get(safe_ext, "image/jpeg")
+
+    key = f"pgn/{user['id']}/{uuid.uuid4().hex}{safe_ext}"
+    try:
+        s3 = boto3.client("s3", region_name=region,
+                          aws_access_key_id=key_id, aws_secret_access_key=secret)
+        upload_url = s3.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": bucket, "Key": key, "ContentType": content_type},
+            ExpiresIn=300,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(500, f"Presign failed: {exc}")
+
+    return {"upload_url": upload_url, "public_url": f"https://{bucket}.s3.amazonaws.com/{key}"}
+
+
 # FIDE Initial Rating Calculator
 # ---------------------------------------------------------------------------
 
