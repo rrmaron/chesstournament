@@ -51,7 +51,7 @@
                 <input type="hidden" name="channel" value="{{ reg_method }}">
                 {% endif %}
 
-                <div class="mb-4">
+                <div class="mb-3">
                     <label class="form-label" id="contactLabel">
                         {% if reg_method == "sms" %}Phone number{% else %}Email address{% endif %}
                     </label>
@@ -59,6 +59,23 @@
                            placeholder="{% if reg_method == 'sms' %}+12125551234{% else %}you@example.com{% endif %}">
                     <div class="form-text" id="contactHint">
                         {% if reg_method == "sms" %}E.164 format: +1 followed by 10 digits (US), or your country code + number.{% endif %}
+                    </div>
+                </div>
+
+                <!-- SMS opt-in consent — shown only when SMS channel is selected -->
+                <div class="mb-4 p-3 border rounded bg-white" id="smsConsentBlock"
+                     style="{% if reg_method != 'sms' %}display:none{% endif %}">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="smsConsent" name="sms_consent"
+                               value="yes" {% if reg_method != 'sms' %}disabled{% endif %}>
+                        <label class="form-check-label small" for="smsConsent">
+                            I agree to receive SMS text messages from <strong>MyChessRating</strong>
+                            for account verification purposes. Message frequency: 1 message per
+                            verification request. Msg &amp; data rates may apply.
+                            Reply <strong>STOP</strong> to opt out,
+                            <strong>HELP</strong> for assistance.
+                            See our <a href="/privacy" target="_blank">Privacy Policy</a>.
+                        </label>
                     </div>
                 </div>
 
@@ -72,13 +89,36 @@
 {% if reg_method == "both" %}
 <script>
 function toggleContact() {
-    const sms = document.getElementById('chSms').checked;
+    const sms     = document.getElementById('chSms').checked;
+    const consent = document.getElementById('smsConsentBlock');
+    const checkbox = document.getElementById('smsConsent');
     document.getElementById('contactLabel').textContent = sms ? 'Phone number' : 'Email address';
     document.getElementById('contactInput').placeholder  = sms ? '+12125551234' : 'you@example.com';
     document.getElementById('contactInput').type         = sms ? 'tel' : 'email';
     document.getElementById('contactHint').textContent   = sms
         ? 'E.164 format: +1 followed by 10 digits (US), or your country code + number.' : '';
+    consent.style.display  = sms ? 'block' : 'none';
+    checkbox.disabled      = !sms;
+    if (!sms) checkbox.checked = false;
 }
+
+document.getElementById('regForm').addEventListener('submit', function(e) {
+    const sms = document.getElementById('chSms').checked;
+    if (sms && !document.getElementById('smsConsent').checked) {
+        e.preventDefault();
+        alert('Please check the SMS consent box to continue.');
+    }
+});
+</script>
+{% endif %}
+{% if reg_method == "sms" %}
+<script>
+document.getElementById('regForm').addEventListener('submit', function(e) {
+    if (!document.getElementById('smsConsent').checked) {
+        e.preventDefault();
+        alert('Please check the SMS consent box to continue.');
+    }
+});
 </script>
 {% endif %}
 </body>
