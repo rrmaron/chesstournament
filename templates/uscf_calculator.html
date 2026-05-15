@@ -128,6 +128,32 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
 </div>
 </div>
 
+<!-- PGN / Notation Attach Modal -->
+<div class="modal fade" id="pgnModal" tabindex="-1" aria-labelledby="pgnModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="pgnModalLabel">Attach Game Notation</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body d-grid gap-3 pb-4">
+        <button class="btn btn-primary btn-lg" onclick="triggerPgnCapture()">
+          📷&nbsp; Take Photo of Scoresheet
+        </button>
+        <button class="btn btn-outline-secondary btn-lg" onclick="triggerPgnFile()">
+          📁&nbsp; Choose PGN / Image File
+        </button>
+        <p id="pgn-upload-status" class="text-center text-muted small mb-0" style="display:none"></p>
+        <!-- hidden inputs -->
+        <input type="file" id="pgn-capture-input" accept="image/*" capture="environment"
+               style="display:none" onchange="uploadPgnFile(this)">
+        <input type="file" id="pgn-file-input"    accept=".pgn,.txt,image/*"
+               style="display:none" onchange="uploadPgnFile(this)">
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let tournaments      = [];
@@ -510,6 +536,13 @@ function renderGamesTable(ti, games, myRatings, calcs) {
                 value="${val||''}" min="100" max="3000"
                 onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
     }).join('');
+    const pgnBtn = g.pgnUrl
+      ? `<a href="${escHtml(g.pgnUrl)}" target="_blank" rel="noopener"
+            class="btn btn-success btn-sm py-0 px-1" title="View attached notation">📎</a>
+         <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                 onclick="removePgn(${ti},${gi})" title="Remove attachment">✕</button>`
+      : `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+               onclick="openPgnAttach(${ti},${gi})" title="Attach game notation">📎</button>`;
     return `<tr>
       <td>${gi+1}</td>
       <td class="small">${nameHtml}${provBadge}</td>
@@ -522,8 +555,13 @@ function renderGamesTable(ti, games, myRatings, calcs) {
           </select></td>
       <td class="text-center">${exp}</td>
       <td class="text-center ${impactCls}">${impact}</td>
-      <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
-                  onclick="removeGame(${ti},${gi})">✕</button></td>
+      <td>
+        <div class="d-flex gap-1 justify-content-end flex-nowrap">
+          ${pgnBtn}
+          <button class="btn btn-outline-danger btn-sm py-0 px-1"
+                  onclick="removeGame(${ti},${gi})">✕</button>
+        </div>
+      </td>
     </tr>`;
   }).join('');
   return `<div class="table-responsive mb-2">
@@ -942,6 +980,58 @@ async function deleteSavedTournament(id) {
     const di = savedTournamentsData.findIndex(t => t.id === id);
     if (di !== -1) savedTournamentsData.splice(di, 1);
   }
+}
+
+// ── PGN / Notation Attachment ──────────────────────────────────────────────────
+let _pgnTarget = null; // { ti, gi }
+
+function openPgnAttach(ti, gi) {
+  _pgnTarget = { ti, gi };
+  const statusEl = document.getElementById('pgn-upload-status');
+  statusEl.style.display = 'none';
+  statusEl.textContent = '';
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('pgnModal')).show();
+}
+
+function triggerPgnCapture() { document.getElementById('pgn-capture-input').click(); }
+function triggerPgnFile()    { document.getElementById('pgn-file-input').click(); }
+
+async function uploadPgnFile(input) {
+  if (!input.files.length || !_pgnTarget) return;
+  const { ti, gi } = _pgnTarget;
+
+  const modal    = bootstrap.Modal.getInstance(document.getElementById('pgnModal'));
+  const statusEl = document.getElementById('pgn-upload-status');
+  statusEl.textContent = 'Uploading…';
+  statusEl.className   = 'text-center text-muted small mb-0';
+  statusEl.style.display = 'block';
+
+  const body = new FormData();
+  body.append('file', input.files[0]);
+  input.value = '';
+
+  try {
+    const resp = await fetch('/api/pgn/upload', { method: 'POST', body });
+    const data = await resp.json();
+    if (data.url) {
+      tournaments[ti].games[gi].pgnUrl = data.url;
+      modal?.hide();
+      renderAll();
+      scheduleSave(ti);
+    } else {
+      statusEl.textContent = 'Upload failed: ' + (data.detail || data.error || 'Unknown error');
+      statusEl.className   = 'text-center text-danger small mb-0';
+    }
+  } catch {
+    statusEl.textContent = 'Upload failed — check your connection.';
+    statusEl.className   = 'text-center text-danger small mb-0';
+  }
+}
+
+function removePgn(ti, gi) {
+  delete tournaments[ti].games[gi].pgnUrl;
+  renderAll();
+  scheduleSave(ti);
 }
 </script>
 {% endblock %}

@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MyChessRating Flyer – 4-up</title>
+<style>
+  @page { size: letter portrait; margin: 0.3in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #fff;
+    width: 7.9in;
+  }
+
+  /* ── Shared grid ─────────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 0.22in;
+    width: 100%;
+    height: 10.2in;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     FRONT CARDS
+  ══════════════════════════════════════════════════════════ */
+  .card {
+    border: 2px solid #1a3a6b;
+    border-radius: 10px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+
+  .card-header {
+    background: linear-gradient(135deg, #1a3a6b 0%, #0d6efd 100%);
+    color: #fff;
+    text-align: center;
+    padding: 0.1in 0.1in 0.08in;
+  }
+  .chess-icon { font-size: 1.4rem; line-height: 1; display: block; margin-bottom: 0.02in; }
+  .site-name  { font-size: 1.05rem; font-weight: 800; letter-spacing: 0.01em; line-height: 1.1; }
+  .tagline    { font-size: 0.57rem; opacity: 0.88; margin-top: 0.02in; }
+
+  .card-body {
+    flex: 1;
+    padding: 0.08in 0.12in 0.06in;
+    display: flex;
+    flex-direction: column;
+    gap: 0.05in;
+    background: #fff;
+  }
+
+  .event-badge {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    padding: 0.03in 0.08in;
+    font-size: 0.56rem;
+    font-weight: 700;
+    color: #7a4f00;
+    text-align: center;
+    line-height: 1.3;
+  }
+
+  .feature-list { list-style: none; display: flex; flex-direction: column; gap: 0.035in; }
+
+  .feature-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.05in;
+    font-size: 0.6rem;
+    line-height: 1.25;
+    color: #1c1c1c;
+  }
+  .feature-list li .icon { flex-shrink: 0; font-size: 0.75rem; margin-top: -0.003in; }
+  .feature-list li strong { color: #1a3a6b; }
+
+  .card-footer {
+    background: #f0f4ff;
+    border-top: 1.5px solid #1a3a6b;
+    padding: 0.07in 0.1in;
+    display: flex;
+    align-items: center;
+    gap: 0.08in;
+  }
+  .qr-wrap { flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .qr-wrap img { width: 0.78in; height: 0.78in; display: block; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+  .qr-label { font-size: 0.44rem; color: #555; text-align: center; line-height: 1.2; }
+
+  .footer-right { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 0.04in; }
+  .url     { font-size: 0.74rem; font-weight: 900; color: #1a3a6b; letter-spacing: 0.01em; }
+  .url-sub { font-size: 0.51rem; color: #444; line-height: 1.2; }
+  .free-badge {
+    display: inline-block; background: #198754; color: #fff;
+    font-size: 0.49rem; font-weight: 700; border-radius: 4px;
+    padding: 1px 5px; letter-spacing: 0.04em; text-transform: uppercase;
+    margin-top: 0.01in;
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     BACK PAGE
+     Print duplex (flip on long edge), then cut — backs align.
+  ══════════════════════════════════════════════════════════ */
+  .back-page {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  /*
+    Back card: chess board image fills the card top-to-bottom.
+    background-size: 100% auto → image scales to full card width.
+    The board (≈83% of image height) maps to ≈72% of card height.
+    Arrow SVG coordinates (viewBox 0 0 100 100, preserveAspectRatio none):
+      h2 → (91, 58)   g3 → (79, 49)
+      f4 → (67, 40)   g5 → (79, 31)   h6 → (91, 23)
+  */
+  .back-card {
+    border: 2px solid #1a3a6b;
+    border-radius: 10px;
+    overflow: hidden;
+    position: relative;
+    background:
+      url("king walk-Screenshot 2026-05-14 151219.png")
+      top center / 100% auto no-repeat #1a1a2e;
+  }
+
+  /* bottom branding strip */
+  .back-brand {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: linear-gradient(to top, rgba(10,20,50,0.96) 70%, rgba(10,20,50,0));
+    color: #fff;
+    text-align: center;
+    padding: 0.25in 0.1in 0.13in;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.04in;
+  }
+  .back-brand .b-url {
+    font-size: 1.05rem;
+    font-weight: 900;
+    letter-spacing: 0.03em;
+    color: #ffd700;
+  }
+  .back-brand .b-challenge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.01em;
+    margin-bottom: 0.04in;
+  }
+  .back-brand .b-sub {
+    font-size: 0.56rem;
+    opacity: 0.80;
+  }
+
+  @media screen {
+    body { background: #888; padding: 0.3in 0; }
+    .grid { background: #fff; border-radius: 6px;
+            box-shadow: 0 4px 24px #0004; margin: 0 auto 0.5in; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 1 — FRONT
+═══════════════════════════════════════════════════════════ -->
+<div class="grid">
+
+  <!-- CARD 1 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="chess-icon">♟</span>
+      <div class="site-name">MyChessRating.com</div>
+      <div class="tagline">Free tools for serious scholastic chess players</div>
+    </div>
+    <div class="card-body">
+      <div class="event-badge">♛ &nbsp;K-8 Middle School Chess Nationals · Austin, TX&nbsp; ♛<br>Track every game. Know your rating impact.</div>
+      <ul class="feature-list">
+        <li><span class="icon">📊</span><div><strong>USCF Rating Calculator</strong> — see your projected new rating the moment you finish a game, before official results post</div></li>
+        <li><span class="icon">🏆</span><div><strong>Tournament &amp; Game Tracker</strong> — log all your games, opponents, and results across every tournament</div></li>
+        <li><span class="icon">📷</span><div><strong>Attach Your Scoresheet</strong> — snap a photo of your notation or upload the PGN file for every game you play</div></li>
+        <li><span class="icon">🔍</span><div><strong>Player Lookup</strong> — instantly find any USCF player's live Standard, Quick, Blitz, and current FIDE ratings</div></li>
+        <li><span class="icon">⚡</span><div><strong>Standard · Quick · Blitz · FIDE</strong> — independent rating calculations for every time control</div></li>
+        <li><span class="icon">🌐</span><div><strong>FIDE Rating Path</strong> — discover how to earn your first official international rating</div></li>
+      </ul>
+    </div>
+    <div class="card-footer">
+      <div class="qr-wrap">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=https%3A%2F%2Fmychessrating.com" alt="QR">
+        <div class="qr-label">Scan to open<br>the website</div>
+      </div>
+      <div class="footer-right">
+        <div class="url">mychessrating.com</div>
+        <div class="url-sub">Sign up in seconds — works in any browser</div>
+        <span class="free-badge">100% Free</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD 2 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="chess-icon">♟</span>
+      <div class="site-name">MyChessRating.com</div>
+      <div class="tagline">Free tools for serious scholastic chess players</div>
+    </div>
+    <div class="card-body">
+      <div class="event-badge">♛ &nbsp;K-8 Middle School Chess Nationals · Austin, TX&nbsp; ♛<br>Track every game. Know your rating impact.</div>
+      <ul class="feature-list">
+        <li><span class="icon">📊</span><div><strong>USCF Rating Calculator</strong> — see your projected new rating the moment you finish a game, before official results post</div></li>
+        <li><span class="icon">🏆</span><div><strong>Tournament &amp; Game Tracker</strong> — log all your games, opponents, and results across every tournament</div></li>
+        <li><span class="icon">📷</span><div><strong>Attach Your Scoresheet</strong> — snap a photo of your notation or upload the PGN file for every game you play</div></li>
+        <li><span class="icon">🔍</span><div><strong>Player Lookup</strong> — instantly find any USCF player's live Standard, Quick, Blitz, and current FIDE ratings</div></li>
+        <li><span class="icon">⚡</span><div><strong>Standard · Quick · Blitz · FIDE</strong> — independent rating calculations for every time control</div></li>
+        <li><span class="icon">🌐</span><div><strong>FIDE Rating Path</strong> — discover how to earn your first official international rating</div></li>
+      </ul>
+    </div>
+    <div class="card-footer">
+      <div class="qr-wrap">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=https%3A%2F%2Fmychessrating.com" alt="QR">
+        <div class="qr-label">Scan to open<br>the website</div>
+      </div>
+      <div class="footer-right">
+        <div class="url">mychessrating.com</div>
+        <div class="url-sub">Sign up in seconds — works in any browser</div>
+        <span class="free-badge">100% Free</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD 3 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="chess-icon">♟</span>
+      <div class="site-name">MyChessRating.com</div>
+      <div class="tagline">Free tools for serious scholastic chess players</div>
+    </div>
+    <div class="card-body">
+      <div class="event-badge">♛ &nbsp;K-8 Middle School Chess Nationals · Austin, TX&nbsp; ♛<br>Track every game. Know your rating impact.</div>
+      <ul class="feature-list">
+        <li><span class="icon">📊</span><div><strong>USCF Rating Calculator</strong> — see your projected new rating the moment you finish a game, before official results post</div></li>
+        <li><span class="icon">🏆</span><div><strong>Tournament &amp; Game Tracker</strong> — log all your games, opponents, and results across every tournament</div></li>
+        <li><span class="icon">📷</span><div><strong>Attach Your Scoresheet</strong> — snap a photo of your notation or upload the PGN file for every game you play</div></li>
+        <li><span class="icon">🔍</span><div><strong>Player Lookup</strong> — instantly find any USCF player's live Standard, Quick, Blitz, and current FIDE ratings</div></li>
+        <li><span class="icon">⚡</span><div><strong>Standard · Quick · Blitz · FIDE</strong> — independent rating calculations for every time control</div></li>
+        <li><span class="icon">🌐</span><div><strong>FIDE Rating Path</strong> — discover how to earn your first official international rating</div></li>
+      </ul>
+    </div>
+    <div class="card-footer">
+      <div class="qr-wrap">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=https%3A%2F%2Fmychessrating.com" alt="QR">
+        <div class="qr-label">Scan to open<br>the website</div>
+      </div>
+      <div class="footer-right">
+        <div class="url">mychessrating.com</div>
+        <div class="url-sub">Sign up in seconds — works in any browser</div>
+        <span class="free-badge">100% Free</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CARD 4 -->
+  <div class="card">
+    <div class="card-header">
+      <span class="chess-icon">♟</span>
+      <div class="site-name">MyChessRating.com</div>
+      <div class="tagline">Free tools for serious scholastic chess players</div>
+    </div>
+    <div class="card-body">
+      <div class="event-badge">♛ &nbsp;K-8 Middle School Chess Nationals · Austin, TX&nbsp; ♛<br>Track every game. Know your rating impact.</div>
+      <ul class="feature-list">
+        <li><span class="icon">📊</span><div><strong>USCF Rating Calculator</strong> — see your projected new rating the moment you finish a game, before official results post</div></li>
+        <li><span class="icon">🏆</span><div><strong>Tournament &amp; Game Tracker</strong> — log all your games, opponents, and results across every tournament</div></li>
+        <li><span class="icon">📷</span><div><strong>Attach Your Scoresheet</strong> — snap a photo of your notation or upload the PGN file for every game you play</div></li>
+        <li><span class="icon">🔍</span><div><strong>Player Lookup</strong> — instantly find any USCF player's live Standard, Quick, Blitz, and current FIDE ratings</div></li>
+        <li><span class="icon">⚡</span><div><strong>Standard · Quick · Blitz · FIDE</strong> — independent rating calculations for every time control</div></li>
+        <li><span class="icon">🌐</span><div><strong>FIDE Rating Path</strong> — discover how to earn your first official international rating</div></li>
+      </ul>
+    </div>
+    <div class="card-footer">
+      <div class="qr-wrap">
+        <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=https%3A%2F%2Fmychessrating.com" alt="QR">
+        <div class="qr-label">Scan to open<br>the website</div>
+      </div>
+      <div class="footer-right">
+        <div class="url">mychessrating.com</div>
+        <div class="url-sub">Sign up in seconds — works in any browser</div>
+        <span class="free-badge">100% Free</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /front grid -->
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     PAGE 2 — BACK (print duplex, flip on long edge, then cut)
+     All 4 backs are identical so position doesn't matter.
+═══════════════════════════════════════════════════════════ -->
+<div class="grid back-page">
+
+  <!-- BACK 1 -->
+  <div class="back-card">
+    <div class="back-brand">
+      <div class="b-challenge">Get the White King to h6 in 5 moves</div>
+      <div class="b-url">mychessrating.com</div>
+      <div class="b-sub">♟ &nbsp;The Legendary King Walk · Short–Timman, 1991&nbsp; ♟</div>
+    </div>
+  </div>
+
+  <!-- BACK 2 -->
+  <div class="back-card">
+    <div class="back-brand">
+      <div class="b-challenge">Get the White King to h6 in 5 moves</div>
+      <div class="b-url">mychessrating.com</div>
+      <div class="b-sub">♟ &nbsp;The Legendary King Walk · Short–Timman, 1991&nbsp; ♟</div>
+    </div>
+  </div>
+
+  <!-- BACK 3 -->
+  <div class="back-card">
+    <div class="back-brand">
+      <div class="b-challenge">Get the White King to h6 in 5 moves</div>
+      <div class="b-url">mychessrating.com</div>
+      <div class="b-sub">♟ &nbsp;The Legendary King Walk · Short–Timman, 1991&nbsp; ♟</div>
+    </div>
+  </div>
+
+  <!-- BACK 4 -->
+  <div class="back-card">
+    <div class="back-brand">
+      <div class="b-challenge">Get the White King to h6 in 5 moves</div>
+      <div class="b-url">mychessrating.com</div>
+      <div class="b-sub">♟ &nbsp;The Legendary King Walk · Short–Timman, 1991&nbsp; ♟</div>
+    </div>
+  </div>
+
+</div><!-- /back grid -->
+</body>
+</html>

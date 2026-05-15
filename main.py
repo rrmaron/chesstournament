@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1470,6 +1471,37 @@ async def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
     if not ok:
         return JSONResponse({"error": "Not found"}, status_code=404)
     return {"deleted": tid}
+
+
+@app.post("/api/pgn/upload")
+async def upload_pgn_file(file: UploadFile = File(...), user: dict = Depends(require_login)):
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket  = os.environ.get("AWS_S3_BUCKET", "occ-webhook-photos-2026")
+    region  = os.environ.get("AWS_REGION", "us-west-2")
+    key_id  = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret  = os.environ.get("AWS_SECRET_ACCESS_KEY")
+    if not key_id or not secret:
+        raise HTTPException(500, "S3 credentials not configured on server")
+
+    suffix = Path(file.filename).suffix.lower() if file.filename else ""
+    if suffix not in {".pgn", ".txt", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"}:
+        suffix = ".pgn"
+    key = f"pgn/{user['id']}/{uuid.uuid4().hex}{suffix}"
+
+    content      = await file.read()
+    content_type = file.content_type or ("image/jpeg" if suffix in {".jpg", ".jpeg", ".heic"} else "text/plain")
+
+    try:
+        s3 = boto3.client("s3", region_name=region,
+                          aws_access_key_id=key_id, aws_secret_access_key=secret)
+        s3.put_object(Bucket=bucket, Key=key, Body=content,
+                      ContentType=content_type)
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(500, f"S3 upload failed: {exc}")
+
+    return {"url": f"https://{bucket}.s3.amazonaws.com/{key}"}
 
 
 # FIDE Initial Rating Calculator

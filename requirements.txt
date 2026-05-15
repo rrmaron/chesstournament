@@ -6,3 +6,4 @@ httpx
 itsdangerous
 reportlab
 stripe
+boto3
