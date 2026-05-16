@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Admin — Featured Tournaments{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-9">
+
+<h2 class="mb-1">Featured Tournaments</h2>
+<p class="text-muted mb-4">Active tournaments appear as info cards on the Login, Player Lookup, and USCF Calculator pages.</p>
+
+<!-- Current tournaments -->
+{% if tournaments %}
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Current Tournaments</div>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Order</th><th>Name</th><th>Source</th><th>Info URL</th><th>Pairings URL</th><th>Status</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for t in tournaments %}
+        <tr class="{% if not t.active %}table-secondary text-muted{% endif %}">
+          <td class="text-center">{{ t.display_order }}</td>
+          <td>
+            <div class="fw-semibold">{{ t.name }}</div>
+            {% if t.subtitle %}<div class="small text-muted">{{ t.subtitle }}</div>{% endif %}
+            {% if t.description %}<div class="small text-muted fst-italic">{{ t.description }}</div>{% endif %}
+          </td>
+          <td><span class="badge bg-secondary">{{ t.source }}</span></td>
+          <td class="small">{% if t.info_url %}<a href="{{ t.info_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
+          <td class="small">{% if t.pairings_url %}<a href="{{ t.pairings_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
+          <td>
+            <span class="badge {% if t.active %}bg-success{% else %}bg-secondary{% endif %}">
+              {% if t.active %}Active{% else %}Hidden{% endif %}
+            </span>
+          </td>
+          <td>
+            <div class="d-flex gap-1 flex-nowrap">
+              <button class="btn btn-outline-secondary btn-sm py-0"
+                      onclick="openEdit({{ t | tojson }})">Edit</button>
+              <form method="post" action="/admin/tournaments/{{ t.id }}/toggle">
+                <button class="btn btn-outline-{% if t.active %}warning{% else %}success{% endif %} btn-sm py-0">
+                  {% if t.active %}Hide{% else %}Show{% endif %}
+                </button>
+              </form>
+              <form method="post" action="/admin/tournaments/{{ t.id }}/delete"
+                    onsubmit="return confirm('Delete this tournament?')">
+                <button class="btn btn-outline-danger btn-sm py-0">Delete</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-info">No featured tournaments yet. Add one below.</div>
+{% endif %}
+
+<!-- Import from URL -->
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Import from URL (CaissaLive, US Chess, etc.)</div>
+  <div class="card-body">
+    <p class="small text-muted mb-2">Paste any tournament URL and we'll fetch the page title to pre-fill the form below.</p>
+    <div class="input-group mb-2">
+      <input type="url" id="fetch-url-input" class="form-control"
+             placeholder="https://www.caissalive.com/tournament/... or https://www.uschess.org/...">
+      <button class="btn btn-outline-primary" type="button" onclick="fetchUrl()">Fetch</button>
+    </div>
+    <div id="fetch-status" class="small text-muted"></div>
+  </div>
+</div>
+
+<!-- Add new tournament -->
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Add Tournament</div>
+  <div class="card-body">
+    <form method="post" action="/admin/tournaments" id="add-form">
+      <div class="row g-3">
+        <div class="col-sm-8">
+          <label class="form-label small">Tournament Name <span class="text-danger">*</span></label>
+          <input type="text" name="name" id="new-name" class="form-control" required
+                 placeholder="e.g. K-8 Middle School Chess Nationals 2026">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Subtitle</label>
+          <input type="text" name="subtitle" id="new-subtitle" class="form-control"
+                 placeholder="e.g. Useful Links">
+        </div>
+        <div class="col-12">
+          <label class="form-label small">Description (optional)</label>
+          <input type="text" name="description" class="form-control"
+                 placeholder="Short note shown below the tournament name">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small">Info / Home Page URL</label>
+          <input type="url" name="info_url" id="new-info-url" class="form-control"
+                 placeholder="https://...">
+        </div>
+        <div class="col-sm-6">
+          <label class="form-label small">Pairings / Standings URL</label>
+          <input type="url" name="pairings_url" id="new-pairings-url" class="form-control"
+                 placeholder="https://...">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Source</label>
+          <select name="source" class="form-select">
+            <option value="manual">Manual</option>
+            <option value="caissalive">CaissaLive</option>
+            <option value="uschess">US Chess</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Source URL (original page)</label>
+          <input type="url" name="source_url" id="new-source-url" class="form-control"
+                 placeholder="https://...">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Display Order</label>
+          <input type="number" name="display_order" class="form-control" value="0" min="0">
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary">Add Tournament</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Tournament</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="edit-form">
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-sm-8">
+              <label class="form-label small">Name <span class="text-danger">*</span></label>
+              <input type="text" name="name" id="edit-name" class="form-control" required>
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Subtitle</label>
+              <input type="text" name="subtitle" id="edit-subtitle" class="form-control">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">Description</label>
+              <input type="text" name="description" id="edit-description" class="form-control">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small">Info URL</label>
+              <input type="url" name="info_url" id="edit-info-url" class="form-control">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small">Pairings URL</label>
+              <input type="url" name="pairings_url" id="edit-pairings-url" class="form-control">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Display Order</label>
+              <input type="number" name="display_order" id="edit-order" class="form-control" min="0">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function openEdit(t) {
+  document.getElementById('edit-form').action = '/admin/tournaments/' + t.id + '/edit';
+  document.getElementById('edit-name').value        = t.name        || '';
+  document.getElementById('edit-subtitle').value    = t.subtitle    || '';
+  document.getElementById('edit-description').value = t.description || '';
+  document.getElementById('edit-info-url').value    = t.info_url    || '';
+  document.getElementById('edit-pairings-url').value= t.pairings_url|| '';
+  document.getElementById('edit-order').value       = t.display_order ?? 0;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
+}
+
+async function fetchUrl() {
+  const url    = document.getElementById('fetch-url-input').value.trim();
+  const status = document.getElementById('fetch-status');
+  if (!url) return;
+  status.textContent = 'Fetching…';
+  status.className = 'small text-muted';
+  try {
+    const r    = await fetch('/admin/fetch-url?url=' + encodeURIComponent(url));
+    const data = await r.json();
+    if (data.error) { status.textContent = 'Error: ' + data.error; status.className = 'small text-danger'; return; }
+    document.getElementById('new-name').value       = data.title || '';
+    document.getElementById('new-source-url').value = url;
+    document.getElementById('new-info-url').value   = url;
+    status.textContent = 'Title fetched — review and fill in remaining fields.';
+    status.className = 'small text-success';
+  } catch(e) {
+    status.textContent = 'Fetch failed: ' + e.message;
+    status.className = 'small text-danger';
+  }
+}
+</script>
+{% endblock %}

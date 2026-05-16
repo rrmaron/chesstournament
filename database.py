@@ -134,6 +134,20 @@ def init_db():
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS featured_tournaments (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        subtitle TEXT,
+        description TEXT,
+        info_url TEXT,
+        pairings_url TEXT,
+        source TEXT DEFAULT 'manual',
+        source_url TEXT,
+        active INTEGER DEFAULT 1,
+        display_order INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
     # Migrations for existing DBs
     for sql in [
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
@@ -403,6 +417,57 @@ def delete_user_tournament(tournament_id: int, user_id: int) -> bool:
     cur = conn.execute(
         "DELETE FROM user_tournaments WHERE id=? AND user_id=?", (tournament_id, user_id)
     )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Featured Tournaments (admin-managed)
+# ---------------------------------------------------------------------------
+
+def add_featured_tournament(name: str, subtitle: str = None, description: str = None,
+                             info_url: str = None, pairings_url: str = None,
+                             source: str = 'manual', source_url: str = None,
+                             display_order: int = 0) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO featured_tournaments (name, subtitle, description, info_url, pairings_url, source, source_url, display_order) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name.strip(), subtitle, description, info_url, pairings_url, source, source_url, display_order)
+    )
+    fid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return fid
+
+def list_featured_tournaments(active_only: bool = False) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    sql = "SELECT id, name, subtitle, description, info_url, pairings_url, source, source_url, active, display_order, created_at FROM featured_tournaments"
+    if active_only:
+        sql += " WHERE active=1"
+    sql += " ORDER BY display_order ASC, created_at DESC"
+    rows = conn.execute(sql).fetchall()
+    conn.close()
+    cols = ["id", "name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def update_featured_tournament(fid: int, **kwargs) -> bool:
+    allowed = {"name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return False
+    set_clause = ", ".join(f"{k}=?" for k in fields)
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(f"UPDATE featured_tournaments SET {set_clause} WHERE id=?",
+                       list(fields.values()) + [fid])
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+def delete_featured_tournament(fid: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM featured_tournaments WHERE id=?", (fid,))
     conn.commit()
     conn.close()
     return cur.rowcount > 0

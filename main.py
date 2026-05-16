@@ -34,6 +34,7 @@ from database import (
     get_user_profile, update_user_profile,
     save_user_tournament, list_user_tournaments, update_user_tournament, delete_user_tournament,
     update_user_contact,
+    add_featured_tournament, list_featured_tournaments, update_featured_tournament, delete_featured_tournament,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -102,6 +103,7 @@ async def login_page(request: Request, next: str = "/"):
         "next": next,
         "error": None,
         "login_message": get_setting("login_message", ""),
+        "featured_tournaments": list_featured_tournaments(active_only=True),
     })
 
 @app.post("/login", response_class=HTMLResponse)
@@ -1068,13 +1070,100 @@ async def uscf_col_debug(_user: dict = Depends(require_admin)):
         return {"error": "re-upload the allratings file to generate this"}
 
 # ---------------------------------------------------------------------------
+# Admin — Featured Tournaments
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/tournaments", response_class=HTMLResponse)
+async def admin_tournaments_page(request: Request, user: dict = Depends(require_admin)):
+    return templates.TemplateResponse(request=request, name="admin_tournaments.html",
+                                      context={"tournaments": list_featured_tournaments()})
+
+@app.post("/admin/tournaments")
+async def admin_add_tournament(
+    request: Request,
+    name: str = Form(...),
+    subtitle: str = Form(""),
+    description: str = Form(""),
+    info_url: str = Form(""),
+    pairings_url: str = Form(""),
+    source: str = Form("manual"),
+    source_url: str = Form(""),
+    display_order: int = Form(0),
+    _user: dict = Depends(require_admin),
+):
+    add_featured_tournament(
+        name=name.strip(),
+        subtitle=subtitle.strip() or None,
+        description=description.strip() or None,
+        info_url=info_url.strip() or None,
+        pairings_url=pairings_url.strip() or None,
+        source=source or "manual",
+        source_url=source_url.strip() or None,
+        display_order=display_order,
+    )
+    return RedirectResponse("/admin/tournaments", status_code=303)
+
+@app.post("/admin/tournaments/{fid}/toggle")
+async def admin_toggle_tournament(fid: int, _user: dict = Depends(require_admin)):
+    conn = __import__("sqlite3").connect(__import__("database").DB_FILE)
+    row = conn.execute("SELECT active FROM featured_tournaments WHERE id=?", (fid,)).fetchone()
+    conn.close()
+    if row is not None:
+        update_featured_tournament(fid, active=0 if row[0] else 1)
+    return RedirectResponse("/admin/tournaments", status_code=303)
+
+@app.post("/admin/tournaments/{fid}/delete")
+async def admin_delete_tournament(fid: int, _user: dict = Depends(require_admin)):
+    delete_featured_tournament(fid)
+    return RedirectResponse("/admin/tournaments", status_code=303)
+
+@app.post("/admin/tournaments/{fid}/edit")
+async def admin_edit_tournament(
+    fid: int,
+    name: str = Form(...),
+    subtitle: str = Form(""),
+    description: str = Form(""),
+    info_url: str = Form(""),
+    pairings_url: str = Form(""),
+    display_order: int = Form(0),
+    _user: dict = Depends(require_admin),
+):
+    update_featured_tournament(
+        fid,
+        name=name.strip(),
+        subtitle=subtitle.strip() or None,
+        description=description.strip() or None,
+        info_url=info_url.strip() or None,
+        pairings_url=pairings_url.strip() or None,
+        display_order=display_order,
+    )
+    return RedirectResponse("/admin/tournaments", status_code=303)
+
+@app.get("/admin/fetch-url")
+async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
+    """Fetch a URL and return the page title for auto-fill when importing from external sources."""
+    if not url.startswith(("http://", "https://")):
+        return JSONResponse({"error": "Invalid URL"}, status_code=400)
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"})
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
+        # strip common suffixes like " - CaissaLive" or " | US Chess"
+        title = re.sub(r"\s*[-|–]\s*(CaissaLive|US Chess|uschess\.org).*$", "", title, flags=re.IGNORECASE).strip()
+        return {"title": title, "url": str(resp.url)}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+# ---------------------------------------------------------------------------
 # Player Rating Lookup
 # ---------------------------------------------------------------------------
 
 @app.get("/player-lookup", response_class=HTMLResponse)
 async def player_lookup_page(request: Request, user: dict = Depends(require_login)):
     return templates.TemplateResponse(request=request, name="player_lookup.html",
-                                      context={"current_user": user})
+                                      context={"current_user": user,
+                                               "featured_tournaments": list_featured_tournaments(active_only=True)})
 
 @app.get("/api/player-lookup-search", response_class=HTMLResponse)
 async def player_lookup_search(name: str = "", _user: dict = Depends(require_login)):
@@ -1514,7 +1603,8 @@ async def uscf_calculator_page(request: Request, user: dict = Depends(require_lo
     profile = get_user_profile(user["id"])
     saved = list_user_tournaments(user["id"])
     return templates.TemplateResponse(request=request, name="uscf_calculator.html",
-                                      context={"profile": profile, "saved_tournaments": saved})
+                                      context={"profile": profile, "saved_tournaments": saved,
+                                               "featured_tournaments": list_featured_tournaments(active_only=True)})
 
 @app.post("/api/uscf-tournaments")
 async def api_save_tournament(request: Request, user: dict = Depends(require_login)):

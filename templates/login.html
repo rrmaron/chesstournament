@@ -34,17 +34,26 @@
         </div>
     </div>
 
+    {% for ft in featured_tournaments %}
     <div class="card shadow-sm mt-3">
         <div class="card-body p-3 text-center">
-            <div class="fw-semibold mb-1" style="font-size:0.85rem">♛ K-8 Middle School Chess Nationals 2026</div>
+            <div class="fw-semibold mb-1" style="font-size:0.85rem">
+              ♛ {{ ft.name }}{% if ft.subtitle %} — {{ ft.subtitle }}{% endif %}
+            </div>
+            {% if ft.description %}<p class="small text-muted mb-2">{{ ft.description }}</p>{% endif %}
             <div class="d-flex flex-column gap-1">
-                <a href="https://new.uschess.org/nms-championships-2026" target="_blank" rel="noopener"
+                {% if ft.info_url %}
+                <a href="{{ ft.info_url }}" target="_blank" rel="noopener"
                    class="btn btn-outline-primary btn-sm">Tournament Info</a>
-                <a href="https://www.uschess.org/results/2026/ms/?page=PAIRINGS&xsection=K8" target="_blank" rel="noopener"
-                   class="btn btn-outline-secondary btn-sm">K-8 Pairings &amp; Standings</a>
+                {% endif %}
+                {% if ft.pairings_url %}
+                <a href="{{ ft.pairings_url }}" target="_blank" rel="noopener"
+                   class="btn btn-outline-secondary btn-sm">Pairings &amp; Standings</a>
+                {% endif %}
             </div>
         </div>
     </div>
+    {% endfor %}
 </div>
 </body>
 </html>

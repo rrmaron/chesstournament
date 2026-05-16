@@ -1,0 +1,22 @@
+{% if featured_tournaments %}
+{% for ft in featured_tournaments %}
+<div class="card mb-4 border-primary">
+  <div class="card-body py-2 px-3">
+    <div class="fw-semibold mb-2">
+      ♛ {{ ft.name }}{% if ft.subtitle %} — {{ ft.subtitle }}{% endif %}
+    </div>
+    {% if ft.description %}<p class="small text-muted mb-2">{{ ft.description }}</p>{% endif %}
+    <div class="d-flex flex-wrap gap-2">
+      {% if ft.info_url %}
+      <a href="{{ ft.info_url }}" target="_blank" rel="noopener"
+         class="btn btn-outline-primary btn-sm">Tournament Info</a>
+      {% endif %}
+      {% if ft.pairings_url %}
+      <a href="{{ ft.pairings_url }}" target="_blank" rel="noopener"
+         class="btn btn-outline-secondary btn-sm">Pairings &amp; Standings</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
