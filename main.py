@@ -1160,101 +1160,93 @@ async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
 # ---------------------------------------------------------------------------
 
 def _parse_uscf_crosstable(html: str, uscf_id: str) -> list:
-    """Extract a player's game results from a USCF cross-table HTML page."""
-    from html.parser import HTMLParser
+    """Extract a player's game results from a USCF cross-table HTML page.
 
-    class CTParser(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self._rows = []
-            self._cells = []
-            self._cell_text = None
-            self._cell_links = []
+    The MSA cross-table is rendered inside a <pre> block as pipe-delimited text
+    with embedded HTML anchor tags. Each player spans 2-3 lines separated by
+    a dashed rule. Example:
 
-        def handle_starttag(self, tag, attrs):
-            attrs_d = dict(attrs)
-            if tag == 'tr':
-                self._cells = []
-            elif tag in ('td', 'th'):
-                self._cell_text = ''
-                self._cell_links = []
-            elif tag == 'a' and self._cell_text is not None:
-                href = attrs_d.get('href', '')
-                if href:
-                    self._cell_links.append(href)
-            elif tag == 'br' and self._cell_text is not None:
-                self._cell_text += ' '
+        <a href=XtblPlr.php?...>9</a> | <a href=MbrDtlMain.php?31625896>NAKSHWIN MEHTA</a>  |2.5  |B    |L  12|D   4|W  14|
+       TX | 31625896 / R: 1276   ->1353     |     |     |W    |B    |B    |
+    """
+    # Extract the <pre> block that holds the cross-table
+    pre_m = re.search(r'<pre>(.*?)</pre>', html, re.S | re.I)
+    if not pre_m:
+        return []
+    pre_text = pre_m.group(1)
 
-        def handle_endtag(self, tag):
-            if tag in ('td', 'th') and self._cell_text is not None:
-                self._cells.append({'text': ' '.join(self._cell_text.split()), 'links': self._cell_links[:]})
-                self._cell_text = None
-                self._cell_links = []
-            elif tag == 'tr' and self._cells:
-                self._rows.append(self._cells[:])
-                self._cells = []
+    # Strip HTML tags but preserve href targets so we can extract IDs
+    def strip_tags_keep_href(text):
+        """Return plain text, but replace <a href=...> with the href value in brackets."""
+        out = re.sub(r'<a\s[^>]*href=([^\s>]+)[^>]*>', r'[\1]', text, flags=re.I)
+        out = re.sub(r'<[^>]+>', '', out)
+        return out
 
-        def handle_data(self, data):
-            if self._cell_text is not None:
-                self._cell_text += data
+    pre_plain = strip_tags_keep_href(pre_text)
 
-    parser = CTParser()
-    parser.feed(html)
+    # Split into per-player blocks by the dashed separator lines
+    blocks = re.split(r'-{20,}', pre_plain)
 
-    players = {}   # pair_num -> {name, uscf_id, pre_rating}
-    target_row = None
+    players = {}   # pair_num -> {name, uscf_id, pre_rating, results_line}
+    target_pair = None
 
-    for row in parser._rows:
-        if len(row) < 4:
+    for block in blocks:
+        lines = [ln for ln in block.split('\n') if ln.strip()]
+        if not lines:
             continue
-        pair_cell = row[0]
-        # Pair number must be numeric
-        pair_m = re.match(r'^(\d+)$', pair_cell['text'])
+
+        # First non-empty line has pair number, name, score, and round results
+        # Format: [XtblPlr link] pair | [MbrDtlMain link] NAME  |score|R1|R2|...|
+        first = lines[0]
+
+        pair_m = re.search(r'\[XtblPlr\.php\?[^\]]*\]\s*(\d+)', first)
         if not pair_m:
             continue
         pair_num = int(pair_m.group(1))
 
-        name_cell = row[1]
-        cell_text = name_cell['text']
+        # Name from text between first | and second |
+        name_m = re.search(r'\]\s*\d+\s*\|\s*(?:\[[^\]]+\])?\s*([^|]+?)\s*\|', first)
+        player_name = name_m.group(1).strip().title() if name_m else ''
 
-        # USCF ID from MbrDtlMain link or XtblPlr link
-        player_uscf = None
-        for href in name_cell['links']:
-            m = re.search(r'MbrDtlMain\.php\?(\d+)', href)
-            if m:
-                player_uscf = m.group(1)
-                break
-        if not player_uscf:
-            for href in pair_cell['links']:
-                m = re.search(r'XtblPlr\.php\?[^-]+-\d+-(\d+)', href)
-                if m:
-                    player_uscf = m.group(1)
-                    break
-        if not player_uscf:
-            m = re.search(r'\b(\d{7,8})\b', cell_text)
-            if m:
-                player_uscf = m.group(1)
+        # USCF ID from MbrDtlMain link
+        uid_m = re.search(r'\[MbrDtlMain\.php\?(\d+)\]', first)
+        if not uid_m:
+            # Fall back: look in second line (state | uscf_id / R: ...)
+            second = lines[1] if len(lines) > 1 else ''
+            uid_m = re.search(r'\b(\d{7,8})\b', second)
+        player_uscf = uid_m.group(1) if uid_m else None
 
-        # Name: text before state code, USCF ID, or rating
-        player_name = re.split(r'\s+[A-Z]{2}\s+\||\s+\d{7,8}|\s+R:', cell_text)[0].strip().title()
-
-        # Pre-rating: "R: 1894 ->1898"
+        # Pre-rating from second line: "R: 1276   ->1353"
         pre_rating = None
-        rm = re.search(r'R:\s*P?(\d{3,4})\s*->', cell_text)
-        if rm:
-            pre_rating = int(rm.group(1))
+        for ln in lines[1:3]:
+            rm = re.search(r'R:\s*P?(\d{3,4})\s*->', ln)
+            if rm:
+                pre_rating = int(rm.group(1))
+                break
 
-        players[pair_num] = {'name': player_name, 'uscf_id': player_uscf, 'pre_rating': pre_rating}
+        # Round result cells from first line: everything after the score column
+        # Split by | and skip first 3 segments (pair, name, score)
+        cols = first.split('|')
+        results_cols = cols[3:] if len(cols) > 3 else []
+
+        players[pair_num] = {
+            'name': player_name,
+            'uscf_id': player_uscf,
+            'pre_rating': pre_rating,
+            'results': results_cols,
+        }
         if player_uscf == uscf_id:
-            target_row = row
+            target_pair = pair_num
 
-    if not target_row:
+    if target_pair is None:
         return []
 
+    target = players[target_pair]
     games = []
     result_map = {'W': '1', 'D': '0.5', 'L': '0'}
-    for cell in target_row[3:]:   # skip pair, name, score columns
-        txt = cell['text'].strip().upper()
+
+    for col in target['results']:
+        txt = col.strip().upper()
         m = re.match(r'^([WDLHFUBXE])\s*(\d+)', txt)
         if not m:
             continue
