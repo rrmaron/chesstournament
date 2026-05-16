@@ -770,6 +770,13 @@ function renderSummary(prog, finalRatings, finalPrior) {
 let saveTimers = {};
 
 function ratingsBefore(ti) {
+  const t = tournaments[ti];
+  // USCF-imported tournaments carry their actual historical pre-rating.
+  // Use it directly rather than chaining from the current live rating.
+  if (t && t.uscfPreRating != null) {
+    const primType = primaryTypeOf(ti);
+    return { r: t.uscfPreRating, g: effectivePriorGamesFor(primType) };
+  }
   const ALL_TYPES = ['standard', 'quick', 'blitz', 'fide'];
   const curR = {}, curP = {};
   ALL_TYPES.forEach(rt => { curR[rt] = myRatingFor(rt); curP[rt] = effectivePriorGamesFor(rt); });
@@ -1284,6 +1291,7 @@ async function importSelectedTournaments() {
       savedId: null,
       saveStatus: 'unsaved',
       ratingTypes: [sysToType[t.rating_system] || 'standard'],
+      uscfPreRating: t.pre_rating || null,
     });
   }
 
