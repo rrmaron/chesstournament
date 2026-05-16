@@ -42,8 +42,9 @@
         </div>
         <div class="form-text">Verified from USCF when you look up your ID.</div>
       </div>
-      <div class="col-sm-2 d-flex align-items-end">
+      <div class="col-sm-2 d-flex align-items-end flex-column gap-1">
         <button class="btn btn-primary w-100" onclick="addTournament()">+ Add Tournament</button>
+        <button class="btn btn-outline-secondary w-100" onclick="openHistoryModal()" title="Load all past USCF tournaments for this player">📋 Load History</button>
       </div>
       <div class="col-6 col-sm-3">
         <label class="form-label small d-flex justify-content-between">
@@ -139,6 +140,48 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
 </p>
 
 </div>
+</div>
+
+<!-- USCF Tournament History Modal -->
+<div class="modal fade" id="historyModal" tabindex="-1" aria-labelledby="historyModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="historyModalLabel">USCF Tournament History</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="hist-loading" class="text-center py-4">
+          <div class="spinner-border text-primary" role="status"></div>
+          <p class="mt-2 text-muted" id="hist-status">Fetching tournament history from USCF…</p>
+        </div>
+        <div id="hist-content" style="display:none">
+          <p class="small text-muted mb-2" id="hist-count"></p>
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th><input type="checkbox" id="hist-check-all" class="form-check-input" checked
+                             onchange="document.querySelectorAll('.hist-chk').forEach(c=>c.checked=this.checked)"></th>
+                  <th>Date</th><th>Tournament</th><th>St</th><th>Type</th>
+                  <th class="text-center">Before</th><th class="text-center">After</th><th class="text-center">Δ</th>
+                </tr>
+              </thead>
+              <tbody id="hist-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="hist-empty" style="display:none" class="text-muted text-center py-4">No tournament history found for this USCF ID.</div>
+        <div id="hist-error" style="display:none" class="alert alert-danger"></div>
+      </div>
+      <div class="modal-footer d-flex align-items-center gap-2">
+        <span id="hist-import-status" class="small text-muted me-auto"></span>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-primary" id="hist-import-btn" style="display:none"
+                onclick="importSelectedTournaments()">Import Selected</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- PGN / Notation Attach Modal -->
@@ -1152,6 +1195,108 @@ function removePgnPage(ti, gi, pi) {
   delete game.pgnUrl;
   renderAll();
   scheduleSave(ti);
+}
+
+// ── USCF Tournament History ────────────────────────────────────────────────────
+let _histData = [];
+
+async function openHistoryModal() {
+  const uscfId = document.getElementById('my-uscf-id').value.trim();
+  if (!uscfId) { alert('Enter your USCF ID first, then click "Look up".'); return; }
+
+  const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('historyModal'));
+  modal.show();
+  _setHistState('loading');
+
+  try {
+    const r = await fetch('/api/uscf-tournament-history?uscf_id=' + encodeURIComponent(uscfId));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _histData = await r.json();
+  } catch (e) {
+    _setHistState('error', 'Could not load history: ' + e.message); return;
+  }
+
+  if (!_histData.length) { _setHistState('empty'); return; }
+
+  const sysLabel = { R: 'Standard', Q: 'Quick', B: 'Blitz' };
+  document.getElementById('hist-count').textContent =
+    `${_histData.length} tournament${_histData.length !== 1 ? 's' : ''} found — most recent first. Check the ones to import.`;
+  document.getElementById('hist-tbody').innerHTML = _histData.map((t, i) => {
+    const delta = (t.post_rating && t.pre_rating) ? t.post_rating - t.pre_rating : null;
+    const dStr  = delta !== null ? (delta >= 0 ? '+' : '') + delta : '—';
+    const dCls  = delta > 0 ? 'text-success fw-semibold' : delta < 0 ? 'text-danger fw-semibold' : 'text-muted';
+    return `<tr>
+      <td><input type="checkbox" class="form-check-input hist-chk" data-idx="${i}" checked></td>
+      <td class="small text-nowrap">${t.date || '—'}</td>
+      <td class="small">${escHtml(t.name)}</td>
+      <td class="small text-muted">${t.state || ''}</td>
+      <td><span class="badge bg-secondary">${sysLabel[t.rating_system] || t.rating_system}</span></td>
+      <td class="text-center small">${t.pre_rating || '—'}</td>
+      <td class="text-center small">${t.post_rating || '—'}</td>
+      <td class="text-center small ${dCls}">${dStr}</td>
+    </tr>`;
+  }).join('');
+
+  _setHistState('list');
+}
+
+function _setHistState(state, msg) {
+  document.getElementById('hist-loading').style.display  = state === 'loading' ? 'block' : 'none';
+  document.getElementById('hist-content').style.display  = state === 'list'    ? 'block' : 'none';
+  document.getElementById('hist-empty').style.display    = state === 'empty'   ? 'block' : 'none';
+  document.getElementById('hist-error').style.display    = state === 'error'   ? 'block' : 'none';
+  document.getElementById('hist-import-btn').style.display = state === 'list' ? 'inline-block' : 'none';
+  if (state === 'error') document.getElementById('hist-error').textContent = msg || '';
+  if (state === 'loading' && msg) document.getElementById('hist-status').textContent = msg;
+  document.getElementById('hist-import-status').textContent = '';
+}
+
+async function importSelectedTournaments() {
+  const uscfId = document.getElementById('my-uscf-id').value.trim();
+  const checked = Array.from(document.querySelectorAll('.hist-chk:checked'));
+  if (!checked.length) { alert('Select at least one tournament.'); return; }
+
+  const btn = document.getElementById('hist-import-btn');
+  const statusEl = document.getElementById('hist-import-status');
+  btn.disabled = true;
+
+  // Build list oldest-first so rating chain is chronological in the calculator
+  const toImport = checked.map(el => _histData[parseInt(el.dataset.idx)]).reverse();
+  const sysToType = { R: 'standard', Q: 'quick', B: 'blitz' };
+
+  for (let i = 0; i < toImport.length; i++) {
+    const t = toImport[i];
+    statusEl.textContent = `Importing ${i + 1} / ${toImport.length}: ${t.name}…`;
+
+    let games = [];
+    try {
+      const r = await fetch(
+        `/api/uscf-tournament-games?event_id=${encodeURIComponent(t.event_id)}` +
+        `&section_num=${t.section_num}&uscf_id=${encodeURIComponent(uscfId)}`
+      );
+      if (r.ok) games = (await r.json()).games || [];
+    } catch (_) { /* use empty games if fetch fails */ }
+
+    const label = t.name + (t.date ? ' (' + t.date + ')' : '');
+    tournaments.push({
+      name: label,
+      games,
+      savedId: null,
+      saveStatus: 'unsaved',
+      ratingTypes: [sysToType[t.rating_system] || 'standard'],
+    });
+  }
+
+  renderAll();
+  // Save all newly added tournaments
+  const startIdx = tournaments.length - toImport.length;
+  for (let i = 0; i < toImport.length; i++) scheduleSave(startIdx + i);
+
+  statusEl.textContent = `✓ Imported ${toImport.length} tournament${toImport.length !== 1 ? 's' : ''}.`;
+  btn.disabled = false;
+  setTimeout(() => {
+    bootstrap.Modal.getInstance(document.getElementById('historyModal')).hide();
+  }, 800);
 }
 </script>
 {% endblock %}

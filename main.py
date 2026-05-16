@@ -1156,6 +1156,226 @@ async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
         return JSONResponse({"error": str(exc)}, status_code=502)
 
 # ---------------------------------------------------------------------------
+# USCF Tournament History
+# ---------------------------------------------------------------------------
+
+def _parse_uscf_crosstable(html: str, uscf_id: str) -> list:
+    """Extract a player's game results from a USCF cross-table HTML page."""
+    from html.parser import HTMLParser
+
+    class CTParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self._rows = []
+            self._cells = []
+            self._cell_text = None
+            self._cell_links = []
+
+        def handle_starttag(self, tag, attrs):
+            attrs_d = dict(attrs)
+            if tag == 'tr':
+                self._cells = []
+            elif tag in ('td', 'th'):
+                self._cell_text = ''
+                self._cell_links = []
+            elif tag == 'a' and self._cell_text is not None:
+                href = attrs_d.get('href', '')
+                if href:
+                    self._cell_links.append(href)
+            elif tag == 'br' and self._cell_text is not None:
+                self._cell_text += ' '
+
+        def handle_endtag(self, tag):
+            if tag in ('td', 'th') and self._cell_text is not None:
+                self._cells.append({'text': ' '.join(self._cell_text.split()), 'links': self._cell_links[:]})
+                self._cell_text = None
+                self._cell_links = []
+            elif tag == 'tr' and self._cells:
+                self._rows.append(self._cells[:])
+                self._cells = []
+
+        def handle_data(self, data):
+            if self._cell_text is not None:
+                self._cell_text += data
+
+    parser = CTParser()
+    parser.feed(html)
+
+    players = {}   # pair_num -> {name, uscf_id, pre_rating}
+    target_row = None
+
+    for row in parser._rows:
+        if len(row) < 4:
+            continue
+        pair_cell = row[0]
+        # Pair number must be numeric
+        pair_m = re.match(r'^(\d+)$', pair_cell['text'])
+        if not pair_m:
+            continue
+        pair_num = int(pair_m.group(1))
+
+        name_cell = row[1]
+        cell_text = name_cell['text']
+
+        # USCF ID from MbrDtlMain link or XtblPlr link
+        player_uscf = None
+        for href in name_cell['links']:
+            m = re.search(r'MbrDtlMain\.php\?(\d+)', href)
+            if m:
+                player_uscf = m.group(1)
+                break
+        if not player_uscf:
+            for href in pair_cell['links']:
+                m = re.search(r'XtblPlr\.php\?[^-]+-\d+-(\d+)', href)
+                if m:
+                    player_uscf = m.group(1)
+                    break
+        if not player_uscf:
+            m = re.search(r'\b(\d{7,8})\b', cell_text)
+            if m:
+                player_uscf = m.group(1)
+
+        # Name: text before state code, USCF ID, or rating
+        player_name = re.split(r'\s+[A-Z]{2}\s+\||\s+\d{7,8}|\s+R:', cell_text)[0].strip().title()
+
+        # Pre-rating: "R: 1894 ->1898"
+        pre_rating = None
+        rm = re.search(r'R:\s*P?(\d{3,4})\s*->', cell_text)
+        if rm:
+            pre_rating = int(rm.group(1))
+
+        players[pair_num] = {'name': player_name, 'uscf_id': player_uscf, 'pre_rating': pre_rating}
+        if player_uscf == uscf_id:
+            target_row = row
+
+    if not target_row:
+        return []
+
+    games = []
+    result_map = {'W': '1', 'D': '0.5', 'L': '0'}
+    for cell in target_row[3:]:   # skip pair, name, score columns
+        txt = cell['text'].strip().upper()
+        m = re.match(r'^([WDLHFUBXE])\s*(\d+)', txt)
+        if not m:
+            continue
+        code, opp_pair = m.group(1), int(m.group(2))
+        result = result_map.get(code)
+        if result is None:
+            continue
+        if opp_pair in players:
+            opp = players[opp_pair]
+            games.append({
+                'name': opp['name'],
+                'rating': opp['pre_rating'],
+                'uscfId': opp['uscf_id'],
+                'result': result,
+                'provisional': None,
+                'games': None,
+            })
+    return games
+
+
+@app.get("/api/uscf-tournament-history")
+async def api_uscf_tournament_history(uscf_id: str, _user: dict = Depends(require_login)):
+    uscf_id = uscf_id.strip()
+    if not re.match(r'^\d{5,8}$', uscf_id):
+        raise HTTPException(400, "Invalid USCF ID")
+
+    cache_key = f"uscf_hist_{uscf_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+        "Accept": "application/json",
+        "Origin": "https://ratings.uschess.org",
+    }
+
+    all_sections = []
+    offset = 0
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        while True:
+            try:
+                r = await client.get(
+                    f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections?pageSize=100&offset={offset}",
+                    headers=api_headers,
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                items = data.get("items", [])
+                all_sections.extend(items)
+                if not items or not data.get("hasNextPage"):
+                    break
+                offset += 100
+            except Exception:
+                break
+
+    if not all_sections:
+        result: list = []
+        _cache_set(cache_key, result, ttl=300)
+        return result
+
+    # Group by event ID; for each event prefer R > Q > B
+    from collections import defaultdict
+    events: dict = defaultdict(list)
+    for s in all_sections:
+        eid = (s.get("event") or {}).get("id")
+        if eid:
+            events[eid].append(s)
+
+    sys_priority = {"R": 0, "Q": 1, "B": 2}
+    tournaments = []
+    for eid, sections in events.items():
+        sections.sort(key=lambda s: sys_priority.get(s.get("ratingSystem", "R"), 9))
+        primary = sections[0]
+        rec = primary.get("ratingRecords") or []
+        ev = primary.get("event") or {}
+        pre  = rec[0].get("preRating")  if rec else None
+        post = rec[0].get("postRating") if rec else None
+        tournaments.append({
+            "event_id":     eid,
+            "section_num":  primary.get("sectionNumber"),
+            "name":         ev.get("name", "Unknown Tournament"),
+            "date":         ev.get("endDate") or ev.get("startDate"),
+            "state":        ev.get("stateCode"),
+            "rating_system": primary.get("ratingSystem", "R"),
+            "pre_rating":   pre,
+            "post_rating":  post,
+        })
+
+    tournaments.sort(key=lambda t: t["date"] or "", reverse=True)
+    _cache_set(cache_key, tournaments, ttl=300)
+    return tournaments
+
+
+@app.get("/api/uscf-tournament-games")
+async def api_uscf_tournament_games(
+    event_id: str, section_num: int, uscf_id: str, _user: dict = Depends(require_login)
+):
+    uscf_id = uscf_id.strip()
+    if not re.match(r'^\d{5,8}$', uscf_id) or not re.match(r'^\w+$', event_id):
+        raise HTTPException(400, "Invalid parameters")
+
+    cache_key = f"uscf_games_{event_id}_{section_num}_{uscf_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    url = f"https://www.uschess.org/msa/XtblMain.php?{event_id}.{section_num}-{uscf_id}"
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"})
+        games = _parse_uscf_crosstable(resp.text, uscf_id)
+    except Exception:
+        games = []
+
+    result = {"games": games}
+    _cache_set(cache_key, result, ttl=600)
+    return result
+
+# ---------------------------------------------------------------------------
 # Player Rating Lookup
 # ---------------------------------------------------------------------------
 
