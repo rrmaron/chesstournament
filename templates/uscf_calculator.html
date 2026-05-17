@@ -45,6 +45,7 @@
       <div class="col-sm-2 d-flex align-items-end flex-column gap-1">
         <button class="btn btn-primary w-100" onclick="addTournament()">+ Add Tournament</button>
         <button class="btn btn-outline-secondary w-100" onclick="openHistoryModal()" title="Load all past USCF tournaments for this player">📋 Load History</button>
+        <button class="btn btn-outline-secondary w-100" onclick="openTrashModal()" title="View and restore deleted tournaments">🗑️ Trash</button>
       </div>
       <div class="col-6 col-sm-3">
         <label class="form-label small d-flex justify-content-between">
@@ -91,7 +92,23 @@
 const savedTournamentsData = {{ saved_tournaments | tojson }};
 </script>
 
-<!-- Saved Tournaments -->
+<!-- Tournaments (active calculator — above saved history) -->
+<div id="tournaments-container"></div>
+
+<!-- Summary -->
+<div id="summary-section" class="d-none mb-4">
+  <div class="card border-success">
+    <div class="card-header bg-success text-white fw-semibold">Rating Progression</div>
+    <div class="card-body" id="summary-body"></div>
+  </div>
+</div>
+
+<p class="text-muted small text-center">
+  Standard (N&gt;8): K&times;(S&minus;E) + bonus when gain &gt; 14&times;&radic;max(m,4), where K&nbsp;=&nbsp;800/(N*+m) and N*&nbsp;=&nbsp;min(N,&nbsp;50/&radic;(0.662+0.00000739&times;(2569&minus;R)<sup>2</sup>)).
+  Special (N&le;8): provisional winning expectancy method. Estimates only — results may differ slightly from official USCF calculations.
+</p>
+
+<!-- Saved Tournaments (history — below active calculator) -->
 <div class="card mb-4 border-secondary" id="saved-tournaments-card" {% if not saved_tournaments %}style="display:none"{% endif %}>
   <div class="card-header fw-semibold text-secondary">Saved Tournaments</div>
   <div class="card-body p-0">
@@ -122,22 +139,6 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
     </table>
   </div>
 </div>
-
-<!-- Tournaments -->
-<div id="tournaments-container"></div>
-
-<!-- Summary -->
-<div id="summary-section" class="d-none mb-4">
-  <div class="card border-success">
-    <div class="card-header bg-success text-white fw-semibold">Rating Progression</div>
-    <div class="card-body" id="summary-body"></div>
-  </div>
-</div>
-
-<p class="text-muted small text-center">
-  Standard (N&gt;8): K&times;(S&minus;E) + bonus when gain &gt; 14&times;&radic;max(m,4), where K&nbsp;=&nbsp;800/(N*+m) and N*&nbsp;=&nbsp;min(N,&nbsp;50/&radic;(0.662+0.00000739&times;(2569&minus;R)<sup>2</sup>)).
-  Special (N&le;8): provisional winning expectancy method. Estimates only — results may differ slightly from official USCF calculations.
-</p>
 
 </div>
 </div>
@@ -179,6 +180,45 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         <button type="button" class="btn btn-primary" id="hist-import-btn" style="display:none"
                 onclick="importSelectedTournaments()">Import Selected</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Trash / Deleted Tournaments Modal -->
+<div class="modal fade" id="trashModal" tabindex="-1" aria-labelledby="trashModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="trashModalLabel">🗑️ Deleted Tournaments</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="trash-loading" class="text-center py-4">
+          <div class="spinner-border text-secondary" role="status"></div>
+          <p class="mt-2 text-muted">Loading…</p>
+        </div>
+        <div id="trash-content" style="display:none">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Tournament</th>
+                  <th class="text-center">Type</th>
+                  <th class="text-center">Before</th>
+                  <th class="text-center">After</th>
+                  <th class="text-center">Deleted</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="trash-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="trash-empty" style="display:none" class="text-muted text-center py-4">No deleted tournaments.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
       </div>
     </div>
   </div>
@@ -1305,6 +1345,78 @@ async function importSelectedTournaments() {
   setTimeout(() => {
     bootstrap.Modal.getInstance(document.getElementById('historyModal')).hide();
   }, 800);
+}
+
+// ── Trash (deleted tournaments) ───────────────────────────────────────────────
+
+async function openTrashModal() {
+  const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('trashModal'));
+  modal.show();
+  document.getElementById('trash-loading').style.display = '';
+  document.getElementById('trash-content').style.display = 'none';
+  document.getElementById('trash-empty').style.display = 'none';
+
+  let items = [];
+  try {
+    const r = await fetch('/api/uscf-tournaments/deleted');
+    items = await r.json();
+  } catch(_) {}
+
+  document.getElementById('trash-loading').style.display = 'none';
+
+  if (!items.length) {
+    document.getElementById('trash-empty').style.display = '';
+    return;
+  }
+
+  const typeLabel = { standard: 'Standard', quick: 'Quick', blitz: 'Blitz', fide: 'FIDE' };
+  const tbody = document.getElementById('trash-tbody');
+  tbody.innerHTML = items.map(t => {
+    const types = (t.tournament_type || 'standard').split(',').map(x => typeLabel[x] || x).join(', ');
+    const del = t.deleted_at ? t.deleted_at.slice(0, 10) : '—';
+    const delta = (t.end_rating && t.start_rating) ? t.end_rating - t.start_rating : null;
+    const deltaHtml = delta !== null
+      ? `<span class="${delta > 0 ? 'text-success' : delta < 0 ? 'text-danger' : ''}">${delta > 0 ? '+' : ''}${delta}</span>`
+      : '—';
+    return `<tr>
+      <td>${t.name}</td>
+      <td class="text-center small">${types}</td>
+      <td class="text-center small">${t.start_rating || '—'}</td>
+      <td class="text-center small">${t.end_rating ? `${t.end_rating} (${deltaHtml})` : '—'}</td>
+      <td class="text-center small text-muted">${del}</td>
+      <td class="text-center">
+        <button class="btn btn-sm btn-outline-success" onclick="restoreTournament(${t.id}, this)">Restore</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('trash-content').style.display = '';
+}
+
+async function restoreTournament(tid, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/uscf-tournaments/${tid}/undelete`, { method: 'POST' });
+    if (!r.ok) throw new Error();
+    // Remove row from trash table
+    btn.closest('tr').remove();
+    // Reload saved tournaments list so it appears in the Load section
+    const lr = await fetch('/api/uscf-tournaments');
+    if (lr.ok) {
+      savedTournamentsData = await lr.json();
+      renderSavedTournaments();
+    }
+    // Show empty message if no more rows
+    if (!document.getElementById('trash-tbody').children.length) {
+      document.getElementById('trash-content').style.display = 'none';
+      document.getElementById('trash-empty').style.display = '';
+    }
+  } catch(_) {
+    btn.disabled = false;
+    btn.textContent = 'Restore';
+    alert('Failed to restore tournament.');
+  }
 }
 </script>
 {% endblock %}

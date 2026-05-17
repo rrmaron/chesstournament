@@ -131,8 +131,13 @@ def init_db():
         end_rating INTEGER,
         games_json TEXT NOT NULL,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        deleted_at TEXT DEFAULT NULL,
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )''')
+    try:
+        c.execute("ALTER TABLE user_tournaments ADD COLUMN deleted_at TEXT DEFAULT NULL")
+    except Exception:
+        pass  # Column already exists
 
     c.execute('''CREATE TABLE IF NOT EXISTS featured_tournaments (
         id INTEGER PRIMARY KEY,
@@ -385,11 +390,22 @@ def list_user_tournaments(user_id: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute(
         "SELECT id, name, tournament_type, start_rating, end_rating, games_json, created_at "
-        "FROM user_tournaments WHERE user_id=? ORDER BY created_at DESC",
+        "FROM user_tournaments WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
         (user_id,)
     ).fetchall()
     conn.close()
     cols = ["id", "name", "tournament_type", "start_rating", "end_rating", "games_json", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def list_deleted_user_tournaments(user_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, name, tournament_type, start_rating, end_rating, games_json, created_at, deleted_at "
+        "FROM user_tournaments WHERE user_id=? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "name", "tournament_type", "start_rating", "end_rating", "games_json", "created_at", "deleted_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 def update_user_contact(uid: int, email: Optional[str], phone: Optional[str]):
@@ -415,7 +431,18 @@ def update_user_tournament(tournament_id: int, user_id: int, name: str,
 def delete_user_tournament(tournament_id: int, user_id: int) -> bool:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.execute(
-        "DELETE FROM user_tournaments WHERE id=? AND user_id=?", (tournament_id, user_id)
+        "UPDATE user_tournaments SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND deleted_at IS NULL",
+        (tournament_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+def undelete_user_tournament(tournament_id: int, user_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "UPDATE user_tournaments SET deleted_at=NULL WHERE id=? AND user_id=? AND deleted_at IS NOT NULL",
+        (tournament_id, user_id)
     )
     conn.commit()
     conn.close()

@@ -33,6 +33,7 @@ from database import (
     update_player_payment, update_player_bye_request,
     get_user_profile, update_user_profile,
     save_user_tournament, list_user_tournaments, update_user_tournament, delete_user_tournament,
+    list_deleted_user_tournaments, undelete_user_tournament,
     update_user_contact,
     add_featured_tournament, list_featured_tournaments, update_featured_tournament, delete_featured_tournament,
 )
@@ -1861,6 +1862,19 @@ async def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
     if not ok:
         return JSONResponse({"error": "Not found"}, status_code=404)
     return {"deleted": tid}
+
+
+@app.get("/api/uscf-tournaments/deleted")
+async def api_list_deleted_tournaments(user: dict = Depends(require_login)):
+    return list_deleted_user_tournaments(user["id"])
+
+
+@app.post("/api/uscf-tournaments/{tid}/undelete")
+async def api_undelete_tournament(tid: int, user: dict = Depends(require_login)):
+    ok = undelete_user_tournament(tid, user["id"])
+    if not ok:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return {"restored": tid}
 
 
 @app.post("/api/pgn/upload")
