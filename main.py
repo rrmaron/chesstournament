@@ -1434,7 +1434,8 @@ async def _fetch_games_from_ratings_api(
         break
 
     # Build opponent pre-rating lookup from all players in standings
-    ratings_map = {}
+    ratings_map = {}      # memberId → preRating
+    post_ratings_map = {} # memberId → postRating
     for player in standings_items:
         member_id = str(player.get("memberId", ""))
         if not member_id:
@@ -1442,8 +1443,11 @@ async def _fetch_games_from_ratings_api(
         for r in player.get("ratings", []):
             if r.get("ratingSystem") == rating_system:
                 pre = r.get("preRating")
+                post = r.get("postRating")
                 if pre:
                     ratings_map[member_id] = pre
+                if post:
+                    post_ratings_map[member_id] = post
                 break
 
     # Build name lookup from standings (memberId → display name)
@@ -1476,6 +1480,7 @@ async def _fetch_games_from_ratings_api(
         result.append({
             "name": opp_name,
             "rating": ratings_map.get(opp_id),
+            "post_rating": post_ratings_map.get(opp_id),
             "uscfId": opp_id,
             "result": game_result,
             "provisional": None,

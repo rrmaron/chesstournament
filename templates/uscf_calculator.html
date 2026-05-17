@@ -299,8 +299,10 @@ function restoreLiveRatings() {
 // ── Per-type helpers ───────────────────────────────────────────────────────────
 function gameRating(g, rType) {
   if (g.ratings && g.ratings[rType] != null) return g.ratings[rType];
-  if (rType === 'standard') return g.rating || null;
-  return null;
+  // g.rating covers standard and backward-compat for blitz/quick imported games
+  if (g.rating != null) return g.rating;
+  // Two-pass: use opponent's post-event rating when they were unrated pre-tournament
+  return g.postRating != null ? g.postRating : null;
 }
 
 function myRatingFor(rType) {
@@ -433,6 +435,10 @@ function calcTournamentForType(myRating, priorGames, games, rType) {
   if (!myRating) return null;
   const valid = games.filter(g => !g.bye && gameRating(g, rType) != null);
   if (!valid.length) return null;
+  // Detect how many games used the two-pass fallback (opponent was unrated, using post-event rating)
+  const twoPassCount = valid.filter(g =>
+    !(g.ratings && g.ratings[rType] != null) && g.rating == null && g.postRating != null
+  ).length;
 
   const m   = valid.length;
   const S   = valid.reduce((sum, g) => sum + parseFloat(g.result), 0);
@@ -474,6 +480,7 @@ function calcTournamentForType(myRating, priorGames, games, rType) {
     totalChange: Math.round(baseChange + bonus),
     newRating,
     newPrior: priorGames === Infinity ? Infinity : priorGames + m,
+    twoPassCount,
   };
 }
 
@@ -641,8 +648,12 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       : escHtml(g.name||'—');
     const ratingCells = types.map(rt => {
       const val = gameRating(g, rt);
-      return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px"
-                value="${val||''}" min="100" max="3000"
+      // Two-pass: opponent was unrated pre-event; using post-event rating
+      const usingPost = val != null && !(g.ratings && g.ratings[rt] != null) && g.rating == null && g.postRating != null;
+      const postStyle = usingPost ? ' border-color:#6c757d;background:#f8f9fa' : '';
+      const postTitle = usingPost ? ' title="Post-event rating (opponent was unrated before this tournament)"' : '';
+      return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px;${postStyle}"
+                value="${val||''}" min="100" max="3000"${postTitle}
                 onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
     }).join('');
     const pgnUrls = getPgnUrls(g);
@@ -701,6 +712,9 @@ function renderBreakdown(calcs, types) {
       ? `<div class="text-muted small fw-semibold mb-1">${lbl} Rating</div>` : '';
 
     let inner;
+    const twoPassNote = c.twoPassCount > 0
+      ? `<div class="col-12"><small class="text-muted">† ${c.twoPassCount} game${c.twoPassCount>1?'s':''} vs previously-unrated opponent${c.twoPassCount>1?'s':''} included using post-event rating (two-pass approximation of USCF Step 5)</small></div>`
+      : '';
     if (c.isSpecial) {
       inner = `
         <div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:80px">
@@ -716,7 +730,8 @@ function renderBreakdown(calcs, types) {
           <div class="text-muted small">New ${lbl}</div>
           <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
           <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} · special formula</div>
-        </div></div>`;
+        </div></div>
+        ${twoPassNote}`;
     } else {
       const bonusCol = c.bonus > 0
         ? `<div class="col-auto"><div class="border rounded p-2 text-center" style="min-width:90px">
@@ -743,7 +758,8 @@ function renderBreakdown(calcs, types) {
           <div class="text-muted small">New ${lbl}</div>
           <div class="fw-bold fs-5 ${cls(c.totalChange)}">${c.newRating}</div>
           <div class="text-muted" style="font-size:0.7rem">${sg(c.totalChange)} total</div>
-        </div></div>`;
+        </div></div>
+        ${twoPassNote}`;
     }
     return `<div class="${divider}">${header}<div class="row g-2 flex-wrap">${inner}</div></div>`;
   }).join('');
@@ -1331,7 +1347,8 @@ async function importSelectedTournaments() {
       );
       if (r.ok) {
         const data = await r.json();
-        games = data.games || [];
+        // Map snake_case post_rating → camelCase postRating for JS use
+        games = (data.games || []).map(g => ({...g, postRating: g.post_rating || null}));
         apiPreRating = data.pre_rating || null;
       }
     } catch (_) { /* use empty games if fetch fails */ }
