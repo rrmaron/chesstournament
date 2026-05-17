@@ -1163,71 +1163,126 @@ async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
 def _parse_uscf_crosstable(html: str, uscf_id: str) -> list:
     """Extract a player's game results from a USCF cross-table HTML page.
 
-    The MSA cross-table is rendered inside a <pre> block as pipe-delimited text
-    with embedded HTML anchor tags. Each player spans 2-3 lines separated by
-    a dashed rule. Example:
+    The MSA cross-table is inside a <pre> block with pipe-delimited text and
+    embedded HTML anchor tags.  Each player occupies 2-3 lines separated by a
+    dashed rule:
 
-        <a href=XtblPlr.php?...>9</a> | <a href=MbrDtlMain.php?31625896>NAKSHWIN MEHTA</a>  |2.5  |B    |L  12|D   4|W  14|
-       TX | 31625896 / R: 1276   ->1353     |     |     |W    |B    |B    |
+        <a href=XtblPlr.php?...>9</a> | <a href=MbrDtlMain.php?31625896>NAKSHWIN</a> |2.5|B |L 12|D  4|W 14|
+       TX | 31625896 / R: 1276->1353 | ...
+
+    We parse the raw HTML directly line-by-line to avoid any regex that contains
+    literal < > characters (those can get mangled by shell escaping when the
+    function runs inside a container invoked via SSH).
     """
-    # Extract the <pre> block that holds the cross-table
-    pre_m = re.search(r'<pre>(.*?)</pre>', html, re.S | re.I)
-    if not pre_m:
+    # Locate the <pre> block
+    pre_start = html.lower().find('<pre>')
+    pre_end   = html.lower().find('</pre>', pre_start + 1)
+    if pre_start < 0 or pre_end < 0:
         return []
-    pre_text = pre_m.group(1)
+    pre_text = html[pre_start + 5: pre_end]
 
-    # Strip HTML tags but preserve href targets so we can extract IDs
-    def strip_tags_keep_href(text):
-        """Return plain text, but replace <a href=...> with the href value in brackets."""
-        out = re.sub(r'<a\s[^>]*href=([^\s>]+)[^>]*>', r'[\1]', text, flags=re.I)
-        out = re.sub(r'<[^>]+>', '', out)
-        return out
+    # Strip all HTML tags by removing every <...> span using a simple state machine
+    # (avoids regex with angle brackets).
+    def strip_html(text):
+        out = []
+        in_tag = False
+        for ch in text:
+            if ch == '<':
+                in_tag = True
+            elif ch == '>':
+                in_tag = False
+            elif not in_tag:
+                out.append(ch)
+        return ''.join(out)
 
-    pre_plain = strip_tags_keep_href(pre_text)
+    # For each line that contains a MbrDtlMain link, extract the USCF ID from the href.
+    # Pattern in raw HTML: href=MbrDtlMain.php?DIGITS
+    def extract_mbrdetail_id(raw_line):
+        marker = 'MbrDtlMain.php?'
+        idx = raw_line.find(marker)
+        if idx < 0:
+            return None
+        rest = raw_line[idx + len(marker):]
+        digits = []
+        for ch in rest:
+            if ch.isdigit():
+                digits.append(ch)
+            else:
+                break
+        return ''.join(digits) if digits else None
 
-    # Split into per-player blocks by the dashed separator lines
-    blocks = re.split(r'-{20,}', pre_plain)
+    # For each line that contains an XtblPlr link, extract the pair number
+    # (it is the text content between >PAIRNUM</a>).
+    def extract_pair_num(raw_line):
+        marker = 'XtblPlr.php?'
+        idx = raw_line.find(marker)
+        if idx < 0:
+            return None
+        # find the closing > of this anchor tag
+        close = raw_line.find('>', idx)
+        if close < 0:
+            return None
+        # text until next <
+        end = raw_line.find('<', close + 1)
+        text = raw_line[close + 1: end if end >= 0 else close + 10].strip()
+        return int(text) if text.isdigit() else None
 
-    players = {}   # pair_num -> {name, uscf_id, pre_rating, results_line}
+    # Split pre_text into per-player blocks on dashed separator lines
+    lines_raw = pre_text.split('\n')
+    blocks = []
+    current = []
+    for raw_line in lines_raw:
+        stripped = raw_line.strip()
+        if stripped.startswith('-') and len(stripped) >= 20 and stripped.replace('-', '') == '':
+            if current:
+                blocks.append(current)
+            current = []
+        else:
+            current.append(raw_line)
+    if current:
+        blocks.append(current)
+
+    players = {}
     target_pair = None
 
     for block in blocks:
-        lines = [ln for ln in block.split('\n') if ln.strip()]
-        if not lines:
+        # Find the line with XtblPlr (the player-row line)
+        plr_line_raw = None
+        for raw_line in block:
+            if 'XtblPlr.php?' in raw_line:
+                plr_line_raw = raw_line
+                break
+        if plr_line_raw is None:
             continue
 
-        # First non-empty line has pair number, name, score, and round results
-        # Format: [XtblPlr link] pair | [MbrDtlMain link] NAME  |score|R1|R2|...|
-        first = lines[0]
-
-        pair_m = re.search(r'\[XtblPlr\.php\?[^\]]*\]\s*(\d+)', first)
-        if not pair_m:
+        pair_num = extract_pair_num(plr_line_raw)
+        if pair_num is None:
             continue
-        pair_num = int(pair_m.group(1))
 
-        # Name from text between first | and second |
-        name_m = re.search(r'\]\s*\d+\s*\|\s*(?:\[[^\]]+\])?\s*([^|]+?)\s*\|', first)
-        player_name = name_m.group(1).strip().title() if name_m else ''
+        player_uscf = extract_mbrdetail_id(plr_line_raw)
 
-        # USCF ID from MbrDtlMain link
-        uid_m = re.search(r'\[MbrDtlMain\.php\?(\d+)\]', first)
-        if not uid_m:
-            # Fall back: look in second line (state | uscf_id / R: ...)
-            second = lines[1] if len(lines) > 1 else ''
-            uid_m = re.search(r'\b(\d{7,8})\b', second)
-        player_uscf = uid_m.group(1) if uid_m else None
+        # Name: strip HTML from player line, then take the text between first and second pipe
+        plain_plr = strip_html(plr_line_raw)
+        cols = plain_plr.split('|')
+        player_name = cols[1].strip().title() if len(cols) > 1 else ''
 
-        # Pre-rating from second line: "R: 1276   ->1353"
+        # Pre-rating from the rating line (contains " / R: NNN->NNN")
         pre_rating = None
-        for ln in lines[1:3]:
-            rm = re.search(r'R:\s*P?(\d{3,4})\s*->', ln)
+        if player_uscf is None:
+            # fall back: look for USCF ID in the rating line
+            for raw_line in block:
+                if ' / R:' in raw_line or '/ R:' in raw_line:
+                    m = re.search(r'\b(\d{7,8})\b', raw_line)
+                    if m:
+                        player_uscf = m.group(1)
+                    break
+        for raw_line in block:
+            rm = re.search(r'R:\s*P?(\d{3,4})\s*->', raw_line)
             if rm:
                 pre_rating = int(rm.group(1))
                 break
 
-        # Round result cells from first line: everything after the score column
-        # Split by | and skip first 3 segments (pair, name, score)
-        cols = first.split('|')
+        # Round result cells: cols[3:] of the stripped player line
         results_cols = cols[3:] if len(cols) > 3 else []
 
         players[pair_num] = {
