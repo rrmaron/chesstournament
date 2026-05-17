@@ -1406,36 +1406,36 @@ async def _fetch_games_from_ratings_api(
         "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
         "Origin": "https://ratings.uschess.org",
     }
-    games_url = f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/games?eventId={event_id}&pageSize=200"
     standings_url = f"https://ratings-api.uschess.org/api/v1/rated-events/{event_id}/sections/{section_num}/standings?pageSize=200"
 
     try:
-        games_resp, standings_resp = await asyncio.gather(
-            client.get(games_url, headers=headers),
-            client.get(standings_url, headers=headers),
-        )
-        games_json = games_resp.json() if games_resp.status_code == 200 else {}
+        standings_resp = await client.get(standings_url, headers=headers)
         standings_data = standings_resp.json() if standings_resp.status_code == 200 else {}
     except Exception:
         return []
 
-    all_games = games_json.get("items", []) if isinstance(games_json, dict) else games_json
-
-    # Filter to games in this specific event and section
-    section_games = [
-        g for g in all_games
-        if g.get("event", {}).get("id") == event_id
-        and g.get("section", {}).get("number") == section_num
-    ]
-    if not section_games:
+    standings_items = standings_data.get("items", standings_data.get("data", []))
+    if not standings_items:
         return []
 
-    # Determine the rating system used (R=regular, Q=quick, B=blitz)
-    rating_system = section_games[0].get("ratingSystem", "R")
+    # Find the target player in standings to get rating system and round-ordered games
+    target_player = next(
+        (p for p in standings_items if str(p.get("memberId", "")) == uscf_id), None
+    )
+    if not target_player:
+        return []
 
-    # Build opponent pre-rating lookup from standings
+    # Determine rating system from player's ratings entry
+    rating_system = "R"
+    player_pre_rating = None
+    for r in target_player.get("ratings", []):
+        rating_system = r.get("ratingSystem", "R")
+        player_pre_rating = r.get("preRating") or None
+        break
+
+    # Build opponent pre-rating lookup from all players in standings
     ratings_map = {}
-    for player in standings_data.get("items", standings_data.get("data", [])):
+    for player in standings_items:
         member_id = str(player.get("memberId", ""))
         if not member_id:
             continue
@@ -1446,25 +1446,36 @@ async def _fetch_games_from_ratings_api(
                     ratings_map[member_id] = pre
                 break
 
-    # Also capture the player's own pre-rating from standings
-    player_pre_rating = ratings_map.get(uscf_id)
+    # Build name lookup from standings (memberId → display name)
+    name_map = {}
+    for player in standings_items:
+        mid = str(player.get("memberId", ""))
+        if mid:
+            name_map[mid] = f"{player.get('firstName', '')} {player.get('lastName', '')}".strip()
+
+    # Use roundOutcomes sorted by roundNumber to get correct game order
+    round_outcomes = sorted(
+        target_player.get("roundOutcomes", []),
+        key=lambda ro: ro.get("roundNumber", 0)
+    )
 
     result = []
-    for g in section_games:
-        opp = g.get("opponent", {})
-        opp_id = str(opp.get("id", ""))
-        opp_name = f"{opp.get('firstName', '')} {opp.get('lastName', '')}".strip()
-        outcome = g.get("player", {}).get("outcome", "")
+    for ro in round_outcomes:
+        outcome = ro.get("outcome", "")
         if outcome == "Win":
             game_result = "W"
         elif outcome == "Loss":
             game_result = "L"
         else:
             game_result = "D"
-        opp_rating = ratings_map.get(opp_id)
+        opp_id = str(ro.get("opponentMemberId", ""))
+        opp_name = (
+            name_map.get(opp_id)
+            or f"{ro.get('opponentFirstName', '')} {ro.get('opponentLastName', '')}".strip()
+        )
         result.append({
             "name": opp_name,
-            "rating": opp_rating,
+            "rating": ratings_map.get(opp_id),
             "uscfId": opp_id,
             "result": game_result,
             "provisional": None,
