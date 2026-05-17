@@ -1323,12 +1323,17 @@ async function importSelectedTournaments() {
     statusEl.textContent = `Importing ${i + 1} / ${toImport.length}: ${t.name}…`;
 
     let games = [];
+    let apiPreRating = null;
     try {
       const r = await fetch(
         `/api/uscf-tournament-games?event_id=${encodeURIComponent(t.event_id)}` +
         `&section_num=${t.section_num}&uscf_id=${encodeURIComponent(uscfId)}`
       );
-      if (r.ok) games = (await r.json()).games || [];
+      if (r.ok) {
+        const data = await r.json();
+        games = data.games || [];
+        apiPreRating = data.pre_rating || null;
+      }
     } catch (_) { /* use empty games if fetch fails */ }
 
     const label = t.name + (t.date ? ' (' + t.date + ')' : '');
@@ -1338,7 +1343,7 @@ async function importSelectedTournaments() {
       savedId: null,
       saveStatus: 'unsaved',
       ratingTypes: [sysToType[t.rating_system] || 'standard'],
-      uscfPreRating: t.pre_rating || null,
+      uscfPreRating: t.pre_rating || apiPreRating || null,
     });
   }
 

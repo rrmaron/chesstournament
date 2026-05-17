@@ -1398,6 +1398,86 @@ async def api_uscf_tournament_history(uscf_id: str, _user: dict = Depends(requir
     return tournaments
 
 
+async def _fetch_games_from_ratings_api(
+    event_id: str, section_num: int, uscf_id: str, client: httpx.AsyncClient
+) -> list:
+    """Fallback: fetch game results from the new ratings-api.uschess.org for recent events."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+        "Origin": "https://ratings.uschess.org",
+    }
+    games_url = f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/games?eventId={event_id}&pageSize=200"
+    standings_url = f"https://ratings-api.uschess.org/api/v1/rated-events/{event_id}/sections/{section_num}/standings?pageSize=200"
+
+    try:
+        games_resp, standings_resp = await asyncio.gather(
+            client.get(games_url, headers=headers),
+            client.get(standings_url, headers=headers),
+        )
+        games_json = games_resp.json() if games_resp.status_code == 200 else {}
+        standings_data = standings_resp.json() if standings_resp.status_code == 200 else {}
+    except Exception:
+        return []
+
+    all_games = games_json.get("items", []) if isinstance(games_json, dict) else games_json
+
+    # Filter to games in this specific event and section
+    section_games = [
+        g for g in all_games
+        if g.get("event", {}).get("id") == event_id
+        and g.get("section", {}).get("number") == section_num
+    ]
+    if not section_games:
+        return []
+
+    # Determine the rating system used (R=regular, Q=quick, B=blitz)
+    rating_system = section_games[0].get("ratingSystem", "R")
+
+    # Build opponent pre-rating lookup from standings
+    ratings_map = {}
+    for player in standings_data.get("items", standings_data.get("data", [])):
+        member_id = str(player.get("memberId", ""))
+        if not member_id:
+            continue
+        for r in player.get("ratings", []):
+            if r.get("ratingSystem") == rating_system:
+                pre = r.get("preRating")
+                if pre:
+                    ratings_map[member_id] = pre
+                break
+
+    # Also capture the player's own pre-rating from standings
+    player_pre_rating = ratings_map.get(uscf_id)
+
+    result = []
+    for g in section_games:
+        opp = g.get("opponent", {})
+        opp_id = str(opp.get("id", ""))
+        opp_name = f"{opp.get('firstName', '')} {opp.get('lastName', '')}".strip()
+        outcome = g.get("player", {}).get("outcome", "")
+        if outcome == "Win":
+            game_result = "W"
+        elif outcome == "Loss":
+            game_result = "L"
+        else:
+            game_result = "D"
+        opp_rating = ratings_map.get(opp_id)
+        result.append({
+            "name": opp_name,
+            "rating": opp_rating,
+            "uscfId": opp_id,
+            "result": game_result,
+            "provisional": None,
+            "games": None,
+        })
+
+    # Attach player pre-rating as metadata on first item so caller can surface it
+    if result and player_pre_rating:
+        result[0]["_player_pre_rating"] = player_pre_rating
+
+    return result
+
+
 @app.get("/api/uscf-tournament-games")
 async def api_uscf_tournament_games(
     event_id: str, section_num: int, uscf_id: str, _user: dict = Depends(require_login)
@@ -1415,11 +1495,18 @@ async def api_uscf_tournament_games(
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"})
-        games = _parse_uscf_crosstable(resp.text, uscf_id)
+            games = _parse_uscf_crosstable(resp.text, uscf_id)
+            if not games:
+                games = await _fetch_games_from_ratings_api(event_id, section_num, uscf_id, client)
     except Exception:
         games = []
 
-    result = {"games": games}
+    # Extract player pre-rating if present (injected by ratings API fallback)
+    pre_rating = None
+    if games and "_player_pre_rating" in games[0]:
+        pre_rating = games[0].pop("_player_pre_rating")
+
+    result = {"games": games, "pre_rating": pre_rating}
     _cache_set(cache_key, result, ttl=600)
     return result
 
