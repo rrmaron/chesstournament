@@ -9,15 +9,22 @@
 
 {% include "_featured_card.html" %}
 
-<!-- How-to instructions -->
-<div class="alert alert-info py-3 px-3 mb-4" style="font-size:0.93rem;line-height:1.6">
-  <p class="mb-2"><strong>How to use this calculator:</strong></p>
-  <ol class="mb-0 ps-3" style="display:flex;flex-direction:column;gap:6px">
-    <li><strong>Add a tournament</strong> — click the <strong>+ Add Tournament</strong> button in your profile card above. A new tournament card will appear below.</li>
-    <li><strong>Choose the time control</strong> — in the tournament card header you'll see checkboxes labeled <strong>Standard</strong>, Quick, Blitz, and FIDE. Check whichever time controls apply to that tournament (most over-the-board tournaments are <em>Standard</em>).</li>
-    <li><strong>Add games</strong> — type your opponent's name in the search box (it will look them up live from USCF), select the result (Win / Draw / Loss), then click <strong>Add Game</strong>. The rating impact appears instantly after each game, showing your projected new rating progressively as you enter results.</li>
-    <li><strong>Attach a scoresheet</strong> — click the 📎 paperclip icon next to any game to attach your notation, either by taking a photo of your scoresheet or uploading a PGN file.</li>
-  </ol>
+<!-- How-to instructions (collapsed by default) -->
+<div class="mb-4">
+  <button class="btn btn-outline-info btn-sm w-100 text-start" type="button"
+          data-bs-toggle="collapse" data-bs-target="#howto-collapse" aria-expanded="false">
+    ℹ️ How to use this calculator <span class="float-end text-muted">▾</span>
+  </button>
+  <div class="collapse" id="howto-collapse">
+    <div class="alert alert-info py-3 px-3 mb-0 mt-1 border-top-0 rounded-top-0" style="font-size:0.93rem;line-height:1.6">
+      <ol class="mb-0 ps-3" style="display:flex;flex-direction:column;gap:6px">
+        <li><strong>Add a tournament</strong> — click <strong>+ Add Tournament</strong> in your profile card. A new tournament card appears below.</li>
+        <li><strong>Choose the time control</strong> — check <strong>Standard</strong>, Quick, Blitz, or FIDE in the tournament header (most OTB tournaments are Standard).</li>
+        <li><strong>Add games</strong> — type your opponent's name, pick Win / Draw / Loss, click <strong>Add Game</strong>. Rating impact updates instantly after each game.</li>
+        <li><strong>Attach a scoresheet</strong> — click the 📎 icon next to any game to take a photo or upload a PGN.</li>
+      </ol>
+    </div>
+  </div>
 </div>
 
 <!-- Starting point -->
