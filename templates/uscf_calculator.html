@@ -1715,13 +1715,15 @@ async function toggleHistGames(i) {
     return '<span class="badge bg-secondary">D</span>';
   };
 
-  const impactCell = (g) => {
+  const impactCols = (g) => {
     const oppR = g.rating;
-    if (!myR || !oppR) return '<td class="text-center text-muted small">—</td>';
+    if (!myR || !oppR) return '<td class="text-center text-muted small">—</td><td class="text-center text-muted small">—</td>';
+    const exp   = We(myR, oppR);
     const score = g.result === 'W' ? 1 : g.result === 'D' ? 0.5 : 0;
-    const raw   = Math.round(uscfK * (score - We(myR, oppR)));
+    const raw   = Math.round(uscfK * (score - exp));
     const cls   = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
-    return `<td class="text-center small ${cls}">${raw > 0 ? '+' : ''}${raw}</td>`;
+    return `<td class="text-center small text-muted">${(exp * 100).toFixed(1)}%</td>
+            <td class="text-center small ${cls}">${raw > 0 ? '+' : ''}${raw}</td>`;
   };
 
   const gameRows = games.map((g, ri) => `
@@ -1732,7 +1734,7 @@ async function toggleHistGames(i) {
         : escHtml(g.name || '—')}</td>
       <td class="text-center small">${g.rating || '—'}</td>
       <td class="text-center">${resultBadge(g.result)}</td>
-      ${impactCell(g)}
+      ${impactCols(g)}
     </tr>`).join('');
 
   detailRow.innerHTML = `<td colspan="8" class="p-0">
@@ -1743,6 +1745,7 @@ async function toggleHistGames(i) {
           <th>Opponent</th>
           <th class="text-center" style="width:5em">Opp Rating</th>
           <th class="text-center" style="width:4em">Result</th>
+          <th class="text-center" style="width:5em">Expected</th>
           <th class="text-center" style="width:5em">Impact</th>
         </tr>
       </thead>
