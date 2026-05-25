@@ -1705,10 +1705,23 @@ async function toggleHistGames(i) {
     return;
   }
 
+  const t      = _histData[i];
+  const myR    = t.pre_rating || 0;
+  const uscfK  = myR < 2100 ? 32 : myR < 2400 ? 24 : 16;
+
   const resultBadge = r => {
     if (r === 'W') return '<span class="badge bg-success">W</span>';
     if (r === 'L') return '<span class="badge bg-danger">L</span>';
     return '<span class="badge bg-secondary">D</span>';
+  };
+
+  const impactCell = (g) => {
+    const oppR = g.rating;
+    if (!myR || !oppR) return '<td class="text-center text-muted small">—</td>';
+    const score = g.result === 'W' ? 1 : g.result === 'D' ? 0.5 : 0;
+    const raw   = Math.round(uscfK * (score - We(myR, oppR)));
+    const cls   = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
+    return `<td class="text-center small ${cls}">${raw > 0 ? '+' : ''}${raw}</td>`;
   };
 
   const gameRows = games.map((g, ri) => `
@@ -1719,6 +1732,7 @@ async function toggleHistGames(i) {
         : escHtml(g.name || '—')}</td>
       <td class="text-center small">${g.rating || '—'}</td>
       <td class="text-center">${resultBadge(g.result)}</td>
+      ${impactCell(g)}
     </tr>`).join('');
 
   detailRow.innerHTML = `<td colspan="8" class="p-0">
@@ -1727,8 +1741,9 @@ async function toggleHistGames(i) {
         <tr>
           <th class="ps-2" style="width:2.5em">#</th>
           <th>Opponent</th>
-          <th class="text-center" style="width:5em">Rating</th>
+          <th class="text-center" style="width:5em">Opp Rating</th>
           <th class="text-center" style="width:4em">Result</th>
+          <th class="text-center" style="width:5em">Impact</th>
         </tr>
       </thead>
       <tbody>${gameRows}</tbody>
