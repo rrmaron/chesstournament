@@ -140,8 +140,11 @@ export default function PlayerScreen({ route, navigation }) {
   const useAsMyProfile = useCallback(async () => {
     const uscfRating = player?.live_uscf_rating || player?.uscf_rating || 0;
     const fideRating = player?.fide_rating || 0;
-    await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify({ uscfRating, fideRating }));
-    setMyRatings({ uscfRating, fideRating });
+    const uscfId     = player?.uscf_id  || null;
+    const name       = player?.name     || '';
+    const data = { uscfRating, fideRating, uscfId, name };
+    await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify(data));
+    setMyRatings(data);
     setProfileSaved(true);
     setTimeout(() => setProfileSaved(false), 2000);
   }, [player]);
