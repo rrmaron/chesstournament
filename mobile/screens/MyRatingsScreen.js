@@ -23,6 +23,8 @@ export default function MyRatingsScreen({ navigation }) {
   const [profile, setProfile] = useState(null); // { uscfId, name, uscfRating, fideRating }
   const [refreshing, setRefreshing] = useState(false);
   const [uscfRating, setUscfRating] = useState('');
+  const [quickRating, setQuickRating] = useState('');
+  const [blitzRating, setBlitzRating] = useState('');
   const [fideRating, setFideRating] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -42,6 +44,8 @@ export default function MyRatingsScreen({ navigation }) {
       await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify(updated));
       setProfile(updated);
       setUscfRating(String(liveUscf || ''));
+      setQuickRating(String(liveQuick || ''));
+      setBlitzRating(String(liveBlitz || ''));
       setFideRating(String(liveFide || ''));
     } catch {}
     setRefreshing(false);
@@ -57,6 +61,8 @@ export default function MyRatingsScreen({ navigation }) {
     useCallback(() => {
       loadMyRatings().then((data) => {
         setUscfRating(String(data.uscfRating || ''));
+        setQuickRating(String(data.quickRating || ''));
+        setBlitzRating(String(data.blitzRating || ''));
         setFideRating(String(data.fideRating || ''));
         if (data.uscfId && data.name) {
           setProfile(data);
@@ -69,16 +75,20 @@ export default function MyRatingsScreen({ navigation }) {
   );
 
   const clearProfile = async () => {
-    await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify({ uscfRating: 0, fideRating: 0 }));
+    await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify({ uscfRating: 0, quickRating: 0, blitzRating: 0, fideRating: 0 }));
     setProfile(null);
     setUscfRating('');
+    setQuickRating('');
+    setBlitzRating('');
     setFideRating('');
   };
 
   const handleSave = async () => {
     const updated = {
-      uscfRating: Number(uscfRating) || 0,
-      fideRating: Number(fideRating) || 0,
+      uscfRating:  Number(uscfRating)  || 0,
+      quickRating: Number(quickRating) || 0,
+      blitzRating: Number(blitzRating) || 0,
+      fideRating:  Number(fideRating)  || 0,
       ...(profile ? { uscfId: profile.uscfId, name: profile.name } : {}),
     };
     await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify(updated));
@@ -167,7 +177,7 @@ export default function MyRatingsScreen({ navigation }) {
         {/* Manual edit / override */}
         <View style={styles.card}>
           <View style={styles.field}>
-            <Text style={styles.label}>My Live USCF Rating</Text>
+            <Text style={styles.label}>Live Standard USCF</Text>
             <TextInput
               style={styles.input}
               value={uscfRating}
@@ -177,8 +187,30 @@ export default function MyRatingsScreen({ navigation }) {
               maxLength={4}
             />
           </View>
+          <View style={styles.field}>
+            <Text style={styles.label}>Live Quick USCF</Text>
+            <TextInput
+              style={styles.input}
+              value={quickRating}
+              onChangeText={(t) => { setQuickRating(t); setSaved(false); }}
+              placeholder="e.g. 1600"
+              keyboardType="number-pad"
+              maxLength={4}
+            />
+          </View>
+          <View style={styles.field}>
+            <Text style={styles.label}>Live Blitz USCF</Text>
+            <TextInput
+              style={styles.input}
+              value={blitzRating}
+              onChangeText={(t) => { setBlitzRating(t); setSaved(false); }}
+              placeholder="e.g. 1550"
+              keyboardType="number-pad"
+              maxLength={4}
+            />
+          </View>
           <View style={[styles.field, { borderBottomWidth: 0 }]}>
-            <Text style={styles.label}>My FIDE Rating</Text>
+            <Text style={styles.label}>FIDE Rating</Text>
             <TextInput
               style={styles.input}
               value={fideRating}
