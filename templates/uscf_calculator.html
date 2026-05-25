@@ -1715,14 +1715,23 @@ async function toggleHistGames(i) {
     return '<span class="badge bg-secondary">D</span>';
   };
 
-  // Compute per-game impacts unrounded; round only the final sum
+  // Phase 1: compute expected scores and raw performance gaps per game
+  const actualDelta = (t.pre_rating && t.post_rating) ? t.post_rating - t.pre_rating : null;
   const gameCalcs = games.map(g => {
     const oppR = g.rating;
-    if (!myR || !oppR) return { exp: null, impact: null };
-    const exp   = We(myR, oppR);
-    const score = g.result === 'W' ? 1 : g.result === 'D' ? 0.5 : 0;
-    return { exp, impact: uscfK * (score - exp) };
+    if (!myR || !oppR) return { exp: null, rawGap: null, impact: null };
+    const exp    = We(myR, oppR);
+    const score  = g.result === 'W' ? 1 : g.result === 'D' ? 0.5 : 0;
+    return { exp, rawGap: score - exp, impact: null };
   });
+
+  // Phase 2: infer effective K from actual USCF delta so per-game impacts sum correctly
+  const ratedCalcs = gameCalcs.filter(c => c.rawGap !== null);
+  const perfGap    = ratedCalcs.reduce((s, c) => s + c.rawGap, 0);
+  const effectiveK = (actualDelta !== null && ratedCalcs.length > 0 && Math.abs(perfGap) > 0.01)
+    ? actualDelta / perfGap
+    : uscfK;
+  gameCalcs.forEach(c => { if (c.rawGap !== null) c.impact = effectiveK * c.rawGap; });
 
   const impactCols = (calc) => {
     if (calc.exp === null) return '<td class="text-center text-muted small">—</td><td class="text-center text-muted small">—</td>';
@@ -1743,25 +1752,18 @@ async function toggleHistGames(i) {
       ${impactCols(gameCalcs[ri])}
     </tr>`).join('');
 
-  // Summary footer: estimated sum vs actual USCF delta
-  const validCalcs  = gameCalcs.filter(c => c.impact !== null);
-  const estSum      = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
-  const actualDelta = (t.pre_rating && t.post_rating) ? t.post_rating - t.pre_rating : null;
-  const footerRow   = (estSum !== null || actualDelta !== null) ? (() => {
-    const estStr    = estSum !== null ? (estSum >= 0 ? '+' : '') + estSum : '—';
-    const estCls    = estSum > 0 ? 'text-success' : estSum < 0 ? 'text-danger' : 'text-muted';
-    const actStr    = actualDelta !== null ? (actualDelta >= 0 ? '+' : '') + actualDelta : '—';
-    const actCls    = actualDelta > 0 ? 'text-success' : actualDelta < 0 ? 'text-danger' : 'text-muted';
-    const note      = (estSum !== null && actualDelta !== null && estSum !== actualDelta)
-      ? ' <span class="text-muted" title="Difference may reflect USCF bonus points, provisional formula, or K-factor adjustments">ⓘ</span>' : '';
+  // Summary footer showing inferred K and total
+  const validCalcs = gameCalcs.filter(c => c.impact !== null);
+  const estSum     = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
+  const footerRow  = (estSum !== null || actualDelta !== null) ? (() => {
+    const actStr  = actualDelta !== null ? (actualDelta >= 0 ? '+' : '') + actualDelta : '—';
+    const actCls  = actualDelta > 0 ? 'text-success' : actualDelta < 0 ? 'text-danger' : 'text-muted';
+    const kNote   = ratedCalcs.length > 0
+      ? ` <span class="text-muted small">(K≈${Math.round(effectiveK)})</span>` : '';
     return `<tr class="table-light border-top fw-semibold">
-      <td colspan="4" class="small ps-2 text-end text-muted">ELO estimate / Actual USCF:</td>
+      <td colspan="4" class="small ps-2 text-end text-muted">Total${kNote}</td>
       <td></td>
-      <td class="text-center small">
-        <span class="${estCls}">${estStr}</span>
-        <span class="text-muted mx-1">/</span>
-        <span class="${actCls}">${actStr}</span>${note}
-      </td>
+      <td class="text-center small ${actCls}">${actStr}</td>
     </tr>`;
   })() : '';
 
