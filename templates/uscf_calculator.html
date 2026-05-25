@@ -1707,7 +1707,7 @@ async function toggleHistGames(i) {
 
   const t      = _histData[i];
   const myR    = t.pre_rating || 0;
-  const uscfK  = myR < 2100 ? 32 : myR < 2400 ? 24 : 16;
+  const uscfK  = myR < 2100 ? 40 : myR < 2400 ? 24 : 16;
 
   const resultBadge = r => {
     if (r === 'W') return '<span class="badge bg-success">W</span>';
@@ -1725,13 +1725,9 @@ async function toggleHistGames(i) {
     return { exp, rawGap: score - exp, impact: null };
   });
 
-  // Phase 2: infer effective K from actual USCF delta so per-game impacts sum correctly
+  // Phase 2: apply fixed USCF K — any gap vs actual delta is attributable to bonus points
   const ratedCalcs = gameCalcs.filter(c => c.rawGap !== null);
-  const perfGap    = ratedCalcs.reduce((s, c) => s + c.rawGap, 0);
-  const effectiveK = (actualDelta !== null && ratedCalcs.length > 0 && Math.abs(perfGap) > 0.01)
-    ? actualDelta / perfGap
-    : uscfK;
-  gameCalcs.forEach(c => { if (c.rawGap !== null) c.impact = effectiveK * c.rawGap; });
+  gameCalcs.forEach(c => { if (c.rawGap !== null) c.impact = uscfK * c.rawGap; });
 
   const impactCols = (calc) => {
     if (calc.exp === null) return '<td class="text-center text-muted small">—</td><td class="text-center text-muted small">—</td>';
@@ -1752,18 +1748,20 @@ async function toggleHistGames(i) {
       ${impactCols(gameCalcs[ri])}
     </tr>`).join('');
 
-  // Summary footer showing inferred K and total
+  // Summary footer: estimated (fixed K) vs actual USCF delta; difference = bonus points
   const validCalcs = gameCalcs.filter(c => c.impact !== null);
   const estSum     = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
   const footerRow  = (estSum !== null || actualDelta !== null) ? (() => {
-    const actStr  = actualDelta !== null ? (actualDelta >= 0 ? '+' : '') + actualDelta : '—';
+    const estStr  = estSum !== null ? (estSum >= 0 ? '+' : '') + estSum : '—';
+    const estCls  = estSum > 0 ? 'text-success' : estSum < 0 ? 'text-danger' : 'text-muted';
+    const actStr  = actualDelta !== null ? (actualDelta >= 0 ? '+' : '') + actualDelta : null;
     const actCls  = actualDelta > 0 ? 'text-success' : actualDelta < 0 ? 'text-danger' : 'text-muted';
-    const kNote   = ratedCalcs.length > 0
-      ? ` <span class="text-muted small">(K≈${Math.round(effectiveK)})</span>` : '';
+    const bonusNote = (actStr && estSum !== null && actualDelta !== estSum)
+      ? ` <span class="fw-normal text-muted small">→ Actual: <span class="${actCls}">${actStr}</span> (incl. bonus pts)</span>` : '';
     return `<tr class="table-light border-top fw-semibold">
-      <td colspan="4" class="small ps-2 text-end text-muted">Total${kNote}</td>
+      <td colspan="4" class="small ps-2 text-end text-muted">Est. (K=${uscfK})${bonusNote}</td>
       <td></td>
-      <td class="text-center small ${actCls}">${actStr}</td>
+      <td class="text-center small ${estCls}">${estStr}</td>
     </tr>`;
   })() : '';
 
