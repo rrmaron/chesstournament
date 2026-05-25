@@ -258,6 +258,11 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
                style="display:none" onchange="uploadPgnFile(this)">
         <input type="file" id="pgn-file-input"    accept=".pgn,.txt,image/*" multiple
                style="display:none" onchange="uploadPgnFile(this)">
+        <!-- direct-attach inputs (bypass modal) -->
+        <input type="file" id="photo-attach-input" accept="image/*" capture="environment" multiple
+               style="display:none" onchange="handleAttach(this,'photoUrls')">
+        <input type="file" id="pgn-attach-input"   accept=".pgn,.txt" multiple
+               style="display:none" onchange="handleAttach(this,'pgnUrls')">
       </div>
     </div>
   </div>
@@ -730,6 +735,28 @@ function renderGamesTable(ti, games, myRatings, calcs) {
                  value="${val || ''}" placeholder="Rating" min="100" max="3000"
                  onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
       }).join('');
+      const pendPhotoUrls = getPhotoUrls(g);
+      const pendPgnUrls   = getPgnUrls(g);
+      const pendPhotoBtn  = pendPhotoUrls.length
+        ? pendPhotoUrls.map((url, pi) =>
+            `<a href="${escHtml(url)}" target="_blank" rel="noopener"
+                class="btn btn-info btn-sm py-0 px-1" title="View photo ${pi+1}">📷${pendPhotoUrls.length>1?`<sup style="font-size:0.6em">${pi+1}</sup>`:''}</a>
+             <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                     onclick="removePhotoPage(${ti},${gi},${pi})">✕</button>`).join('') +
+          `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                   onclick="openPhotoAttach(${ti},${gi})" title="Add photo">+</button>`
+        : `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                   onclick="openPhotoAttach(${ti},${gi})" title="Attach scoresheet photo">📷</button>`;
+      const pendPgnBtn = pendPgnUrls.length
+        ? pendPgnUrls.map((url, pi) =>
+            `<a href="${escHtml(url)}" target="_blank" rel="noopener"
+                class="btn btn-success btn-sm py-0 px-1" title="View PGN ${pi+1}">📄${pendPgnUrls.length>1?`<sup style="font-size:0.6em">${pi+1}</sup>`:''}</a>
+             <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                     onclick="removePgnPage(${ti},${gi},${pi})">✕</button>`).join('') +
+          `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                   onclick="openPgnFileAttach(${ti},${gi})" title="Add PGN">+</button>`
+        : `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                   onclick="openPgnFileAttach(${ti},${gi})" title="Attach PGN notation">📄</button>`;
       return `<tr class="table-light">
         <td class="text-muted small">${gi+1}</td>
         <td>
@@ -750,8 +777,14 @@ function renderGamesTable(ti, games, myRatings, calcs) {
             </select></td>
         <td class="text-center">${expP}</td>
         ${impactCells(g)}
-        <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
-                    onclick="removeGame(${ti},${gi})">✕</button></td>
+        <td>
+          <div class="d-flex gap-1 justify-content-end flex-nowrap">
+            ${pendPhotoBtn}
+            ${pendPgnBtn}
+            <button class="btn btn-outline-danger btn-sm py-0 px-1"
+                    onclick="removeGame(${ti},${gi})">✕</button>
+          </div>
+        </td>
       </tr>`;
     }
     const primRating = gameRating(g, primType);
@@ -774,18 +807,30 @@ function renderGamesTable(ti, games, myRatings, calcs) {
                 value="${val||''}" min="100" max="3000"${postTitle}
                 onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
     }).join('');
+    const photoUrls = getPhotoUrls(g);
+    const photoBtn = photoUrls.length
+      ? photoUrls.map((url, pi) =>
+          `<a href="${escHtml(url)}" target="_blank" rel="noopener"
+              class="btn btn-info btn-sm py-0 px-1" title="View photo ${pi+1}">📷${photoUrls.length > 1 ? `<sup style="font-size:0.6em">${pi+1}</sup>` : ''}</a>
+           <button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                   onclick="removePhotoPage(${ti},${gi},${pi})" title="Remove photo ${pi+1}">✕</button>`
+        ).join('') +
+        `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+                 onclick="openPhotoAttach(${ti},${gi})" title="Add more photos">+</button>`
+      : `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
+               onclick="openPhotoAttach(${ti},${gi})" title="Attach scoresheet photo">📷</button>`;
     const pgnUrls = getPgnUrls(g);
     const pgnBtn = pgnUrls.length
       ? pgnUrls.map((url, pi) =>
           `<a href="${escHtml(url)}" target="_blank" rel="noopener"
-              class="btn btn-success btn-sm py-0 px-1" title="View page ${pi+1}">📎${pgnUrls.length > 1 ? `<sup style="font-size:0.6em">${pi+1}</sup>` : ''}</a>
+              class="btn btn-success btn-sm py-0 px-1" title="View PGN ${pi+1}">📄${pgnUrls.length > 1 ? `<sup style="font-size:0.6em">${pi+1}</sup>` : ''}</a>
            <button class="btn btn-outline-secondary btn-sm py-0 px-1"
-                   onclick="removePgnPage(${ti},${gi},${pi})" title="Remove page ${pi+1}">✕</button>`
+                   onclick="removePgnPage(${ti},${gi},${pi})" title="Remove PGN ${pi+1}">✕</button>`
         ).join('') +
         `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
-                 onclick="openPgnAttach(${ti},${gi})" title="Add more pages">+</button>`
+                 onclick="openPgnFileAttach(${ti},${gi})" title="Add more PGN">+</button>`
       : `<button class="btn btn-outline-secondary btn-sm py-0 px-1"
-               onclick="openPgnAttach(${ti},${gi})" title="Attach game notation">📎</button>`;
+               onclick="openPgnFileAttach(${ti},${gi})" title="Attach PGN notation">📄</button>`;
     return `<tr>
       <td>${gi+1}</td>
       <td class="small">${nameHtml}${provBadge}</td>
@@ -800,6 +845,7 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       ${impactCells(g)}
       <td>
         <div class="d-flex gap-1 justify-content-end flex-nowrap">
+          ${photoBtn}
           ${pgnBtn}
           <button class="btn btn-outline-danger btn-sm py-0 px-1"
                   onclick="removeGame(${ti},${gi})">✕</button>
@@ -1420,6 +1466,61 @@ function getPgnUrls(g) {
   if (g.pgnUrls && g.pgnUrls.length) return g.pgnUrls;
   if (g.pgnUrl) return [g.pgnUrl]; // backward compat
   return [];
+}
+function getPhotoUrls(g) { return g.photoUrls || []; }
+
+function openPhotoAttach(ti, gi) {
+  _pgnTarget = { ti, gi };
+  document.getElementById('photo-attach-input').click();
+}
+function openPgnFileAttach(ti, gi) {
+  _pgnTarget = { ti, gi };
+  document.getElementById('pgn-attach-input').click();
+}
+
+async function handleAttach(input, field) {
+  if (!input.files.length || !_pgnTarget) return;
+  const { ti, gi } = _pgnTarget;
+  const files = Array.from(input.files);
+  input.value = '';
+  const uploadedUrls = [];
+  for (let i = 0; i < files.length; i++) {
+    const rawFile = files[i];
+    let blob;
+    try { blob = await compressImage(rawFile); } catch { blob = rawFile; }
+    const isImage = rawFile.type.startsWith('image/');
+    const ext = isImage ? '.jpg' : (rawFile.name.endsWith('.pgn') ? '.pgn' : '.txt');
+    let presign;
+    try {
+      const r = await fetch('/api/pgn/presign?ext=' + encodeURIComponent(ext));
+      if (!r.ok) throw new Error('presign ' + r.status);
+      presign = await r.json();
+    } catch (e) { alert('Upload failed: ' + e.message); return; }
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('PUT', presign.upload_url);
+        xhr.setRequestHeader('Content-Type', isImage ? 'image/jpeg' : 'text/plain');
+        xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('S3 ' + xhr.status));
+        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.send(blob);
+      });
+      uploadedUrls.push(presign.public_url);
+    } catch (e) { alert('Upload failed: ' + e.message); return; }
+  }
+  const game = tournaments[ti].games[gi];
+  game[field] = [...(game[field] || []), ...uploadedUrls];
+  renderAll();
+  scheduleSave(ti);
+}
+
+function removePhotoPage(ti, gi, pi) {
+  const game = tournaments[ti].games[gi];
+  const urls = (game.photoUrls || []).slice();
+  urls.splice(pi, 1);
+  game.photoUrls = urls;
+  renderAll();
+  scheduleSave(ti);
 }
 
 async function uploadPgnFile(input) {
