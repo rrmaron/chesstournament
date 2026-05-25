@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, ScrollView, KeyboardAvoidingView, Platform,
@@ -19,7 +19,7 @@ export async function loadMyRatings() {
   }
 }
 
-export default function MyRatingsScreen() {
+export default function MyRatingsScreen({ navigation }) {
   const [profile, setProfile] = useState(null); // { uscfId, name, uscfRating, fideRating }
   const [refreshing, setRefreshing] = useState(false);
   const [uscfRating, setUscfRating] = useState('');
@@ -44,6 +44,12 @@ export default function MyRatingsScreen() {
     } catch {}
     setRefreshing(false);
   }, []);
+
+  useEffect(() => {
+    navigation.setOptions({
+      title: profile?.name ?? 'My Ratings',
+    });
+  }, [navigation, profile]);
 
   useFocusEffect(
     useCallback(() => {
