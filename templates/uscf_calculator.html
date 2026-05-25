@@ -679,13 +679,27 @@ function renderGamesTable(ti, games, myRatings, calcs) {
   if (!games.length) return '<p class="text-muted small mb-2">No games added yet. Use "Add Game" above, or set round count when adding a tournament.</p>';
   const types    = ratingTypesOf(ti);
   const primType = types[0];
-  const primCalc = calcs[primType];
-  const K        = primCalc ? primCalc.K : null;
   const myRating = myRatings[primType] || null;
+  const K        = calcs[primType]?.K ?? null;
 
   const ratingHeaders = types.map(rt =>
     `<th>Live ${RATING_TYPE_LABELS[rt]}</th>`
   ).join('');
+  const impactHeaders = types.length === 1
+    ? '<th>Impact</th>'
+    : types.map(rt => `<th>Impact<br><small class="fw-normal text-muted">${RATING_TYPE_LABELS[rt]}</small></th>`).join('');
+
+  // Returns one <td> per type for the impact of this game row
+  const impactCells = (g) => types.map(rt => {
+    const myR  = myRatings[rt] || null;
+    const oppR = gameRating(g, rt);
+    const Krt  = calcs[rt]?.K ?? null;
+    const expV = (myR && oppR) ? We(myR, oppR) : null;
+    if (Krt === null || expV === null || !oppR) return '<td class="text-center text-muted">—</td>';
+    const raw = Math.round(Krt * (parseFloat(g.result) - expV));
+    const cls = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
+    return `<td class="text-center ${cls}">${raw > 0 ? '+' : ''}${raw}</td>`;
+  }).join('');
 
   const rows = games.map((g, gi) => {
     if (g.bye) {
@@ -694,13 +708,14 @@ function renderGamesTable(ti, games, myRatings, calcs) {
         : '<span class="badge bg-secondary">½ Bye</span>';
       const byeScore = parseFloat(g.result) === 1 ? '1' : '½';
       const byeCols  = types.map(() => '<td></td>').join('');
+      const byeImpactCols = types.map(() => '<td class="text-center text-muted">—</td>').join('');
       return `<tr class="table-secondary">
         <td>${gi+1}</td>
         <td class="small">${byeLabel} <span class="text-muted">(unrated — not included in rating calculation)</span></td>
         ${byeCols}
         <td class="text-center fw-semibold">${byeScore}</td>
         <td class="text-center text-muted">—</td>
-        <td class="text-center text-muted">—</td>
+        ${byeImpactCols}
         <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
                     onclick="removeGame(${ti},${gi})">✕</button></td>
       </tr>`;
@@ -709,12 +724,6 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       const primRatingP = gameRating(g, primType);
       const expValP     = (myRating && primRatingP) ? We(myRating, primRatingP) : null;
       const expP        = expValP !== null ? expValP.toFixed(3) : '—';
-      let impactP = '—', impactClsP = '';
-      if (K !== null && expValP !== null && primRatingP) {
-        const raw = Math.round(K * (parseFloat(g.result) - expValP));
-        impactP    = (raw > 0 ? '+' : '') + raw;
-        impactClsP = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
-      }
       const pendRatingCells = types.map(rt => {
         const val = gameRating(g, rt);
         return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px"
@@ -740,7 +749,7 @@ function renderGamesTable(ti, games, myRatings, calcs) {
               <option value="0"   ${g.result === '0'   ? 'selected' : ''}>Loss</option>
             </select></td>
         <td class="text-center">${expP}</td>
-        <td class="text-center ${impactClsP}">${impactP}</td>
+        ${impactCells(g)}
         <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
                     onclick="removeGame(${ti},${gi})">✕</button></td>
       </tr>`;
@@ -748,12 +757,6 @@ function renderGamesTable(ti, games, myRatings, calcs) {
     const primRating = gameRating(g, primType);
     const expVal = (myRating && primRating) ? We(myRating, primRating) : null;
     const exp    = expVal !== null ? expVal.toFixed(3) : '—';
-    let impact = '—', impactCls = '';
-    if (K !== null && expVal !== null && primRating) {
-      const raw = Math.round(K * (parseFloat(g.result) - expVal));
-      impact = (raw > 0 ? '+' : '') + raw;
-      impactCls = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
-    }
     const provStatus = g.provisionalMap?.[primType] ?? g.provisional;
     const provBadge = provStatus === true  ? ' <span class="badge bg-warning text-dark" style="font-size:0.65rem">P</span>'
                     : provStatus === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
@@ -794,7 +797,7 @@ function renderGamesTable(ti, games, myRatings, calcs) {
             <option value="0"   ${g.result==='0'  ?'selected':''}>Loss</option>
           </select></td>
       <td class="text-center">${exp}</td>
-      <td class="text-center ${impactCls}">${impact}</td>
+      ${impactCells(g)}
       <td>
         <div class="d-flex gap-1 justify-content-end flex-nowrap">
           ${pgnBtn}
@@ -807,7 +810,7 @@ function renderGamesTable(ti, games, myRatings, calcs) {
   return `<div class="table-responsive mb-2">
   <table class="table table-sm table-bordered align-middle mb-0">
     <thead class="table-light">
-      <tr><th>#</th><th>Opponent</th>${ratingHeaders}<th>Result</th><th>Expected</th><th>Impact</th><th></th></tr>
+      <tr><th>#</th><th>Opponent</th>${ratingHeaders}<th>Result</th><th>Expected</th>${impactHeaders}<th></th></tr>
     </thead>
     <tbody>${rows}</tbody>
   </table></div>`;
