@@ -29,12 +29,8 @@ const fideK = (r) => r < 1600 ? 40 : r < 2400 ? 20 : 10;
 // Impact table component
 // ---------------------------------------------------------------------------
 function ImpactTable({ myRatings, player, navigation }) {
-  const myUscf = myRatings?.uscfRating;
-  const myFide = myRatings?.fideRating;
-  const oppUscf = player?.live_uscf_rating || player?.uscf_rating;
-  const oppFide = player?.fide_rating;
-
-  const hasProfile = myUscf || myFide;
+  const hasProfile = myRatings?.uscfRating || myRatings?.quickRating ||
+                     myRatings?.blitzRating || myRatings?.fideRating;
 
   if (!hasProfile) {
     return (
@@ -52,70 +48,96 @@ function ImpactTable({ myRatings, player, navigation }) {
     );
   }
 
-  const uscfImpact = (myUscf && oppUscf) ? eloImpact(myUscf, oppUscf, uscfK(myUscf)) : null;
-  const fideImpact = (myFide && oppFide) ? eloImpact(myFide, oppFide, fideK(myFide)) : null;
+  // Build columns for each rating type that both sides have
+  const candidates = [
+    {
+      key: 'standard',
+      label: 'Std USCF',
+      myR: myRatings?.uscfRating,
+      oppR: player?.live_uscf_rating || player?.uscf_rating,
+      kFn: uscfK,
+    },
+    {
+      key: 'quick',
+      label: 'Quick',
+      myR: myRatings?.quickRating,
+      oppR: player?.live_quick_rating,
+      kFn: uscfK,
+    },
+    {
+      key: 'blitz',
+      label: 'Blitz',
+      myR: myRatings?.blitzRating,
+      oppR: player?.live_blitz_rating,
+      kFn: uscfK,
+    },
+    {
+      key: 'fide',
+      label: 'FIDE',
+      myR: myRatings?.fideRating,
+      oppR: player?.fide_rating,
+      kFn: fideK,
+    },
+  ];
 
-  if (!uscfImpact && !fideImpact) {
+  const cols = candidates
+    .filter((c) => c.myR && c.oppR)
+    .map((c) => ({ ...c, impact: eloImpact(c.myR, c.oppR, c.kFn(c.myR)) }));
+
+  if (!cols.length) {
     return (
       <View style={impactStyles.nudge}>
         <Text style={impactStyles.nudgeText}>
-          No matching ratings to compare. This player may not have a{!oppFide ? ' FIDE' : ''}{!oppUscf ? ' USCF' : ''} rating on file.
+          No matching ratings to compare. This player may not have a rating on file for the types you track.
         </Text>
       </View>
     );
   }
-
-  const rows = [
-    { label: 'Win',  color: '#2e7d32', bg: '#f1f8e9', uscf: uscfImpact?.win,  fide: fideImpact?.win,  sign: true },
-    { label: 'Draw', color: '#e65100', bg: '#fff8e1', uscf: uscfImpact?.draw, fide: fideImpact?.draw, sign: true },
-    { label: 'Loss', color: '#c62828', bg: '#ffebee', uscf: uscfImpact?.loss, fide: fideImpact?.loss, sign: false },
-  ];
 
   const fmt = (n, sign) => {
     if (n === undefined || n === null) return '—';
     return (sign && n > 0 ? '+' : '') + n.toFixed(1);
   };
 
+  const outcomes = [
+    { label: 'Win',  color: '#2e7d32', bg: '#f1f8e9', key: 'win',  sign: true },
+    { label: 'Draw', color: '#e65100', bg: '#fff8e1', key: 'draw', sign: true },
+    { label: 'Loss', color: '#c62828', bg: '#ffebee', key: 'loss', sign: false },
+  ];
+
   return (
     <View style={impactStyles.container}>
       {/* Header */}
       <View style={impactStyles.headerRow}>
         <Text style={[impactStyles.headerCell, { flex: 1 }]}>Outcome</Text>
-        {uscfImpact && (
-          <Text style={impactStyles.headerCell}>
-            Live USCF{'\n'}
-            <Text style={impactStyles.subHeader}>Me:{myUscf} / Opp:{oppUscf}</Text>
+        {cols.map((col) => (
+          <Text key={col.key} style={impactStyles.headerCell}>
+            {col.label}{'\n'}
+            <Text style={impactStyles.subHeader}>Me:{col.myR} / Opp:{col.oppR}</Text>
           </Text>
-        )}
-        {fideImpact && (
-          <Text style={impactStyles.headerCell}>
-            FIDE{'\n'}
-            <Text style={impactStyles.subHeader}>Me:{myFide} / Opp:{oppFide}</Text>
-          </Text>
-        )}
+        ))}
       </View>
 
-      {rows.map((row) => (
+      {outcomes.map((row) => (
         <View key={row.label} style={[impactStyles.row, { backgroundColor: row.bg }]}>
           <Text style={[impactStyles.outcomeLabel, { color: row.color, flex: 1 }]}>{row.label}</Text>
-          {uscfImpact && (
-            <Text style={[impactStyles.value, { color: row.uscf >= 0 ? '#2e7d32' : '#c62828' }]}>
-              {fmt(row.uscf, row.sign)}
-            </Text>
-          )}
-          {fideImpact && (
-            <Text style={[impactStyles.value, { color: row.fide >= 0 ? '#2e7d32' : '#c62828' }]}>
-              {fmt(row.fide, row.sign)}
-            </Text>
-          )}
+          {cols.map((col) => {
+            const val = col.impact[row.key];
+            return (
+              <Text key={col.key} style={[impactStyles.value, { color: val >= 0 ? '#2e7d32' : '#c62828' }]}>
+                {fmt(val, row.sign)}
+              </Text>
+            );
+          })}
         </View>
       ))}
 
       {/* Expected score */}
       <View style={impactStyles.footerRow}>
         <Text style={[impactStyles.footerCell, { flex: 1 }]}>Expected score</Text>
-        {uscfImpact && <Text style={impactStyles.footerCell}>{uscfImpact.pct}%</Text>}
-        {fideImpact && <Text style={impactStyles.footerCell}>{fideImpact.pct}%</Text>}
+        {cols.map((col) => (
+          <Text key={col.key} style={impactStyles.footerCell}>{col.impact.pct}%</Text>
+        ))}
       </View>
 
       <Text style={impactStyles.disclaimer}>
@@ -138,11 +160,13 @@ export default function PlayerScreen({ route, navigation }) {
   const [profileSaved, setProfileSaved] = useState(false);
 
   const useAsMyProfile = useCallback(async () => {
-    const uscfRating = player?.live_uscf_rating || player?.uscf_rating || 0;
-    const fideRating = player?.fide_rating || 0;
-    const uscfId     = player?.uscf_id  || null;
-    const name       = player?.name     || '';
-    const data = { uscfRating, fideRating, uscfId, name };
+    const uscfRating  = player?.live_uscf_rating  || player?.uscf_rating  || 0;
+    const quickRating = player?.live_quick_rating  || 0;
+    const blitzRating = player?.live_blitz_rating  || 0;
+    const fideRating  = player?.fide_rating        || 0;
+    const uscfId      = player?.uscf_id  || null;
+    const name        = player?.name     || '';
+    const data = { uscfRating, quickRating, blitzRating, fideRating, uscfId, name };
     await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify(data));
     setMyRatings(data);
     setProfileSaved(true);
@@ -193,12 +217,14 @@ export default function PlayerScreen({ route, navigation }) {
     { label: 'USCF ID', value: player.uscf_id,
       link: `https://ratings.uschess.org/player/${player.uscf_id}` },
     { label: 'USCF Rating', value: player.uscf_rating || '—' },
-    { label: 'Live USCF Rating', value: player.live_uscf_rating || '—' },
+    { label: 'Live Standard', value: player.live_uscf_rating || '—' },
+    player.live_quick_rating ? { label: 'Live Quick', value: player.live_quick_rating } : null,
+    player.live_blitz_rating ? { label: 'Live Blitz', value: player.live_blitz_rating } : null,
     { label: 'FIDE ID', value: player.fide_id || '—',
       link: player.fide_id ? `https://ratings.fide.com/profile/${player.fide_id}` : null },
     { label: 'FIDE Rating', value: player.fide_rating || (player.fide_id ? 'Not rated' : '—') },
     { label: 'USCF Expiry', value: player.expiry || '—' },
-  ];
+  ].filter(Boolean);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>

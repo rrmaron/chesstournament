@@ -488,21 +488,24 @@ async def public_player_details(uscf_id: str = ""):
 
     sections_data, fide_rating = await asyncio.gather(_fetch_sections(), _fetch_fide())
 
-    live_rating = 0
+    live_rating = live_quick = live_blitz = 0
     for section in sections_data.get("items", []):
         for record in section.get("ratingRecords", []):
-            if record.get("ratingSource") == "R":
-                live_rating = record.get("postRating", 0)
-                break
-        if live_rating:
-            break
+            src = record.get("ratingSource")
+            val = record.get("postRating", 0)
+            if src == "R" and not live_rating:   live_rating = val
+            elif src == "Q" and not live_quick:  live_quick  = val
+            elif src == "B" and not live_blitz:  live_blitz  = val
 
     if not name:
         return {}
 
     result = {
         "name": name, "uscf_id": uscf_id, "uscf_rating": rating,
-        "live_uscf_rating": live_rating, "fide_id": fide_id,
+        "live_uscf_rating": live_rating,
+        "live_quick_rating": live_quick,
+        "live_blitz_rating": live_blitz,
+        "fide_id": fide_id,
         "fide_rating": fide_rating, "expiry": expiry,
     }
     _cache_set(f"pub_details_{uscf_id}", result, ttl=240)

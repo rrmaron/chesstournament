@@ -34,9 +34,11 @@ export default function MyRatingsScreen({ navigation }) {
         fetch(`${API_BASE}/api/public/player-details?uscf_id=${encodeURIComponent(uscfId)}`),
       ]);
       const [statusData, detailData] = await Promise.all([statusRes.json(), detailRes.json()]);
-      const liveUscf = statusData.live_rating || statusData.rating || 0;
-      const liveFide = detailData.fide_rating || 0;
-      const updated = { uscfId, name, uscfRating: liveUscf, fideRating: liveFide };
+      const liveUscf  = statusData.live_rating  || statusData.rating || 0;
+      const liveQuick = statusData.live_quick   || statusData.quick  || 0;
+      const liveBlitz = statusData.live_blitz   || statusData.blitz  || 0;
+      const liveFide  = detailData.fide_rating  || 0;
+      const updated = { uscfId, name, uscfRating: liveUscf, quickRating: liveQuick, blitzRating: liveBlitz, fideRating: liveFide };
       await AsyncStorage.setItem(RATINGS_KEY, JSON.stringify(updated));
       setProfile(updated);
       setUscfRating(String(liveUscf || ''));
@@ -111,12 +113,30 @@ export default function MyRatingsScreen({ navigation }) {
             </View>
 
             <View style={styles.ratingRow}>
-              <View style={styles.ratingItem}>
-                <Text style={styles.ratingLabel}>Live USCF</Text>
-                <Text style={styles.ratingValue}>
-                  {refreshing ? '…' : (profile.uscfRating || '—')}
-                </Text>
-              </View>
+              {profile.uscfRating ? (
+                <View style={styles.ratingItem}>
+                  <Text style={styles.ratingLabel}>Std USCF</Text>
+                  <Text style={styles.ratingValue}>
+                    {refreshing ? '…' : profile.uscfRating}
+                  </Text>
+                </View>
+              ) : null}
+              {profile.quickRating ? (
+                <View style={styles.ratingItem}>
+                  <Text style={styles.ratingLabel}>Quick</Text>
+                  <Text style={styles.ratingValue}>
+                    {refreshing ? '…' : profile.quickRating}
+                  </Text>
+                </View>
+              ) : null}
+              {profile.blitzRating ? (
+                <View style={styles.ratingItem}>
+                  <Text style={styles.ratingLabel}>Blitz</Text>
+                  <Text style={styles.ratingValue}>
+                    {refreshing ? '…' : profile.blitzRating}
+                  </Text>
+                </View>
+              ) : null}
               {profile.fideRating ? (
                 <View style={styles.ratingItem}>
                   <Text style={styles.ratingLabel}>FIDE</Text>
