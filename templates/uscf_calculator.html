@@ -1638,10 +1638,16 @@ async function openHistoryModal() {
     const delta = (t.post_rating && t.pre_rating) ? t.post_rating - t.pre_rating : null;
     const dStr  = delta !== null ? (delta >= 0 ? '+' : '') + delta : '—';
     const dCls  = delta > 0 ? 'text-success fw-semibold' : delta < 0 ? 'text-danger fw-semibold' : 'text-muted';
-    return `<tr>
+    return `<tr id="hist-row-${i}">
       <td><input type="checkbox" class="form-check-input hist-chk" data-idx="${i}" checked></td>
       <td class="small text-nowrap">${t.date || '—'}</td>
-      <td class="small">${escHtml(t.name)}</td>
+      <td class="small">
+        <button class="btn btn-link btn-sm p-0 text-start text-decoration-none"
+                style="color:inherit" onclick="toggleHistGames(${i})">
+          <span id="hist-arrow-${i}" style="display:inline-block;width:1em;transition:transform 0.15s">▶</span>
+          ${escHtml(t.name)}
+        </button>
+      </td>
       <td class="small text-muted">${t.state || ''}</td>
       <td><span class="badge bg-secondary">${sysLabel[t.rating_system] || t.rating_system}</span></td>
       <td class="text-center small">${t.pre_rating || '—'}</td>
@@ -1651,6 +1657,83 @@ async function openHistoryModal() {
   }).join('');
 
   _setHistState('list');
+}
+
+const _histGamesCache = {};
+
+async function toggleHistGames(i) {
+  const detailId = `hist-detail-${i}`;
+  const existing = document.getElementById(detailId);
+  const arrow    = document.getElementById(`hist-arrow-${i}`);
+
+  if (existing) {
+    existing.remove();
+    arrow.style.transform = '';
+    return;
+  }
+
+  arrow.style.transform = 'rotate(90deg)';
+
+  // Insert placeholder row
+  const anchorRow = document.getElementById(`hist-row-${i}`);
+  const detailRow = document.createElement('tr');
+  detailRow.id = detailId;
+  detailRow.innerHTML = `<td colspan="8" class="ps-4 py-2 text-muted small">
+    <span class="spinner-border spinner-border-sm me-2"></span>Loading games…
+  </td>`;
+  anchorRow.after(detailRow);
+
+  // Fetch if not cached
+  if (!_histGamesCache[i]) {
+    const t      = _histData[i];
+    const uscfId = document.getElementById('my-uscf-id').value.trim();
+    try {
+      const r = await fetch(
+        `/api/uscf-tournament-games?event_id=${encodeURIComponent(t.event_id)}&section_num=${encodeURIComponent(t.section_num)}&uscf_id=${encodeURIComponent(uscfId)}`
+      );
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      _histGamesCache[i] = await r.json();
+    } catch (e) {
+      detailRow.innerHTML = `<td colspan="8" class="ps-4 py-2 text-danger small">Could not load games: ${escHtml(e.message)}</td>`;
+      return;
+    }
+  }
+
+  const { games } = _histGamesCache[i];
+  if (!games || !games.length) {
+    detailRow.innerHTML = `<td colspan="8" class="ps-4 py-2 text-muted small">No individual game data available.</td>`;
+    return;
+  }
+
+  const resultBadge = r => {
+    if (r === 'W') return '<span class="badge bg-success">W</span>';
+    if (r === 'L') return '<span class="badge bg-danger">L</span>';
+    return '<span class="badge bg-secondary">D</span>';
+  };
+
+  const gameRows = games.map((g, ri) => `
+    <tr class="border-top">
+      <td class="text-muted small ps-2">${ri + 1}</td>
+      <td class="small">${g.uscfId
+        ? `<a href="https://ratings.uschess.org/player/${encodeURIComponent(g.uscfId)}" target="_blank" rel="noopener">${escHtml(g.name || '—')}</a>`
+        : escHtml(g.name || '—')}</td>
+      <td class="text-center small">${g.rating || '—'}</td>
+      <td class="text-center">${resultBadge(g.result)}</td>
+    </tr>`).join('');
+
+  detailRow.innerHTML = `<td colspan="8" class="p-0">
+    <table class="table table-sm mb-0" style="background:#f8f9fa">
+      <thead class="table-light">
+        <tr>
+          <th class="ps-2" style="width:2.5em">#</th>
+          <th>Opponent</th>
+          <th class="text-center" style="width:5em">Rating</th>
+          <th class="text-center" style="width:4em">Result</th>
+        </tr>
+      </thead>
+      <tbody>${gameRows}</tbody>
+    </table>
+  </td>`;
 }
 
 function _setHistState(state, msg) {
