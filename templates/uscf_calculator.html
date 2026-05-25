@@ -263,6 +263,80 @@ const savedTournamentsData = {{ saved_tournaments | tojson }};
   </div>
 </div>
 
+<!-- New Tournament Setup Modal -->
+<div class="modal fade" id="newTournModal" tabindex="-1" aria-labelledby="newTournModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="newTournModalLabel">Add Tournament</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        {% if featured_tournaments %}
+        <div class="mb-3">
+          <label class="form-label small fw-semibold text-uppercase text-muted" style="font-size:0.7rem;letter-spacing:0.06em">Upcoming Tournaments</label>
+          <div class="d-flex flex-wrap gap-2">
+            {% for ft in featured_tournaments %}
+            <button type="button" class="btn btn-outline-primary btn-sm newt-feat-btn"
+                    onclick="quickSelectFeatured('{{ ft.name | replace("'", "\\'") }}', this)">
+              {{ ft.name }}{% if ft.subtitle %} <span class="text-muted">— {{ ft.subtitle }}</span>{% endif %}
+            </button>
+            {% endfor %}
+          </div>
+          <hr class="my-3">
+        </div>
+        {% endif %}
+
+        <div class="mb-3">
+          <label for="newt-name" class="form-label small">Tournament Name</label>
+          <input type="text" id="newt-name" class="form-control" placeholder="e.g. K-8 Nationals 2026">
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small">Rating Type</label>
+          <div class="d-flex gap-3 flex-wrap">
+            <label class="d-flex align-items-center gap-1 small" style="cursor:pointer">
+              <input type="checkbox" id="newt-type-standard" class="form-check-input" checked style="margin-top:0"> Standard
+            </label>
+            <label class="d-flex align-items-center gap-1 small" style="cursor:pointer">
+              <input type="checkbox" id="newt-type-quick" class="form-check-input" style="margin-top:0"> Quick
+            </label>
+            <label class="d-flex align-items-center gap-1 small" style="cursor:pointer">
+              <input type="checkbox" id="newt-type-blitz" class="form-check-input" style="margin-top:0"> Blitz
+            </label>
+            <label class="d-flex align-items-center gap-1 small" style="cursor:pointer">
+              <input type="checkbox" id="newt-type-fide" class="form-check-input" style="margin-top:0"> FIDE
+            </label>
+          </div>
+        </div>
+
+        <div class="mb-1">
+          <label for="newt-rounds" class="form-label small">Number of Rounds</label>
+          <div class="d-flex align-items-center gap-3">
+            <select id="newt-rounds" class="form-select" style="max-width:160px">
+              <option value="0">— I'll add manually</option>
+              <option value="1">1 round</option>
+              <option value="2">2 rounds</option>
+              <option value="3">3 rounds</option>
+              <option value="4">4 rounds</option>
+              <option value="5">5 rounds</option>
+              <option value="6">6 rounds</option>
+              <option value="7">7 rounds</option>
+              <option value="8">8 rounds</option>
+              <option value="9">9 rounds</option>
+            </select>
+            <small class="text-muted">Pre-fills one opponent row per round</small>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" onclick="confirmNewTournament()">Create Tournament →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let tournaments      = [];
@@ -602,7 +676,7 @@ function renderAll() {
 }
 
 function renderGamesTable(ti, games, myRatings, calcs) {
-  if (!games.length) return '<p class="text-muted small mb-2">No games added yet.</p>';
+  if (!games.length) return '<p class="text-muted small mb-2">No games added yet. Use "Add Game" above, or set round count when adding a tournament.</p>';
   const types    = ratingTypesOf(ti);
   const primType = types[0];
   const primCalc = calcs[primType];
@@ -631,6 +705,46 @@ function renderGamesTable(ti, games, myRatings, calcs) {
                     onclick="removeGame(${ti},${gi})">✕</button></td>
       </tr>`;
     }
+    if (g.pending) {
+      const primRatingP = gameRating(g, primType);
+      const expValP     = (myRating && primRatingP) ? We(myRating, primRatingP) : null;
+      const expP        = expValP !== null ? expValP.toFixed(3) : '—';
+      let impactP = '—', impactClsP = '';
+      if (K !== null && expValP !== null && primRatingP) {
+        const raw = Math.round(K * (parseFloat(g.result) - expValP));
+        impactP    = (raw > 0 ? '+' : '') + raw;
+        impactClsP = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
+      }
+      const pendRatingCells = types.map(rt => {
+        const val = gameRating(g, rt);
+        return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px"
+                 value="${val || ''}" placeholder="Rating" min="100" max="3000"
+                 onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
+      }).join('');
+      return `<tr class="table-light">
+        <td class="text-muted small">${gi+1}</td>
+        <td>
+          <div class="position-relative">
+            <input type="text" id="t${ti}-g${gi}-opp" class="form-control form-control-sm"
+                   value="${escHtml(g.name)}" placeholder="Opponent name…" autocomplete="off"
+                   oninput="updatePendingName(${ti},${gi},this.value);searchOppInline(${ti},${gi},this.value)">
+            <div id="t${ti}-g${gi}-sugg" class="list-group position-absolute shadow"
+                 style="z-index:1000;top:100%;min-width:220px;display:none"></div>
+          </div>
+        </td>
+        ${pendRatingCells}
+        <td><select class="form-select form-select-sm" style="max-width:90px"
+                    onchange="updateResult(${ti},${gi},this.value)">
+              <option value="1"   ${g.result === '1'   ? 'selected' : ''}>Win</option>
+              <option value="0.5" ${g.result === '0.5' ? 'selected' : ''}>Draw</option>
+              <option value="0"   ${g.result === '0'   ? 'selected' : ''}>Loss</option>
+            </select></td>
+        <td class="text-center">${expP}</td>
+        <td class="text-center ${impactClsP}">${impactP}</td>
+        <td><button class="btn btn-outline-danger btn-sm py-0 px-1"
+                    onclick="removeGame(${ti},${gi})">✕</button></td>
+      </tr>`;
+    }
     const primRating = gameRating(g, primType);
     const expVal = (myRating && primRating) ? We(myRating, primRating) : null;
     const exp    = expVal !== null ? expVal.toFixed(3) : '—';
@@ -640,8 +754,9 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       impact = (raw > 0 ? '+' : '') + raw;
       impactCls = raw > 0 ? 'text-success fw-semibold' : raw < 0 ? 'text-danger fw-semibold' : 'text-muted';
     }
-    const provBadge = g.provisional === true  ? ' <span class="badge bg-warning text-dark" style="font-size:0.65rem">P</span>'
-                    : g.provisional === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
+    const provStatus = g.provisionalMap?.[primType] ?? g.provisional;
+    const provBadge = provStatus === true  ? ' <span class="badge bg-warning text-dark" style="font-size:0.65rem">P</span>'
+                    : provStatus === false ? ' <span class="badge bg-success" style="font-size:0.65rem">E</span>'
                     : '';
     const nameHtml = g.uscfId
       ? `<a href="https://ratings.uschess.org/player/${encodeURIComponent(g.uscfId)}" target="_blank" rel="noopener">${escHtml(g.name||'—')}</a>`
@@ -945,15 +1060,39 @@ function scheduleSave(ti) {
 }
 
 // ── Mutations ─────────────────────────────────────────────────────────────────
-async function addTournament() {
+function addTournament() {
   if (!document.getElementById('start-rating').value) {
     alert('Look up your USCF ID first (or enter your rating manually).'); return;
   }
-  // Reset to live ratings so new tournament starts from live baseline
+  // Reset modal fields
+  document.getElementById('newt-name').value = '';
+  document.getElementById('newt-rounds').value = '0';
+  ['standard','quick','blitz','fide'].forEach(rt => {
+    document.getElementById(`newt-type-${rt}`).checked = (rt === 'standard');
+  });
+  document.querySelectorAll('.newt-feat-btn').forEach(b => b.classList.remove('active','btn-primary'));
+  document.querySelectorAll('.newt-feat-btn').forEach(b => { b.classList.add('btn-outline-primary'); b.classList.remove('btn-primary'); });
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('newTournModal')).show();
+}
+
+async function confirmNewTournament() {
+  const nameVal = document.getElementById('newt-name').value.trim();
+  const rounds  = parseInt(document.getElementById('newt-rounds').value) || 0;
+  const types   = ['standard','quick','blitz','fide'].filter(rt =>
+    document.getElementById(`newt-type-${rt}`).checked
+  );
+  if (!types.length) types.push('standard');
+
+  const name  = nameVal || ('Tournament ' + (tournaments.length + 1));
+  const games = Array.from({length: rounds}, () => ({
+    name: '', rating: null, result: '1', provisional: null, provisionalMap: null,
+    games: null, uscfId: null, ratings: undefined, pending: true,
+  }));
+
+  bootstrap.Modal.getInstance(document.getElementById('newTournModal')).hide();
   restoreLiveRatings();
   renderAll();
-  const t = { name: 'Tournament ' + (tournaments.length + 1), games: [], savedId: null, saveStatus: 'saving', ratingTypes: ['standard'] };
-  tournaments.push(t);
+  tournaments.push({ name, games, savedId: null, saveStatus: 'saving', ratingTypes: types });
   renderAll();
   setTimeout(() => {
     const cards = document.querySelectorAll('[id^="tcard-"]');
@@ -962,17 +1101,28 @@ async function addTournament() {
   await persistTournament(tournaments.length - 1);
 }
 
+function quickSelectFeatured(name, btn) {
+  document.getElementById('newt-name').value = name;
+  document.querySelectorAll('.newt-feat-btn').forEach(b => {
+    b.classList.remove('btn-primary');
+    b.classList.add('btn-outline-primary');
+  });
+  btn.classList.remove('btn-outline-primary');
+  btn.classList.add('btn-primary');
+}
+
 function removeTournament(ti) { tournaments.splice(ti, 1); renderAll(); }
 
 function addGame(ti) {
   const ratEl  = document.getElementById(`t${ti}-rat`);
   const name   = document.getElementById(`t${ti}-opp`).value.trim();
   const result = document.getElementById(`t${ti}-res`).value;
-  const provisional  = ratEl._provisional !== undefined ? ratEl._provisional : null;
-  const gamesCount   = ratEl._games       !== undefined ? ratEl._games       : null;
-  const uscfId       = ratEl._uscfId      !== undefined ? ratEl._uscfId      : null;
-  const ratingsMap   = ratEl._ratings     !== undefined ? ratEl._ratings     : {};
-  ratEl._provisional = ratEl._games = ratEl._uscfId = ratEl._ratings = undefined;
+  const provisional     = ratEl._provisional    !== undefined ? ratEl._provisional    : null;
+  const provisionalMap  = ratEl._provisionalMap !== undefined ? ratEl._provisionalMap : null;
+  const gamesCount      = ratEl._games          !== undefined ? ratEl._games          : null;
+  const uscfId          = ratEl._uscfId         !== undefined ? ratEl._uscfId         : null;
+  const ratingsMap      = ratEl._ratings        !== undefined ? ratEl._ratings        : {};
+  ratEl._provisional = ratEl._provisionalMap = ratEl._games = ratEl._uscfId = ratEl._ratings = undefined;
 
   // Always use the displayed input value for the primary type (allows manual override of live rating)
   const primaryType = primaryTypeOf(ti);
@@ -981,7 +1131,7 @@ function addGame(ti) {
   const primaryRating = ratingsMap[primaryType] || null;
 
   tournaments[ti].games.push({
-    name, rating: primaryRating, result, provisional, games: gamesCount, uscfId,
+    name, rating: primaryRating, result, provisional, provisionalMap, games: gamesCount, uscfId,
     ratings: Object.keys(ratingsMap).length ? { ...ratingsMap } : undefined,
   });
   document.getElementById(`t${ti}-opp`).value = '';
@@ -1051,6 +1201,89 @@ function searchOpp(ti, q) {
   }, 300);
 }
 
+// ── Per-row (pending game) opponent search ────────────────────────────────────
+function updatePendingName(ti, gi, v) {
+  if (tournaments[ti] && tournaments[ti].games[gi]) {
+    tournaments[ti].games[gi].name = v;
+  }
+}
+
+function searchOppInline(ti, gi, q) {
+  const key = `${ti}-${gi}`;
+  clearTimeout(searchTimers[key]);
+  const box = document.getElementById(`t${ti}-g${gi}-sugg`);
+  if (!box) return;
+  if (q.length < 2) { box.style.display = 'none'; return; }
+  searchTimers[key] = setTimeout(async () => {
+    try {
+      const r    = await fetch('/api/public/player-search?name=' + encodeURIComponent(q));
+      const data = await r.json();
+      if (!data.length) { box.style.display = 'none'; return; }
+      box.innerHTML = data.slice(0, 8).map(p => {
+        const rat = p.uscf_rating || p.rating || '';
+        const uid = p.uscf_id || '';
+        return `<button type="button" class="list-group-item list-group-item-action small"
+          onclick="selectOppInline(${ti},${gi},'${p.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'")}',${rat||'null'},'${uid}')"
+          >${escHtml(p.name)}${rat ? ' (' + rat + ')' : ''}${uid ? ' · ID:' + uid : ''}</button>`;
+      }).join('');
+      box.style.display = 'block';
+    } catch(e) { box.style.display = 'none'; }
+  }, 300);
+}
+
+async function selectOppInline(ti, gi, name, rating, uscfId) {
+  const oppEl = document.getElementById(`t${ti}-g${gi}-opp`);
+  const box   = document.getElementById(`t${ti}-g${gi}-sugg`);
+  if (oppEl) oppEl.value = name;
+  if (box)   box.style.display = 'none';
+
+  const game = tournaments[ti].games[gi];
+  game.name   = name;
+  game.uscfId = uscfId || null;
+
+  if (uscfId) {
+    if (oppEl) { oppEl.disabled = true; oppEl.placeholder = 'Fetching…'; }
+    try {
+      const r    = await fetch(`/api/uscf-player-status?uscf_id=${encodeURIComponent(uscfId)}`);
+      const data = await r.json();
+      if (!data.error) {
+        game.provisional    = data.provisional ?? null;
+        game.provisionalMap = {
+          standard: data.provisional       ?? null,
+          quick:    data.quick_provisional ?? null,
+          blitz:    data.blitz_provisional ?? null,
+          fide:     null,
+        };
+        game.games = data.games ?? null;
+        const map = {};
+        if (data.live_rating || data.rating) map.standard = data.live_rating || data.rating;
+        if (data.live_quick  || data.quick)  map.quick    = data.live_quick  || data.quick;
+        if (data.live_blitz  || data.blitz)  map.blitz    = data.live_blitz  || data.blitz;
+        if (ratingTypesOf(ti).includes('fide') && data.fide_id) {
+          try {
+            const fr = await fetch('/api/player-fide-rating?fide_id=' + encodeURIComponent(data.fide_id));
+            const fd = await fr.json();
+            if (fd.fide_rating) map.fide = fd.fide_rating;
+          } catch(e) {}
+        }
+        game.ratings = Object.keys(map).length ? map : undefined;
+        game.rating  = map[primaryTypeOf(ti)] || rating || null;
+      } else if (rating) {
+        game.rating = rating;
+      }
+    } catch(e) {
+      if (rating) game.rating = rating;
+    } finally {
+      if (oppEl) { oppEl.disabled = false; oppEl.placeholder = 'Opponent name…'; }
+    }
+  } else if (rating) {
+    game.rating = rating;
+  }
+
+  renderAll();
+  scheduleSave(ti);
+}
+
 async function selectOpp(ti, name, rating, uscfId) {
   document.getElementById(`t${ti}-opp`).value = name;
   document.getElementById(`t${ti}-sugg`).style.display = 'none';
@@ -1064,6 +1297,12 @@ async function selectOpp(ti, name, rating, uscfId) {
         ratEl._provisional = data.provisional;
         ratEl._games       = data.games;
         ratEl._uscfId      = uscfId;
+        ratEl._provisionalMap = {
+          standard: data.provisional      ?? null,
+          quick:    data.quick_provisional ?? null,
+          blitz:    data.blitz_provisional ?? null,
+          fide:     null,
+        };
         // Build ratings map for all USCF types (FIDE not available here)
         const map = {};
         if (data.live_rating || data.rating) map.standard = data.live_rating || data.rating;
