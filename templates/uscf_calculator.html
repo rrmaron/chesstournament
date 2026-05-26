@@ -1725,8 +1725,12 @@ async function toggleHistGames(i) {
     return { exp, rawGap: score - exp, impact: null };
   });
 
-  // Phase 2: apply fixed USCF K — any gap vs actual delta is attributable to bonus points
-  const ratedCalcs = gameCalcs.filter(c => c.rawGap !== null);
+  // Phase 2: apply fixed K; compute USCF bonus (B = max(0, base − √n×10))
+  const ratedCalcs  = gameCalcs.filter(c => c.rawGap !== null);
+  const perfGapSum  = ratedCalcs.reduce((s, c) => s + c.rawGap, 0);
+  const baseChange  = uscfK * perfGapSum;                       // K×(S−Se) in rating pts
+  const bonusThresh = Math.sqrt(ratedCalcs.length) * 10;        // √n × 10 (USCF 2025 threshold)
+  const estBonus    = baseChange > bonusThresh ? baseChange - bonusThresh : 0;
   gameCalcs.forEach(c => { if (c.rawGap !== null) c.impact = uscfK * c.rawGap; });
 
   const impactCols = (calc) => {
@@ -1748,29 +1752,28 @@ async function toggleHistGames(i) {
       ${impactCols(gameCalcs[ri])}
     </tr>`).join('');
 
-  // Summary footer: base K*performance, bonus points (gap), actual USCF delta
-  const validCalcs = gameCalcs.filter(c => c.impact !== null);
-  const estSum     = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
-  const bonusPts   = (estSum !== null && actualDelta !== null) ? actualDelta - estSum : null;
+  // Summary footer: base, estimated bonus (formula), actual USCF
+  const validCalcs  = gameCalcs.filter(c => c.impact !== null);
+  const estBaseSum  = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
+  const estBonusRnd = Math.round(estBonus);
+  const estTotal    = estBaseSum !== null ? estBaseSum + estBonusRnd : null;
   const sign = n => (n >= 0 ? '+' : '') + n;
-  const footerRow  = (estSum !== null || actualDelta !== null) ? (() => {
-    const estStr  = estSum !== null ? sign(estSum) : '—';
-    const estCls  = estSum > 0 ? 'text-success' : estSum < 0 ? 'text-danger' : 'text-muted';
-    const bonusStr = bonusPts !== null ? sign(bonusPts) : null;
-    const bonusCls = bonusPts > 0 ? 'text-success' : bonusPts < 0 ? 'text-danger' : 'text-muted';
+  const footerRow  = (estTotal !== null || actualDelta !== null) ? (() => {
+    const baseCls  = estBaseSum > 0 ? 'text-success' : estBaseSum < 0 ? 'text-danger' : 'text-muted';
+    const bonusCls = estBonusRnd > 0 ? 'text-success' : 'text-muted';
     const actStr  = actualDelta !== null ? sign(actualDelta) : '—';
     const actCls  = actualDelta > 0 ? 'text-success' : actualDelta < 0 ? 'text-danger' : 'text-muted';
 
     const baseRow = `<tr class="table-light border-top">
       <td colspan="4" class="small ps-2 text-end text-muted">Base (K=${uscfK})</td>
       <td></td>
-      <td class="text-center small fw-semibold ${estCls}">${estStr}</td>
+      <td class="text-center small fw-semibold ${baseCls}">${estBaseSum !== null ? sign(estBaseSum) : '—'}</td>
     </tr>`;
-    const bonusRow = bonusPts !== null ? `<tr class="table-light">
-      <td colspan="4" class="small ps-2 text-end text-muted">Bonus pts</td>
+    const bonusRow = `<tr class="table-light">
+      <td colspan="4" class="small ps-2 text-end text-muted">Bonus pts (est.)</td>
       <td></td>
-      <td class="text-center small fw-semibold ${bonusCls}">${bonusStr}</td>
-    </tr>` : '';
+      <td class="text-center small fw-semibold ${bonusCls}">${estBonusRnd > 0 ? sign(estBonusRnd) : '0'}</td>
+    </tr>`;
     const totalRow = actualDelta !== null ? `<tr class="table-light border-top fw-semibold">
       <td colspan="4" class="small ps-2 text-end text-muted">Actual USCF</td>
       <td></td>
