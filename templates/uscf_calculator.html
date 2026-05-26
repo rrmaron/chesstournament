@@ -1707,7 +1707,7 @@ async function toggleHistGames(i) {
 
   const t      = _histData[i];
   const myR    = t.pre_rating || 0;
-  const uscfK  = myR < 2100 ? 40 : myR < 2400 ? 24 : 16;
+  const uscfK  = myR < 2100 ? 32 : myR < 2400 ? 24 : 16;
 
   const resultBadge = r => {
     if (r === 'W') return '<span class="badge bg-success">W</span>';
@@ -1748,21 +1748,35 @@ async function toggleHistGames(i) {
       ${impactCols(gameCalcs[ri])}
     </tr>`).join('');
 
-  // Summary footer: estimated (fixed K) vs actual USCF delta; difference = bonus points
+  // Summary footer: base K*performance, bonus points (gap), actual USCF delta
   const validCalcs = gameCalcs.filter(c => c.impact !== null);
   const estSum     = validCalcs.length ? Math.round(validCalcs.reduce((s, c) => s + c.impact, 0)) : null;
+  const bonusPts   = (estSum !== null && actualDelta !== null) ? actualDelta - estSum : null;
+  const sign = n => (n >= 0 ? '+' : '') + n;
   const footerRow  = (estSum !== null || actualDelta !== null) ? (() => {
-    const estStr  = estSum !== null ? (estSum >= 0 ? '+' : '') + estSum : '—';
+    const estStr  = estSum !== null ? sign(estSum) : '—';
     const estCls  = estSum > 0 ? 'text-success' : estSum < 0 ? 'text-danger' : 'text-muted';
-    const actStr  = actualDelta !== null ? (actualDelta >= 0 ? '+' : '') + actualDelta : null;
+    const bonusStr = bonusPts !== null ? sign(bonusPts) : null;
+    const bonusCls = bonusPts > 0 ? 'text-success' : bonusPts < 0 ? 'text-danger' : 'text-muted';
+    const actStr  = actualDelta !== null ? sign(actualDelta) : '—';
     const actCls  = actualDelta > 0 ? 'text-success' : actualDelta < 0 ? 'text-danger' : 'text-muted';
-    const bonusNote = (actStr && estSum !== null && actualDelta !== estSum)
-      ? ` <span class="fw-normal text-muted small">→ Actual: <span class="${actCls}">${actStr}</span> (incl. bonus pts)</span>` : '';
-    return `<tr class="table-light border-top fw-semibold">
-      <td colspan="4" class="small ps-2 text-end text-muted">Est. (K=${uscfK})${bonusNote}</td>
+
+    const baseRow = `<tr class="table-light border-top">
+      <td colspan="4" class="small ps-2 text-end text-muted">Base (K=${uscfK})</td>
       <td></td>
-      <td class="text-center small ${estCls}">${estStr}</td>
+      <td class="text-center small fw-semibold ${estCls}">${estStr}</td>
     </tr>`;
+    const bonusRow = bonusPts !== null ? `<tr class="table-light">
+      <td colspan="4" class="small ps-2 text-end text-muted">Bonus pts</td>
+      <td></td>
+      <td class="text-center small fw-semibold ${bonusCls}">${bonusStr}</td>
+    </tr>` : '';
+    const totalRow = actualDelta !== null ? `<tr class="table-light border-top fw-semibold">
+      <td colspan="4" class="small ps-2 text-end text-muted">Actual USCF</td>
+      <td></td>
+      <td class="text-center small ${actCls}">${actStr}</td>
+    </tr>` : '';
+    return baseRow + bonusRow + totalRow;
   })() : '';
 
   detailRow.innerHTML = `<td colspan="8" class="p-0">
