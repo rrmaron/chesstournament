@@ -2320,78 +2320,68 @@ async def privacy(request: Request):
 async def _scrape_chess_results(url: str):
     """Fetch and parse a chess-results.com player list page.
     Returns (tournament_name, players_list).
+
+    chess-results renders the starting-rank table on art=0&prt=1 (print view of
+    tournament info page). Columns in the CRs1 table are fixed:
+      0=No, 1=flag-img, 2=Title, 3=Name, 4=FideID, 5=FED, 6=Rtg
     """
     from bs4 import BeautifulSoup
     import re as _re
 
-    # Normalise URL to get the player-list view (art=9)
     base = url.split('?')[0]
     qs   = url.split('?')[1] if '?' in url else 'lan=1'
     qs   = _re.sub(r'(?:^|&)art=\d+', '', qs).lstrip('&')
-    fetch_url = f"{base}?{qs}&lan=1&art=9"
+    fetch_url = f"{base}?{qs}&lan=1&art=0&prt=1"
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
     async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
-        r = await client.get(fetch_url, headers=headers)
+        r = await client.get(fetch_url, headers={"User-Agent": ua})
         r.raise_for_status()
 
     soup = BeautifulSoup(r.text, 'html.parser')
 
-    # Tournament name from <h2> or <title>
-    name_tag = soup.find('h2') or soup.find('h1') or soup.find('title')
-    tournament_name = name_tag.get_text(' ', strip=True) if name_tag else 'Unknown Tournament'
-    # Strip trailing site suffix
-    tournament_name = _re.sub(r'\s*[-|–]\s*chess-results\.com.*$', '', tournament_name, flags=_re.IGNORECASE).strip()
+    # Tournament name from <title>
+    title_tag = soup.find('title')
+    tournament_name = title_tag.get_text(' ', strip=True) if title_tag else 'Unknown Tournament'
+    tournament_name = _re.sub(r'\s*[-|–]\s*Chess-Results.*$', '', tournament_name, flags=_re.IGNORECASE).strip()
+    tournament_name = _re.sub(r'^Chess-Results Server\s*', '', tournament_name, flags=_re.IGNORECASE).strip()
 
-    # Find first table with enough columns (skip nav/header tables)
-    table = None
-    for t in soup.find_all('table'):
-        rows = t.find_all('tr')
-        if rows and len(rows[0].find_all(['td','th'])) >= 4:
-            table = t
+    # The starting rank table has class "CRs1" and a header containing "FideID"
+    target_table = None
+    for t in soup.find_all('table', class_='CRs1'):
+        header_text = t.find('tr').get_text() if t.find('tr') else ''
+        if 'FideID' in header_text or 'Name' in header_text:
+            target_table = t
             break
-    if not table:
-        raise ValueError("Could not find player table on the chess-results page.")
 
-    rows = table.find_all('tr')
-    # Parse header row to find column indices
-    header_cells = [td.get_text(' ', strip=True).lower() for td in rows[0].find_all(['td','th'])]
-    col = {}
-    for i, h in enumerate(header_cells):
-        h_clean = h.replace(' ', '').replace('.','').replace('-','')
-        if h_clean in ('name', 'spieler', 'nome', 'nombre') and 'fide' not in h_clean:
-            col.setdefault('name', i)
-        elif h_clean in ('title','titel','tit','titre','titul'):
-            col['title'] = i
-        elif h_clean in ('fideid','fide_id','idfide'):
-            col['fide_id'] = i
-        elif h_clean in ('fide','rating','elo','rtg','rtgi','ratingfide') and 'id' not in h_clean:
-            col.setdefault('fide_rating', i)
-        elif h_clean in ('nat','fed','country','land','pais'):
-            col['country'] = i
-        elif h_clean in ('natid','nationalid','localid','dwzid','nwzid'):
-            col['national_id'] = i
+    if not target_table:
+        raise ValueError("Could not find player table (CRs1 with FideID header) on the chess-results page.")
 
+    rows = target_table.find_all('tr')
     players = []
-    for row in rows[1:]:
-        cells = row.find_all(['td','th'])
-        if len(cells) < 2:
+    for row in rows[1:]:  # skip header
+        cells = row.find_all(['td', 'th'])
+        if len(cells) < 5:
             continue
-        def cell(key):
-            idx = col.get(key)
-            return cells[idx].get_text(' ', strip=True) if idx is not None and idx < len(cells) else ''
-        name = cell('name')
-        if not name or name.isdigit():
+        # Fixed columns: 0=No, 1=flag, 2=Title, 3=Name, 4=FideID, 5=FED, 6=Rtg
+        title       = cells[2].get_text(strip=True)
+        name        = cells[3].get_text(' ', strip=True)
+        fide_id_raw = cells[4].get_text(strip=True)
+        country     = cells[5].get_text(strip=True) if len(cells) > 5 else ''
+        rtg_raw     = cells[6].get_text(strip=True) if len(cells) > 6 else ''
+
+        if not name or not fide_id_raw:
             continue
-        fide_id_raw = cell('fide_id').strip()
-        fide_rating_raw = cell('fide_rating').strip()
+        # Extract numeric FIDE ID (strip any non-digit chars from link text)
+        fide_id = _re.sub(r'\D', '', fide_id_raw)
+
         players.append({
             'name':        name,
-            'title':       cell('title'),
-            'fide_id':     fide_id_raw if fide_id_raw.isdigit() else '',
-            'fide_rating': int(fide_rating_raw) if fide_rating_raw.isdigit() else 0,
-            'country':     cell('country'),
-            'national_id': cell('national_id'),
+            'title':       title,
+            'fide_id':     fide_id,
+            'fide_rating': int(rtg_raw) if rtg_raw.isdigit() else 0,
+            'country':     country,
+            'national_id': '',
         })
 
     return tournament_name, players
