@@ -7,3 +7,4 @@ itsdangerous
 reportlab
 stripe
 boto3
+beautifulsoup4

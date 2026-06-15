@@ -153,6 +153,23 @@ def init_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS player_research (
+        id INTEGER PRIMARY KEY,
+        tournament_source TEXT,
+        tournament_name TEXT,
+        name TEXT NOT NULL,
+        title TEXT,
+        fide_id TEXT,
+        fide_rating INTEGER DEFAULT 0,
+        country TEXT,
+        national_id TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_by INTEGER,
+        FOREIGN KEY(created_by) REFERENCES users(id)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_player_research_fide ON player_research(fide_id)')
+
     # Migrations for existing DBs
     for sql in [
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
@@ -498,6 +515,79 @@ def delete_featured_tournament(fid: int) -> bool:
     conn.commit()
     conn.close()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Player Research
+# ---------------------------------------------------------------------------
+
+def upsert_research_players(players: list, tournament_source: str, tournament_name: str, created_by: int) -> int:
+    """Insert players from a tournament import; skip duplicates (same fide_id + tournament_source)."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    inserted = 0
+    for p in players:
+        fide_id = p.get('fide_id') or None
+        # Skip if already stored from same source
+        if fide_id:
+            exists = c.execute(
+                "SELECT id FROM player_research WHERE fide_id=? AND tournament_source=?",
+                (fide_id, tournament_source)
+            ).fetchone()
+            if exists:
+                continue
+        c.execute(
+            "INSERT INTO player_research (tournament_source, tournament_name, name, title, fide_id, fide_rating, country, national_id, created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (tournament_source, tournament_name, p.get('name',''), p.get('title',''),
+             fide_id, p.get('fide_rating', 0) or 0, p.get('country',''), p.get('national_id',''), created_by)
+        )
+        inserted += 1
+    conn.commit()
+    conn.close()
+    return inserted
+
+def list_research_players(search: str = '', limit: int = 200) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    if search:
+        rows = conn.execute(
+            "SELECT id, tournament_name, tournament_source, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
+            "FROM player_research WHERE name LIKE ? OR fide_id LIKE ? ORDER BY fide_rating DESC, name LIMIT ?",
+            (f'%{search}%', f'%{search}%', limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id, tournament_name, tournament_source, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
+            "FROM player_research ORDER BY fide_rating DESC, name LIMIT ?",
+            (limit,)
+        ).fetchall()
+    conn.close()
+    cols = ['id','tournament_name','tournament_source','name','title','fide_id','fide_rating','country','national_id','notes','created_at']
+    return [dict(zip(cols, r)) for r in rows]
+
+def delete_research_player(rid: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM player_research WHERE id=?", (rid,))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+def delete_research_by_source(tournament_source: str) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM player_research WHERE tournament_source=?", (tournament_source,))
+    n = cur.rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+def list_research_sources() -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT tournament_source, tournament_name, COUNT(*) as player_count, MAX(created_at) as imported_at "
+        "FROM player_research GROUP BY tournament_source ORDER BY imported_at DESC"
+    ).fetchall()
+    conn.close()
+    return [{'tournament_source': r[0], 'tournament_name': r[1], 'player_count': r[2], 'imported_at': r[3]} for r in rows]
 
 
 def ensure_admin_exists():

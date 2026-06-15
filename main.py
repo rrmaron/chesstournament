@@ -36,6 +36,8 @@ from database import (
     list_deleted_user_tournaments, undelete_user_tournament,
     update_user_contact,
     add_featured_tournament, list_featured_tournaments, update_featured_tournament, delete_featured_tournament,
+    upsert_research_players, list_research_players, delete_research_player,
+    delete_research_by_source, list_research_sources,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2309,6 +2311,140 @@ async def update_bye_request(
 @app.get("/privacy", response_class=HTMLResponse)
 async def privacy(request: Request):
     return templates.TemplateResponse(request=request, name="privacy.html")
+
+
+# ---------------------------------------------------------------------------
+# Research Advanced Players
+# ---------------------------------------------------------------------------
+
+async def _scrape_chess_results(url: str):
+    """Fetch and parse a chess-results.com player list page.
+    Returns (tournament_name, players_list).
+    """
+    from bs4 import BeautifulSoup
+    import re as _re
+
+    # Normalise URL to get the player-list view (art=9)
+    base = url.split('?')[0]
+    qs   = url.split('?')[1] if '?' in url else 'lan=1'
+    qs   = _re.sub(r'(?:^|&)art=\d+', '', qs).lstrip('&')
+    fetch_url = f"{base}?{qs}&lan=1&art=9"
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+        r = await client.get(fetch_url, headers=headers)
+        r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, 'html.parser')
+
+    # Tournament name from <h2> or <title>
+    name_tag = soup.find('h2') or soup.find('h1') or soup.find('title')
+    tournament_name = name_tag.get_text(' ', strip=True) if name_tag else 'Unknown Tournament'
+    # Strip trailing site suffix
+    tournament_name = _re.sub(r'\s*[-|–]\s*chess-results\.com.*$', '', tournament_name, flags=_re.IGNORECASE).strip()
+
+    # Find first table with enough columns (skip nav/header tables)
+    table = None
+    for t in soup.find_all('table'):
+        rows = t.find_all('tr')
+        if rows and len(rows[0].find_all(['td','th'])) >= 4:
+            table = t
+            break
+    if not table:
+        raise ValueError("Could not find player table on the chess-results page.")
+
+    rows = table.find_all('tr')
+    # Parse header row to find column indices
+    header_cells = [td.get_text(' ', strip=True).lower() for td in rows[0].find_all(['td','th'])]
+    col = {}
+    for i, h in enumerate(header_cells):
+        h_clean = h.replace(' ', '').replace('.','').replace('-','')
+        if h_clean in ('name', 'spieler', 'nome', 'nombre') and 'fide' not in h_clean:
+            col.setdefault('name', i)
+        elif h_clean in ('title','titel','tit','titre','titul'):
+            col['title'] = i
+        elif h_clean in ('fideid','fide_id','idfide'):
+            col['fide_id'] = i
+        elif h_clean in ('fide','rating','elo','rtg','rtgi','ratingfide') and 'id' not in h_clean:
+            col.setdefault('fide_rating', i)
+        elif h_clean in ('nat','fed','country','land','pais'):
+            col['country'] = i
+        elif h_clean in ('natid','nationalid','localid','dwzid','nwzid'):
+            col['national_id'] = i
+
+    players = []
+    for row in rows[1:]:
+        cells = row.find_all(['td','th'])
+        if len(cells) < 2:
+            continue
+        def cell(key):
+            idx = col.get(key)
+            return cells[idx].get_text(' ', strip=True) if idx is not None and idx < len(cells) else ''
+        name = cell('name')
+        if not name or name.isdigit():
+            continue
+        fide_id_raw = cell('fide_id').strip()
+        fide_rating_raw = cell('fide_rating').strip()
+        players.append({
+            'name':        name,
+            'title':       cell('title'),
+            'fide_id':     fide_id_raw if fide_id_raw.isdigit() else '',
+            'fide_rating': int(fide_rating_raw) if fide_rating_raw.isdigit() else 0,
+            'country':     cell('country'),
+            'national_id': cell('national_id'),
+        })
+
+    return tournament_name, players
+
+
+@app.get("/research-players", response_class=HTMLResponse)
+async def research_players_page(
+    request: Request,
+    q: str = '',
+    user: dict = Depends(require_login),
+):
+    players = list_research_players(search=q)
+    sources = list_research_sources()
+    return templates.TemplateResponse(request=request, name="research_players.html", context={
+        "players": players, "sources": sources, "q": q,
+    })
+
+
+@app.post("/research-players/import")
+async def research_import(
+    request: Request,
+    url: str = Form(...),
+    user: dict = Depends(require_login),
+):
+    error = None
+    imported = 0
+    tournament_name = ''
+    try:
+        tournament_name, players = await _scrape_chess_results(url.strip())
+        imported = upsert_research_players(players, url.strip(), tournament_name, user['id'])
+    except Exception as exc:
+        error = str(exc)
+    sources = list_research_sources()
+    all_players = list_research_players()
+    return templates.TemplateResponse(request=request, name="research_players.html", context={
+        "players": all_players, "sources": sources, "q": '',
+        "import_result": {"imported": imported, "tournament": tournament_name, "error": error},
+    })
+
+
+@app.post("/research-players/delete/{rid}")
+async def research_delete(rid: int, user: dict = Depends(require_login)):
+    delete_research_player(rid)
+    return RedirectResponse("/research-players", status_code=303)
+
+
+@app.post("/research-players/delete-source")
+async def research_delete_source(
+    tournament_source: str = Form(...),
+    user: dict = Depends(require_login),
+):
+    delete_research_by_source(tournament_source)
+    return RedirectResponse("/research-players", status_code=303)
 
 
 if __name__ == "__main__":
