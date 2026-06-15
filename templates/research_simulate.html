@@ -73,10 +73,7 @@
         {% set cb_last = p.name.split(',')[0].strip().lower().replace(' ','_') %}
         {% set cb_first = p.name.split(',')[1].strip().lower().replace(' ','_') if ',' in p.name else '' %}
         {% set cb_query = cb_last ~ '_' ~ cb_first if cb_first else cb_last ~ '_' %}
-        {% set row_idx = loop.index0 %}
-        <tr class="{{ 'table-warning fw-bold' if p.start_rank == opponent_rank else '' }}"
-            data-player-name="{{ p.name | e }}" data-fide-id="{{ p.fide_id or '' }}"
-            data-row-idx="{{ row_idx }}" data-most-likely="{{ 'true' if p.start_rank == opponent_rank else 'false' }}">
+        <tr class="{{ 'table-warning fw-bold' if p.start_rank == opponent_rank else '' }}">
           <td class="text-center ps-3">
             {{ p.start_rank }}
             {% if p.start_rank == opponent_rank %}
@@ -101,11 +98,10 @@
           </td>
           <td class="text-center small">{{ p.country or '—' }}</td>
           <td class="text-center">
-            <div class="d-flex gap-1 justify-content-center flex-wrap align-items-center">
-              <button onclick="toggleCb({{ row_idx }})"
-                      class="btn btn-warning btn-sm py-0 px-2 fw-semibold cb-btn" style="font-size:0.7rem">
-                ChessBase <span class="cb-badge-{{ row_idx }}"></span>
-              </button>
+            <div class="d-flex gap-1 justify-content-center flex-wrap">
+              <a href="https://players.chessbase.com/en/search/{{ cb_query }}"
+                 target="_blank" rel="noopener"
+                 class="btn btn-warning btn-sm py-0 px-2 fw-semibold" style="font-size:0.7rem">ChessBase</a>
               {% if p.fide_id %}
               <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">FIDE</a>
@@ -115,14 +111,6 @@
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Chess.com</a>
               <a href="https://lichess.org/search?q={{ search_name }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Lichess</a>
-            </div>
-          </td>
-        </tr>
-        <tr class="d-none cb-detail-row" id="cb-detail-{{ row_idx }}">
-          <td colspan="6" class="p-0">
-            <div class="px-4 py-2 border-start border-warning border-3 bg-warning bg-opacity-10"
-                 id="cb-content-{{ row_idx }}">
-              <span class="text-muted small">Loading ChessBase data…</span>
             </div>
           </td>
         </tr>
@@ -142,99 +130,5 @@
 <p class="text-muted">Enter your starting rank to see the simulation.</p>
 {% endif %}
 
-{% if players %}
-<script>
-const cbCache = {};
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function fetchCb(idx) {
-  if (cbCache[idx] !== undefined) return cbCache[idx];
-  const row = document.querySelector(`tr[data-row-idx="${idx}"]`);
-  if (!row) return null;
-  const name = row.dataset.playerName;
-  const fideId = row.dataset.fideId || '';
-  try {
-    const r = await fetch('/api/research/fetch-chessbase', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({name, fide_id: fideId})
-    });
-    const d = await r.json();
-    cbCache[idx] = d;
-    // Update badge in button
-    const badge = document.querySelector(`.cb-badge-${idx}`);
-    if (badge && d.pgn_count > 0) badge.textContent = ` (${d.pgn_count})`;
-    return d;
-  } catch(e) {
-    cbCache[idx] = null;
-    return null;
-  }
-}
-
-function renderCbContent(idx, d) {
-  const content = document.getElementById('cb-content-' + idx);
-  if (!content) return;
-  if (!d || !d.ok) {
-    content.innerHTML = '<span class="text-muted small">No ChessBase profile found for this player.</span>';
-    return;
-  }
-  let html = `<div class="small">`;
-  if (d.player_url) {
-    html += `<a href="${escHtml(d.player_url)}" target="_blank" rel="noopener" class="fw-semibold">
-      Open ChessBase profile ↗</a>`;
-  }
-  if (d.pgn_count > 0) {
-    html += ` &nbsp;·&nbsp; <span class="text-muted">${d.pgn_count} PGN file${d.pgn_count !== 1 ? 's' : ''} found</span>`;
-  }
-  if (d.pgn_links && d.pgn_links.length > 0) {
-    html += `<div class="mt-1">Downloads: `;
-    d.pgn_links.forEach((url, i) => {
-      html += `<a href="${escHtml(url)}" target="_blank" rel="noopener"
-        class="badge bg-secondary text-decoration-none me-1">PGN ${i+1}</a>`;
-    });
-    html += `</div>`;
-  }
-  if (d.info_text && d.info_text.trim()) {
-    const excerpt = d.info_text.trim().split('\n').filter(l => l.trim().length > 2).slice(0, 20).join('\n');
-    if (excerpt) {
-      html += `<details class="mt-2"><summary class="text-muted" style="cursor:pointer">Page text</summary>
-        <pre class="mt-1 small text-wrap bg-transparent border-0 ps-0" style="max-height:160px;overflow-y:auto">${escHtml(excerpt)}</pre></details>`;
-    }
-  }
-  html += `</div>`;
-  content.innerHTML = html;
-}
-
-async function toggleCb(idx) {
-  const detail = document.getElementById('cb-detail-' + idx);
-  if (!detail) return;
-  const isHidden = detail.classList.contains('d-none');
-  detail.classList.toggle('d-none', !isHidden);
-  if (isHidden) {
-    let d = cbCache[idx];
-    if (d === undefined) d = await fetchCb(idx);
-    renderCbContent(idx, d);
-  }
-}
-
-// On load: pre-fetch all rows in background; auto-open most-likely
-document.addEventListener('DOMContentLoaded', () => {
-  const rows = document.querySelectorAll('tr[data-row-idx]');
-  rows.forEach(async row => {
-    const idx = row.dataset.rowIdx;
-    const d = await fetchCb(idx);
-    // Auto-open the most likely opponent
-    if (row.dataset.mostLikely === 'true') {
-      const detail = document.getElementById('cb-detail-' + idx);
-      if (detail) detail.classList.remove('d-none');
-      renderCbContent(idx, d);
-    }
-  });
-});
-</script>
-{% endif %}
 
 {% endblock %}
