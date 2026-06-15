@@ -39,6 +39,8 @@ from database import (
     upsert_research_players, list_research_players, delete_research_player,
     delete_research_by_source, list_research_sources,
     get_research_players_by_rank_range, get_research_player_count,
+    upsert_player_chessbase, get_player_chessbase,
+    get_research_player_fide_id_by_user,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2453,13 +2455,23 @@ async def research_simulate(
     total = 0
     tournament_name = ''
 
-    if tournament_source and my_rank:
+    # Auto-detect user's starting rank from their FIDE ID
+    profile = get_user_profile(user['id'])
+    auto_rank = 0
+    if tournament_source and profile and profile.get('fide_id'):
+        found = get_research_player_fide_id_by_user(tournament_source, profile['fide_id'])
+        if found:
+            auto_rank = found['start_rank']
+
+    effective_rank = my_rank or auto_rank
+
+    if tournament_source and effective_rank:
         total = get_research_player_count(tournament_source)
         half  = math.ceil(total / 2)
-        if my_rank <= half:
-            opponent_rank = my_rank + half
+        if effective_rank <= half:
+            opponent_rank = effective_rank + half
         else:
-            opponent_rank = my_rank - half
+            opponent_rank = effective_rank - half
         rank_lo = max(1, opponent_rank - buffer)
         rank_hi = min(total, opponent_rank + buffer)
         players = get_research_players_by_rank_range(tournament_source, rank_lo, rank_hi)
@@ -2472,10 +2484,90 @@ async def research_simulate(
         "tournament_source": tournament_source,
         "tournament_name": tournament_name,
         "my_rank": my_rank,
+        "auto_rank": auto_rank,
         "opponent_rank": opponent_rank,
         "buffer": buffer,
         "total": total,
         "players": players,
+    })
+
+
+@app.post("/api/research/fetch-chessbase")
+async def fetch_chessbase(
+    request: Request,
+    user: dict = Depends(require_login),
+):
+    """Scrape ChessBase player page and store data including PGN links."""
+    from bs4 import BeautifulSoup
+    body = await request.json()
+    player_name: str = body.get("name", "")
+    fide_id: str = body.get("fide_id", "")
+
+    if not player_name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+
+    parts = player_name.split(",")
+    cb_last = parts[0].strip().lower().replace(" ", "_")
+    cb_first = parts[1].strip().lower().replace(" ", "_") if len(parts) > 1 else ""
+    cb_query = f"{cb_last}_{cb_first}" if cb_first else f"{cb_last}_"
+
+    search_url = f"https://players.chessbase.com/en/search/{cb_query}"
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+        try:
+            resp = await client.get(search_url, headers=headers)
+            resp.raise_for_status()
+        except Exception as e:
+            return JSONResponse({"error": f"Failed to fetch ChessBase: {e}"}, status_code=502)
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Look for player profile link in search results
+        player_id = None
+        player_url = None
+        profile_link = soup.find("a", href=re.compile(r"/en/player/\d+"))
+        if profile_link:
+            player_url = "https://players.chessbase.com" + profile_link["href"]
+            m = re.search(r"/en/player/(\d+)", profile_link["href"])
+            if m:
+                player_id = m.group(1)
+
+        raw_info = soup.get_text(separator="\n", strip=True)[:8000]
+        pgn_links = []
+
+        if player_url:
+            try:
+                presp = await client.get(player_url, headers=headers)
+                presp.raise_for_status()
+                psoup = BeautifulSoup(presp.text, "html.parser")
+                raw_info = psoup.get_text(separator="\n", strip=True)[:8000]
+                for a in psoup.find_all("a", href=re.compile(r"\.pgn", re.I)):
+                    href = a["href"]
+                    if not href.startswith("http"):
+                        href = "https://players.chessbase.com" + href
+                    pgn_links.append(href)
+            except Exception:
+                pass
+
+    pgn_data = "\n".join(pgn_links)
+
+    upsert_player_chessbase(
+        fide_id=fide_id or "",
+        player_name=player_name,
+        chessbase_player_id=player_id or "",
+        chessbase_url=player_url or search_url,
+        game_count=len(pgn_links),
+        pgn_data=pgn_data,
+        raw_info=raw_info,
+    )
+
+    return JSONResponse({
+        "ok": True,
+        "player_id": player_id,
+        "player_url": player_url or search_url,
+        "pgn_count": len(pgn_links),
+        "pgn_links": pgn_links[:20],
     })
 
 

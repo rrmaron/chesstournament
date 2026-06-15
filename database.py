@@ -608,6 +608,66 @@ def list_research_sources() -> List[Dict]:
     return [{'tournament_source': r[0], 'tournament_name': r[1], 'player_count': r[2], 'imported_at': r[3]} for r in rows]
 
 
+# ---------------------------------------------------------------------------
+# ChessBase player data / PGN storage
+# ---------------------------------------------------------------------------
+
+def init_player_chessbase():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''CREATE TABLE IF NOT EXISTS player_chessbase (
+        id INTEGER PRIMARY KEY,
+        fide_id TEXT UNIQUE,
+        player_name TEXT,
+        chessbase_player_id TEXT,
+        chessbase_url TEXT,
+        game_count INTEGER DEFAULT 0,
+        pgn_data TEXT,
+        raw_info TEXT,
+        fetched_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.commit()
+    conn.close()
+
+init_player_chessbase()
+
+def upsert_player_chessbase(fide_id: str, player_name: str, chessbase_player_id: str,
+                             chessbase_url: str, game_count: int, pgn_data: str, raw_info: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "INSERT OR REPLACE INTO player_chessbase "
+        "(fide_id, player_name, chessbase_player_id, chessbase_url, game_count, pgn_data, raw_info, fetched_at) "
+        "VALUES (?,?,?,?,?,?,?,CURRENT_TIMESTAMP)",
+        (fide_id, player_name, chessbase_player_id, chessbase_url, game_count, pgn_data, raw_info)
+    )
+    conn.commit()
+    conn.close()
+
+def get_player_chessbase(fide_id: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT fide_id, player_name, chessbase_player_id, chessbase_url, game_count, pgn_data, raw_info, fetched_at "
+        "FROM player_chessbase WHERE fide_id=?", (fide_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    cols = ['fide_id','player_name','chessbase_player_id','chessbase_url','game_count','pgn_data','raw_info','fetched_at']
+    return dict(zip(cols, row))
+
+def get_research_player_fide_id_by_user(tournament_source: str, fide_id: str) -> Optional[Dict]:
+    """Find a player in a tournament by FIDE ID and return their entry."""
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT id, start_rank, name, title, fide_id, fide_rating, country "
+        "FROM player_research WHERE tournament_source=? AND fide_id=?",
+        (tournament_source, fide_id)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return dict(zip(['id','start_rank','name','title','fide_id','fide_rating','country'], row))
+
+
 def ensure_admin_exists():
     """Create a default admin/admin account if no users exist yet."""
     conn = sqlite3.connect(DB_FILE)
