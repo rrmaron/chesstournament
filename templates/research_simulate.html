@@ -73,7 +73,8 @@
         {% set cb_last = p.name.split(',')[0].strip().lower().replace(' ','_') %}
         {% set cb_first = p.name.split(',')[1].strip().lower().replace(' ','_') if ',' in p.name else '' %}
         {% set cb_query = cb_last ~ '_' ~ cb_first if cb_first else cb_last ~ '_' %}
-        <tr class="{{ 'table-warning fw-bold' if p.start_rank == opponent_rank else '' }}">
+        <tr class="{{ 'table-warning fw-bold' if p.start_rank == opponent_rank else '' }}"
+            data-player-name="{{ p.name | e }}" data-fide-id="{{ p.fide_id or '' }}">
           <td class="text-center ps-3">
             {{ p.start_rank }}
             {% if p.start_rank == opponent_rank %}
@@ -98,10 +99,11 @@
           </td>
           <td class="text-center small">{{ p.country or '—' }}</td>
           <td class="text-center">
-            <div class="d-flex gap-1 justify-content-center flex-wrap">
+            <div class="d-flex gap-1 justify-content-center flex-wrap align-items-center">
               <a href="https://players.chessbase.com/en/search/{{ cb_query }}"
                  target="_blank" rel="noopener"
-                 class="btn btn-warning btn-sm py-0 px-2 fw-semibold" style="font-size:0.7rem">ChessBase</a>
+                 class="btn btn-warning btn-sm py-0 px-2 fw-semibold cb-btn" style="font-size:0.7rem">ChessBase</a>
+              <span class="cb-badge text-muted" style="font-size:0.65rem"></span>
               {% if p.fide_id %}
               <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">FIDE</a>
@@ -128,6 +130,37 @@
 
 {% elif tournament_source %}
 <p class="text-muted">Enter your starting rank to see the simulation.</p>
+{% endif %}
+
+{% if players %}
+<script>
+(async () => {
+  const rows = document.querySelectorAll('tr[data-player-name]');
+  for (const row of rows) {
+    const name = row.dataset.playerName;
+    const fideId = row.dataset.fideId || '';
+    const btn = row.querySelector('.cb-btn');
+    const badge = row.querySelector('.cb-badge');
+    if (badge) badge.textContent = '⏳';
+    try {
+      const r = await fetch('/api/research/fetch-chessbase', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, fide_id: fideId})
+      });
+      const d = await r.json();
+      if (d.ok && d.player_url) {
+        if (btn) btn.href = d.player_url;
+        if (badge) badge.textContent = d.pgn_count > 0 ? `${d.pgn_count} games` : '';
+      } else {
+        if (badge) badge.textContent = '';
+      }
+    } catch(e) {
+      if (badge) badge.textContent = '';
+    }
+  }
+})();
+</script>
 {% endif %}
 
 {% endblock %}

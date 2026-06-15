@@ -2526,10 +2526,11 @@ async def fetch_chessbase(
         # Look for player profile link in search results
         player_id = None
         player_url = None
-        profile_link = soup.find("a", href=re.compile(r"/en/player/\d+"))
+        # URL format: /en/player/{name}/{id}  e.g. /en/player/scrimieri_gabriele/745621
+        profile_link = soup.find("a", href=re.compile(r"/en/player/[^/\"']+/\d+"))
         if profile_link:
             player_url = "https://players.chessbase.com" + profile_link["href"]
-            m = re.search(r"/en/player/(\d+)", profile_link["href"])
+            m = re.search(r"/en/player/[^/]+/(\d+)", profile_link["href"])
             if m:
                 player_id = m.group(1)
 
