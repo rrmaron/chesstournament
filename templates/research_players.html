@@ -57,11 +57,17 @@
           <td class="text-center">{{ s.player_count }}</td>
           <td class="small text-muted">{{ s.imported_at[:10] if s.imported_at else '—' }}</td>
           <td class="text-end pe-3">
-            <form method="post" action="/research-players/delete-source"
-                  onsubmit="return confirm('Remove all {{ s.player_count }} players from this tournament?')">
-              <input type="hidden" name="tournament_source" value="{{ s.tournament_source }}">
-              <button class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size:0.75rem">Remove</button>
-            </form>
+            <div class="d-flex gap-2 justify-content-end align-items-center">
+              <a href="/research-players/simulate?tournament_source={{ s.tournament_source | urlencode }}"
+                 class="btn btn-primary btn-sm py-0 px-2" style="font-size:0.75rem">
+                First Round Simulation
+              </a>
+              <form method="post" action="/research-players/delete-source"
+                    onsubmit="return confirm('Remove all {{ s.player_count }} players from this tournament?')">
+                <input type="hidden" name="tournament_source" value="{{ s.tournament_source }}">
+                <button class="btn btn-outline-danger btn-sm py-0 px-2" style="font-size:0.75rem">Remove</button>
+              </form>
+            </div>
           </td>
         </tr>
         {% endfor %}

@@ -157,6 +157,7 @@ def init_db():
         id INTEGER PRIMARY KEY,
         tournament_source TEXT,
         tournament_name TEXT,
+        start_rank INTEGER DEFAULT 0,
         name TEXT NOT NULL,
         title TEXT,
         fide_id TEXT,
@@ -172,6 +173,7 @@ def init_db():
 
     # Migrations for existing DBs
     for sql in [
+        "ALTER TABLE player_research ADD COLUMN start_rank INTEGER DEFAULT 0",
         "ALTER TABLE uscf_members ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN fide_id TEXT",
         "ALTER TABLE players ADD COLUMN expiry TEXT",
@@ -526,9 +528,8 @@ def upsert_research_players(players: list, tournament_source: str, tournament_na
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     inserted = 0
-    for p in players:
+    for i, p in enumerate(players, start=1):
         fide_id = p.get('fide_id') or None
-        # Skip if already stored from same source
         if fide_id:
             exists = c.execute(
                 "SELECT id FROM player_research WHERE fide_id=? AND tournament_source=?",
@@ -537,9 +538,9 @@ def upsert_research_players(players: list, tournament_source: str, tournament_na
             if exists:
                 continue
         c.execute(
-            "INSERT INTO player_research (tournament_source, tournament_name, name, title, fide_id, fide_rating, country, national_id, created_by) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (tournament_source, tournament_name, p.get('name',''), p.get('title',''),
+            "INSERT INTO player_research (tournament_source, tournament_name, start_rank, name, title, fide_id, fide_rating, country, national_id, created_by) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (tournament_source, tournament_name, p.get('start_rank', i), p.get('name',''), p.get('title',''),
              fide_id, p.get('fide_rating', 0) or 0, p.get('country',''), p.get('national_id',''), created_by)
         )
         inserted += 1
@@ -551,19 +552,36 @@ def list_research_players(search: str = '', limit: int = 200) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     if search:
         rows = conn.execute(
-            "SELECT id, tournament_name, tournament_source, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
+            "SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
             "FROM player_research WHERE name LIKE ? OR fide_id LIKE ? ORDER BY fide_rating DESC, name LIMIT ?",
             (f'%{search}%', f'%{search}%', limit)
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT id, tournament_name, tournament_source, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
+            "SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, national_id, notes, created_at "
             "FROM player_research ORDER BY fide_rating DESC, name LIMIT ?",
             (limit,)
         ).fetchall()
     conn.close()
-    cols = ['id','tournament_name','tournament_source','name','title','fide_id','fide_rating','country','national_id','notes','created_at']
+    cols = ['id','tournament_name','tournament_source','start_rank','name','title','fide_id','fide_rating','country','national_id','notes','created_at']
     return [dict(zip(cols, r)) for r in rows]
+
+def get_research_players_by_rank_range(tournament_source: str, rank_lo: int, rank_hi: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, national_id "
+        "FROM player_research WHERE tournament_source=? AND start_rank BETWEEN ? AND ? ORDER BY start_rank",
+        (tournament_source, rank_lo, rank_hi)
+    ).fetchall()
+    conn.close()
+    cols = ['id','tournament_name','tournament_source','start_rank','name','title','fide_id','fide_rating','country','national_id']
+    return [dict(zip(cols, r)) for r in rows]
+
+def get_research_player_count(tournament_source: str) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    n = conn.execute("SELECT COUNT(*) FROM player_research WHERE tournament_source=?", (tournament_source,)).fetchone()[0]
+    conn.close()
+    return n
 
 def delete_research_player(rid: int) -> bool:
     conn = sqlite3.connect(DB_FILE)

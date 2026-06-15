@@ -38,6 +38,7 @@ from database import (
     add_featured_tournament, list_featured_tournaments, update_featured_tournament, delete_featured_tournament,
     upsert_research_players, list_research_players, delete_research_player,
     delete_research_by_source, list_research_sources,
+    get_research_players_by_rank_range, get_research_player_count,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2376,6 +2377,7 @@ async def _scrape_chess_results(url: str):
         fide_id = _re.sub(r'\D', '', fide_id_raw)
 
         players.append({
+            'start_rank':  len(players) + 1,
             'name':        name,
             'title':       title,
             'fide_id':     fide_id,
@@ -2435,6 +2437,46 @@ async def research_delete_source(
 ):
     delete_research_by_source(tournament_source)
     return RedirectResponse("/research-players", status_code=303)
+
+
+@app.get("/research-players/simulate", response_class=HTMLResponse)
+async def research_simulate(
+    request: Request,
+    tournament_source: str = '',
+    my_rank: int = 0,
+    buffer: int = 4,
+    user: dict = Depends(require_login),
+):
+    import math
+    players = []
+    opponent_rank = None
+    total = 0
+    tournament_name = ''
+
+    if tournament_source and my_rank:
+        total = get_research_player_count(tournament_source)
+        half  = math.ceil(total / 2)
+        if my_rank <= half:
+            opponent_rank = my_rank + half
+        else:
+            opponent_rank = my_rank - half
+        rank_lo = max(1, opponent_rank - buffer)
+        rank_hi = min(total, opponent_rank + buffer)
+        players = get_research_players_by_rank_range(tournament_source, rank_lo, rank_hi)
+        if players:
+            tournament_name = players[0]['tournament_name']
+
+    sources = list_research_sources()
+    return templates.TemplateResponse(request=request, name="research_simulate.html", context={
+        "sources": sources,
+        "tournament_source": tournament_source,
+        "tournament_name": tournament_name,
+        "my_rank": my_rank,
+        "opponent_rank": opponent_rank,
+        "buffer": buffer,
+        "total": total,
+        "players": players,
+    })
 
 
 if __name__ == "__main__":
