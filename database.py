@@ -199,6 +199,8 @@ def init_db():
         "ALTER TABLE users ADD COLUMN fide_blitz_rating INTEGER",
         "ALTER TABLE users ADD COLUMN player_name TEXT",
         "ALTER TABLE user_tournaments ADD COLUMN tournament_type TEXT DEFAULT 'standard'",
+        "ALTER TABLE player_research ADD COLUMN lichess_id TEXT",
+        "ALTER TABLE player_research ADD COLUMN chessdotcom_id TEXT",
     ]:
         try:
             c.execute(sql)
@@ -569,12 +571,12 @@ def list_research_players(search: str = '', limit: int = 200) -> List[Dict]:
 def get_research_players_by_rank_range(tournament_source: str, rank_lo: int, rank_hi: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute(
-        "SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, national_id "
+        "SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, national_id, lichess_id, chessdotcom_id "
         "FROM player_research WHERE tournament_source=? AND start_rank BETWEEN ? AND ? ORDER BY start_rank",
         (tournament_source, rank_lo, rank_hi)
     ).fetchall()
     conn.close()
-    cols = ['id','tournament_name','tournament_source','start_rank','name','title','fide_id','fide_rating','country','national_id']
+    cols = ['id','tournament_name','tournament_source','start_rank','name','title','fide_id','fide_rating','country','national_id','lichess_id','chessdotcom_id']
     return [dict(zip(cols, r)) for r in rows]
 
 def get_research_player_count(tournament_source: str) -> int:
@@ -666,6 +668,27 @@ def get_research_player_fide_id_by_user(tournament_source: str, fide_id: str) ->
     if not row:
         return None
     return dict(zip(['id','start_rank','name','title','fide_id','fide_rating','country'], row))
+
+
+def update_research_player_links(player_id: int, lichess_id: str, chessdotcom_id: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "UPDATE player_research SET lichess_id=?, chessdotcom_id=? WHERE id=?",
+        (lichess_id or None, chessdotcom_id or None, player_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_research_player_by_id(player_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT id, start_rank, name, title, fide_id, fide_rating, country, lichess_id, chessdotcom_id "
+        "FROM player_research WHERE id=?", (player_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return dict(zip(['id','start_rank','name','title','fide_id','fide_rating','country','lichess_id','chessdotcom_id'], row))
 
 
 def ensure_admin_exists():

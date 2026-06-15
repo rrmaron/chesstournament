@@ -73,10 +73,11 @@
         {% set cb_last = p.name.split(',')[0].strip().lower().replace(' ','_') %}
         {% set cb_first = p.name.split(',')[1].strip().lower().replace(' ','_') if ',' in p.name else '' %}
         {% set cb_query = cb_last ~ '_' ~ cb_first if cb_first else cb_last ~ '_' %}
-        <tr class="{{ 'table-warning fw-bold' if p.start_rank == opponent_rank else '' }}">
+        {% set is_likely = p.start_rank == opponent_rank %}
+        <tr class="{{ 'table-warning fw-bold' if is_likely else '' }}">
           <td class="text-center ps-3">
             {{ p.start_rank }}
-            {% if p.start_rank == opponent_rank %}
+            {% if is_likely %}
             <span class="badge bg-warning text-dark ms-1" style="font-size:0.65rem">Most likely</span>
             {% endif %}
           </td>
@@ -84,14 +85,10 @@
             {% if p.fide_id %}
             <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
                class="text-decoration-none text-dark">{{ p.name }}</a>
-            {% else %}
-            {{ p.name }}
-            {% endif %}
+            {% else %}{{ p.name }}{% endif %}
           </td>
           <td class="text-center">
-            {% if p.title %}
-            <span class="badge bg-secondary">{{ p.title }}</span>
-            {% else %}—{% endif %}
+            {% if p.title %}<span class="badge bg-secondary">{{ p.title }}</span>{% else %}—{% endif %}
           </td>
           <td class="text-center fw-semibold {{ 'text-success' if p.fide_rating >= 2400 else ('text-primary' if p.fide_rating >= 2000 else '') }}">
             {{ p.fide_rating if p.fide_rating else '—' }}
@@ -106,11 +103,22 @@
               <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">FIDE</a>
               {% endif %}
-              {% set search_name = p.name | urlencode %}
-              <a href="https://www.chess.com/search?q={{ search_name }}" target="_blank" rel="noopener"
-                 class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Chess.com</a>
-              <a href="https://lichess.org/search?q={{ search_name }}" target="_blank" rel="noopener"
-                 class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Lichess</a>
+              <button onclick="toggleInfo({{ loop.index0 }})"
+                      class="btn btn-info btn-sm py-0 px-2" style="font-size:0.7rem">
+                Ratings ▾
+              </button>
+            </div>
+          </td>
+        </tr>
+        <tr class="{% if not is_likely %}d-none{% endif %} info-row" id="info-row-{{ loop.index0 }}">
+          <td colspan="6" class="p-0 ps-4 pe-3 pb-2">
+            <div class="pt-2 small" id="info-content-{{ loop.index0 }}"
+                 data-player-id="{{ p.id }}"
+                 data-fide-id="{{ p.fide_id or '' }}"
+                 data-name="{{ p.name | e }}"
+                 data-lichess="{{ p.lichess_id or '' }}"
+                 data-chessdotcom="{{ p.chessdotcom_id or '' }}">
+              <span class="text-muted">Loading…</span>
             </div>
           </td>
         </tr>
@@ -130,5 +138,134 @@
 <p class="text-muted">Enter your starting rank to see the simulation.</p>
 {% endif %}
 
+{% if players %}
+<script>
+const infoCache = {};
+const fetchingSet = new Set();
+
+function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderRatings(r) {
+  if (!r) return '';
+  return ['bullet','blitz','rapid','classical'].filter(t => r[t])
+    .map(t => `<span class="me-2"><span class="text-muted">${t[0].toUpperCase()}:</span> <strong>${r[t]}</strong></span>`).join('');
+}
+
+function renderInfo(idx, d) {
+  const el = document.getElementById('info-content-' + idx);
+  if (!el) return;
+  const pid = el.dataset.playerId;
+  let html = '<div class="row g-2">';
+
+  // FIDE
+  if (d.fide) {
+    const f = d.fide;
+    html += `<div class="col-12 col-md-4"><div class="border rounded p-2 h-100">
+      <div class="fw-semibold mb-1"><a href="${esc(f.profile_url)}" target="_blank" rel="noopener">FIDE ↗</a></div>
+      ${f.ratings && Object.keys(f.ratings).length ? renderRatings(f.ratings) : '<span class="text-muted small">Rating data unavailable</span>'}
+    </div></div>`;
+  }
+
+  // Lichess
+  const lc = d.lichess;
+  const storedLc = el.dataset.lichess || '';
+  html += `<div class="col-12 col-md-4"><div class="border rounded p-2 h-100">
+    <div class="fw-semibold mb-1">Lichess</div>`;
+  if (lc && lc.username) {
+    html += `<a href="${esc(lc.profile_url)}" target="_blank" rel="noopener" class="d-block mb-1">@${esc(lc.username)}${lc.title ? ` <span class="badge bg-secondary">${esc(lc.title)}</span>` : ''}</a>`;
+    html += renderRatings(lc.ratings);
+    if (lc.total_games) html += ` <span class="text-muted">(${lc.total_games.toLocaleString()} games)</span>`;
+    if (lc.found_via === 'search') html += `<div class="text-warning mt-1" style="font-size:0.65rem">⚠ Auto-matched by name — verify</div>`;
+  } else if (lc && lc.error) {
+    html += `<span class="text-danger small">${esc(lc.error)}</span>`;
+  } else {
+    html += `<span class="text-muted small">Not found</span>`;
+  }
+  html += `<div class="mt-2">
+    <input type="text" id="lc-${idx}" placeholder="Lichess username" value="${esc(storedLc)}"
+           class="form-control form-control-sm py-0" style="font-size:0.7rem"
+           onblur="saveLinks('${pid}',this.value,document.getElementById('cc-${idx}').value,'${idx}')">
+  </div></div></div>`;
+
+  // Chess.com
+  const cc = d.chessdotcom;
+  const storedCc = el.dataset.chessdotcom || '';
+  html += `<div class="col-12 col-md-4"><div class="border rounded p-2 h-100">
+    <div class="fw-semibold mb-1">Chess.com</div>`;
+  if (cc && cc.username) {
+    html += `<a href="${esc(cc.profile_url)}" target="_blank" rel="noopener" class="d-block mb-1">${esc(cc.username)}${cc.title ? ` <span class="badge bg-secondary">${esc(cc.title)}</span>` : ''}</a>`;
+    html += renderRatings(cc.ratings);
+    if (cc.found_via === 'search') html += `<div class="text-warning mt-1" style="font-size:0.65rem">⚠ Auto-matched by name — verify</div>`;
+  } else if (cc && cc.error) {
+    html += `<span class="text-danger small">${esc(cc.error)}</span>`;
+  } else {
+    html += `<span class="text-muted small">Not found</span>`;
+  }
+  html += `<div class="mt-2">
+    <input type="text" id="cc-${idx}" placeholder="Chess.com username" value="${esc(storedCc)}"
+           class="form-control form-control-sm py-0" style="font-size:0.7rem"
+           onblur="saveLinks('${pid}',document.getElementById('lc-${idx}').value,this.value,'${idx}')">
+  </div></div></div>`;
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function loadInfo(idx) {
+  if (infoCache[idx] !== undefined || fetchingSet.has(idx)) return;
+  fetchingSet.add(idx);
+  const el = document.getElementById('info-content-' + idx);
+  if (!el) return;
+  const params = new URLSearchParams({
+    fide_id: el.dataset.fideId || '',
+    name: el.dataset.name || '',
+    lichess_id: el.dataset.lichess || '',
+    chessdotcom_id: el.dataset.chessdotcom || '',
+  });
+  try {
+    const r = await fetch('/api/research/player-info?' + params);
+    const d = await r.json();
+    infoCache[idx] = d;
+    renderInfo(idx, d);
+  } catch(e) {
+    if (el) el.innerHTML = '<span class="text-danger small">Error loading player info</span>';
+  } finally {
+    fetchingSet.delete(idx);
+  }
+}
+
+function toggleInfo(idx) {
+  const row = document.getElementById('info-row-' + idx);
+  if (!row) return;
+  const hidden = row.classList.toggle('d-none');
+  if (!hidden) loadInfo(idx);
+}
+
+async function saveLinks(playerId, lichessId, chessdotcomId, idx) {
+  lichessId = (lichessId || '').trim().replace(/^@/, '');
+  chessdotcomId = (chessdotcomId || '').trim();
+  const el = document.getElementById('info-content-' + idx);
+  if (el) { el.dataset.lichess = lichessId; el.dataset.chessdotcom = chessdotcomId; }
+  try {
+    await fetch('/api/research/player-links', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({player_id: parseInt(playerId), lichess_id: lichessId, chessdotcom_id: chessdotcomId})
+    });
+    delete infoCache[idx];
+    fetchingSet.delete(idx);
+    if (el) el.innerHTML = '<span class="text-muted">Reloading…</span>';
+    await loadInfo(idx);
+  } catch(e) {}
+}
+
+// Auto-load visible (most likely) rows on page load
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.info-row:not(.d-none)').forEach(row => {
+    loadInfo(row.id.replace('info-row-', ''));
+  });
+});
+</script>
+{% endif %}
 
 {% endblock %}

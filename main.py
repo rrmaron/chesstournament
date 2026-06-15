@@ -41,6 +41,7 @@ from database import (
     get_research_players_by_rank_range, get_research_player_count,
     upsert_player_chessbase, get_player_chessbase,
     get_research_player_fide_id_by_user,
+    update_research_player_links, get_research_player_by_id,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2571,6 +2572,154 @@ async def fetch_chessbase(
         "pgn_links": pgn_links[:20],
         "info_text": raw_info[:1200],
     })
+
+
+@app.post("/api/research/player-links")
+async def save_player_links(
+    request: Request,
+    user: dict = Depends(require_login),
+):
+    """Save Lichess and Chess.com usernames for a research player."""
+    body = await request.json()
+    player_id = int(body.get("player_id", 0))
+    lichess_id = (body.get("lichess_id") or "").strip().lstrip("@")
+    chessdotcom_id = (body.get("chessdotcom_id") or "").strip()
+    if not player_id:
+        return JSONResponse({"error": "player_id required"}, status_code=400)
+    update_research_player_links(player_id, lichess_id, chessdotcom_id)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/research/player-info")
+async def research_player_info(
+    request: Request,
+    player_id: int = 0,
+    fide_id: str = '',
+    name: str = '',
+    lichess_id: str = '',
+    chessdotcom_id: str = '',
+    user: dict = Depends(require_login),
+):
+    """Fetch player ratings/profile from FIDE, Lichess, Chess.com."""
+    from bs4 import BeautifulSoup
+
+    parts = [p.strip() for p in name.split(',')] if ',' in name else [name.strip(), '']
+    lastname, firstname = parts[0], (parts[1] if len(parts) > 1 else '')
+
+    result: dict = {}
+    ua = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=12) as client:
+
+        # ── FIDE ──────────────────────────────────────────────────────────────
+        if fide_id:
+            fide_info: dict = {"profile_url": f"https://ratings.fide.com/profile/{fide_id}"}
+            try:
+                r = await client.get(f"https://ratings.fide.com/profile/{fide_id}", headers=ua)
+                soup = BeautifulSoup(r.text, "html.parser")
+                ratings: dict = {}
+                full_text = soup.get_text(separator="\n")
+                for label in ("Standard", "Rapid", "Blitz"):
+                    idx = full_text.find(label)
+                    if idx >= 0:
+                        snippet = full_text[idx:idx+40]
+                        m = re.search(r'\b(\d{3,4})\b', snippet)
+                        if m:
+                            ratings[label.lower()] = int(m.group(1))
+                fide_info["ratings"] = ratings
+            except Exception as e:
+                fide_info["error"] = str(e)
+            result["fide"] = fide_info
+
+        # ── Lichess ───────────────────────────────────────────────────────────
+        lc_username = lichess_id.lstrip("@").strip() if lichess_id else ""
+        if not lc_username and (firstname or lastname):
+            # Autocomplete search by name
+            try:
+                search_term = f"{firstname} {lastname}".strip()
+                r = await client.get(
+                    "https://lichess.org/api/player/autocomplete",
+                    params={"term": search_term, "object": "true"},
+                    headers={**ua, "Accept": "application/json"},
+                )
+                if r.status_code == 200:
+                    candidates = r.json()
+                    if isinstance(candidates, list) and candidates:
+                        lc_username = candidates[0].get("id", "")
+            except Exception:
+                pass
+
+        if lc_username:
+            try:
+                ur = await client.get(
+                    f"https://lichess.org/api/user/{lc_username}",
+                    headers={**ua, "Accept": "application/json"},
+                )
+                if ur.status_code == 200:
+                    ud = ur.json()
+                    perfs = ud.get("perfs", {})
+                    tc_ratings: dict = {}
+                    total_games = 0
+                    for tc in ("bullet", "blitz", "rapid", "classical"):
+                        if tc in perfs and "rating" in perfs[tc]:
+                            tc_ratings[tc] = perfs[tc]["rating"]
+                            total_games += perfs[tc].get("games", 0)
+                    result["lichess"] = {
+                        "username": lc_username,
+                        "title": ud.get("title"),
+                        "profile_url": f"https://lichess.org/@/{lc_username}",
+                        "ratings": tc_ratings,
+                        "total_games": total_games,
+                        "found_via": "stored" if lichess_id else "search",
+                    }
+                else:
+                    result["lichess"] = {"error": f"User not found: {lc_username}"}
+            except Exception as e:
+                result["lichess"] = {"error": str(e)}
+        else:
+            result["lichess"] = None
+
+        # ── Chess.com ─────────────────────────────────────────────────────────
+        cc_username = chessdotcom_id.strip() if chessdotcom_id else ""
+        if not cc_username and firstname and lastname:
+            fn, ln = firstname.lower().replace(" ", ""), lastname.lower().replace(" ", "")
+            candidates = [f"{fn}{ln}", f"{fn}_{ln}", f"{ln}_{fn}", f"{fn[0]}{ln}", f"{fn}{ln[:5]}"]
+            for cand in candidates:
+                try:
+                    r = await client.get(f"https://api.chess.com/pub/player/{cand}", headers=ua)
+                    if r.status_code == 200:
+                        cc_username = cand
+                        break
+                except Exception:
+                    pass
+
+        if cc_username:
+            try:
+                pr = await client.get(f"https://api.chess.com/pub/player/{cc_username}", headers=ua)
+                sr = await client.get(f"https://api.chess.com/pub/player/{cc_username}/stats", headers=ua)
+                if pr.status_code == 200:
+                    pd = pr.json()
+                    stats = sr.json() if sr.status_code == 200 else {}
+                    cc_ratings: dict = {}
+                    for tc, key in [("bullet","chess_bullet"), ("blitz","chess_blitz"), ("rapid","chess_rapid")]:
+                        v = stats.get(key, {}).get("last", {}).get("rating")
+                        if v:
+                            cc_ratings[tc] = v
+                    result["chessdotcom"] = {
+                        "username": cc_username,
+                        "title": pd.get("title"),
+                        "profile_url": pd.get("url", f"https://www.chess.com/member/{cc_username}"),
+                        "ratings": cc_ratings,
+                        "found_via": "stored" if chessdotcom_id else "search",
+                    }
+                else:
+                    result["chessdotcom"] = {"error": f"User not found: {cc_username}"}
+            except Exception as e:
+                result["chessdotcom"] = {"error": str(e)}
+        else:
+            result["chessdotcom"] = None
+
+    return JSONResponse(result)
 
 
 if __name__ == "__main__":
