@@ -92,7 +92,8 @@
           <th class="text-center">Title</th>
           <th class="text-center">FIDE Rtg</th>
           <th class="text-center">Country</th>
-          <th class="text-center">Research Links</th>
+          <th class="text-center">ChessBase</th>
+          <th class="text-center">Other Links</th>
           <th class="text-center">Source</th>
           <th></th>
         </tr>
@@ -118,15 +119,19 @@
           </td>
           <td class="text-center small">{{ p.country or '—' }}</td>
           <td class="text-center">
+            {% set cb_name = p.name.split(',')[0].strip().lower().replace(' ','_') %}
+            <a href="https://players.chessbase.com/en/search/{{ cb_name }}_"
+               target="_blank" rel="noopener"
+               class="btn btn-warning btn-sm py-0 px-2 fw-semibold" style="font-size:0.8rem">
+              {{ cb_name }} ↗
+            </a>
+          </td>
+          <td class="text-center">
             <div class="d-flex gap-1 justify-content-center flex-wrap">
               {% if p.fide_id %}
               <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">FIDE</a>
               {% endif %}
-              {% set cb_name = p.name.split(',')[0].strip().lower().replace(' ','_') %}
-              <a href="https://players.chessbase.com/en/search/{{ cb_name }}_"
-                 target="_blank" rel="noopener"
-                 class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">ChessBase</a>
               {% set search_name = p.name | urlencode %}
               <a href="https://www.chess.com/search?q={{ search_name }}" target="_blank" rel="noopener"
                  class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Chess.com</a>
