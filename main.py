@@ -2569,6 +2569,7 @@ async def fetch_chessbase(
         "player_url": player_url or search_url,
         "pgn_count": len(pgn_links),
         "pgn_links": pgn_links[:20],
+        "info_text": raw_info[:1200],
     })
 
 
