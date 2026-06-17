@@ -614,6 +614,104 @@ def list_research_sources() -> List[Dict]:
 # ChessBase player data / PGN storage
 # ---------------------------------------------------------------------------
 
+def init_round_results():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''CREATE TABLE IF NOT EXISTS tournament_round_results (
+        id INTEGER PRIMARY KEY,
+        tournament_source TEXT NOT NULL,
+        round INTEGER NOT NULL,
+        board_no INTEGER DEFAULT 0,
+        white_start_no INTEGER DEFAULT 0,
+        white_name TEXT DEFAULT '',
+        black_start_no INTEGER DEFAULT 0,
+        black_name TEXT DEFAULT '',
+        result TEXT DEFAULT '*',
+        imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_rr ON tournament_round_results(tournament_source, round)')
+    conn.commit()
+    conn.close()
+
+init_round_results()
+
+def store_round_results(tournament_source: str, round_num: int, results: list):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM tournament_round_results WHERE tournament_source=? AND round=?",
+                 (tournament_source, round_num))
+    for r in results:
+        conn.execute(
+            "INSERT INTO tournament_round_results "
+            "(tournament_source, round, board_no, white_start_no, white_name, black_start_no, black_name, result) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (tournament_source, round_num,
+             r.get('board_no', 0), r.get('white_no', 0), r.get('white_name', ''),
+             r.get('black_no', 0), r.get('black_name', ''), r.get('result', '*'))
+        )
+    conn.commit()
+    conn.close()
+
+def get_round_results(tournament_source: str, round_num: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT board_no, white_start_no, white_name, black_start_no, black_name, result "
+        "FROM tournament_round_results WHERE tournament_source=? AND round=? ORDER BY board_no",
+        (tournament_source, round_num)
+    ).fetchall()
+    conn.close()
+    cols = ['board_no', 'white_start_no', 'white_name', 'black_start_no', 'black_name', 'result']
+    return [dict(zip(cols, r)) for r in rows]
+
+def list_imported_rounds(tournament_source: str) -> List[int]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT DISTINCT round FROM tournament_round_results WHERE tournament_source=? ORDER BY round",
+        (tournament_source,)
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def get_player_scores_after_round(tournament_source: str, through_round: int) -> Dict[int, float]:
+    """Return {start_no: cumulative_score} after all rounds up to through_round."""
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT white_start_no, black_start_no, result FROM tournament_round_results "
+        "WHERE tournament_source=? AND round<=? AND white_start_no > 0 AND black_start_no > 0",
+        (tournament_source, through_round)
+    ).fetchall()
+    conn.close()
+    scores: Dict[int, float] = {}
+    for w_no, b_no, result in rows:
+        if '1 - 0' in result or result == '1-0' or result == '1:0':
+            scores[w_no] = scores.get(w_no, 0) + 1.0
+            scores[b_no] = scores.get(b_no, 0)
+        elif '0 - 1' in result or result == '0-1' or result == '0:1':
+            scores[w_no] = scores.get(w_no, 0)
+            scores[b_no] = scores.get(b_no, 0) + 1.0
+        elif '½' in result or '1/2' in result:
+            scores[w_no] = scores.get(w_no, 0) + 0.5
+            scores[b_no] = scores.get(b_no, 0) + 0.5
+        else:
+            scores.setdefault(w_no, 0)
+            scores.setdefault(b_no, 0)
+    return scores
+
+def get_research_players_by_start_nos(tournament_source: str, start_nos: List[int]) -> List[Dict]:
+    if not start_nos:
+        return []
+    placeholders = ','.join('?' * len(start_nos))
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        f"SELECT id, tournament_name, tournament_source, start_rank, name, title, fide_id, fide_rating, country, lichess_id, chessdotcom_id "
+        f"FROM player_research WHERE tournament_source=? AND start_rank IN ({placeholders}) ORDER BY start_rank",
+        [tournament_source] + list(start_nos)
+    ).fetchall()
+    conn.close()
+    cols = ['id','tournament_name','tournament_source','start_rank','name','title','fide_id','fide_rating','country','lichess_id','chessdotcom_id']
+    # Return in the same order as start_nos
+    by_rank = {dict(zip(cols, r))['start_rank']: dict(zip(cols, r)) for r in rows}
+    return [by_rank[n] for n in start_nos if n in by_rank]
+
+
 def init_player_chessbase():
     conn = sqlite3.connect(DB_FILE)
     conn.execute('''CREATE TABLE IF NOT EXISTS player_chessbase (

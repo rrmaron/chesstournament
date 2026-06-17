@@ -42,6 +42,8 @@ from database import (
     upsert_player_chessbase, get_player_chessbase,
     get_research_player_fide_id_by_user,
     update_research_player_links, get_research_player_by_id,
+    store_round_results, get_round_results, list_imported_rounds,
+    get_player_scores_after_round, get_research_players_by_start_nos,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2321,6 +2323,102 @@ async def privacy(request: Request):
 # Research Advanced Players
 # ---------------------------------------------------------------------------
 
+async def _scrape_round_pairings(url: str) -> dict:
+    """Fetch and parse a chess-results.com round pairings page.
+
+    Columns (0-based): 0=board, 1=white_no, 2=white_name, 3=white_rtg,
+    4=white_pts, 5=result, 6=black_pts, 7=black_name, 8=black_rtg, 9=black_no
+    Result strings: '1 - 0', '0 - 1', '½ - ½'
+    """
+    from bs4 import BeautifulSoup
+
+    # Ensure print view for static HTML
+    if 'prt=' not in url:
+        sep = '&' if '?' in url else '?'
+        url = url + sep + 'prt=1'
+
+    m = re.search(r'rd=(\d+)', url)
+    round_num = int(m.group(1)) if m else 1
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+        resp = await client.get(url, headers=headers)
+        resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Extract tournament name from <title> or <h2>
+    title_tag = soup.find('h2') or soup.find('title')
+    tournament_name = title_tag.get_text(strip=True) if title_tag else ''
+
+    # Find the pairings table: locate any table whose header contains "Result"
+    pairings_table = None
+    for table in soup.find_all('table'):
+        header_text = table.get_text()
+        if 'Result' in header_text and 'Bo.' in header_text:
+            pairings_table = table
+            break
+
+    if not pairings_table:
+        return {'round': round_num, 'pairs': [], 'tournament_name': tournament_name,
+                'error': 'Pairings table not found'}
+
+    # Detect column positions from header row
+    header_row = pairings_table.find('tr')
+    if not header_row:
+        return {'round': round_num, 'pairs': [], 'tournament_name': tournament_name,
+                'error': 'No header row found'}
+
+    headers_text = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
+    # Default column layout for flag=30: Bo|No|Name|Rtg|Pts|Result|Pts|Name|Rtg|(No)
+    # Detect result column index
+    result_col = next((i for i, h in enumerate(headers_text) if h.lower() in ('result', 'res.')), 5)
+    white_no_col = 1   # "No." for white player
+    white_name_col = 2 # name after No.
+    # Black columns mirror from result: black_name is at result_col+2, black_no is last col
+    black_name_col = result_col + 2
+    black_no_col = len(headers_text) - 1 if headers_text else result_col + 4
+
+    pairs = []
+    for row in pairings_table.find_all('tr')[1:]:
+        cells = [td.get_text(strip=True) for td in row.find_all('td')]
+        if len(cells) < result_col + 1:
+            continue
+        board_raw = cells[0]
+        if not board_raw.isdigit():
+            continue  # skip sub-headers or blank rows
+
+        result_raw = cells[result_col] if result_col < len(cells) else '*'
+        # Normalise result
+        if '½' in result_raw:
+            result = '½ - ½'
+        elif '1 - 0' in result_raw or '1-0' in result_raw or '1:0' in result_raw:
+            result = '1 - 0'
+        elif '0 - 1' in result_raw or '0-1' in result_raw or '0:1' in result_raw:
+            result = '0 - 1'
+        else:
+            result = result_raw or '*'
+
+        def _no(val):
+            try: return int(val)
+            except: return 0
+
+        white_no = _no(cells[white_no_col]) if white_no_col < len(cells) else 0
+        white_name = cells[white_name_col] if white_name_col < len(cells) else ''
+        black_name = cells[black_name_col] if black_name_col < len(cells) else ''
+        black_no = _no(cells[black_no_col]) if black_no_col < len(cells) else 0
+
+        pairs.append({
+            'board_no': int(board_raw),
+            'white_no': white_no,
+            'white_name': white_name,
+            'black_no': black_no,
+            'black_name': black_name,
+            'result': result,
+        })
+
+    return {'round': round_num, 'pairs': pairs, 'tournament_name': tournament_name}
+
 async def _scrape_chess_results(url: str):
     """Fetch and parse a chess-results.com player list page.
     Returns (tournament_name, players_list).
@@ -2442,12 +2540,44 @@ async def research_delete_source(
     return RedirectResponse("/research-players", status_code=303)
 
 
+@app.post("/research-players/import-round", response_class=HTMLResponse)
+async def research_import_round(
+    request: Request,
+    tournament_source: str = Form(''),
+    round_url: str = Form(''),
+    my_rank: int = Form(0),
+    buffer: int = Form(4),
+    user: dict = Depends(require_login),
+):
+    try:
+        data = await _scrape_round_pairings(round_url)
+        if data.get('error'):
+            import_error = data['error']
+            import_ok = None
+        else:
+            store_round_results(tournament_source, data['round'], data['pairs'])
+            import_ok = f"Imported {len(data['pairs'])} pairings for round {data['round']}"
+            import_error = None
+    except Exception as e:
+        import_ok = None
+        import_error = str(e)
+
+    qs = f"tournament_source={tournament_source}&my_rank={my_rank}&buffer={buffer}"
+    if import_ok:
+        qs += f"&import_msg={import_ok}"
+    else:
+        qs += f"&import_err={import_error}"
+    return RedirectResponse(f"/research-players/simulate?{qs}", status_code=303)
+
+
 @app.get("/research-players/simulate", response_class=HTMLResponse)
 async def research_simulate(
     request: Request,
     tournament_source: str = '',
     my_rank: int = 0,
     buffer: int = 4,
+    import_msg: str = '',
+    import_err: str = '',
     user: dict = Depends(require_login),
 ):
     import math
@@ -2466,18 +2596,75 @@ async def research_simulate(
 
     effective_rank = my_rank or auto_rank
 
+    # Round 1 simulation (pre-tournament)
     if tournament_source and effective_rank:
         total = get_research_player_count(tournament_source)
-        half  = math.ceil(total / 2)
-        if effective_rank <= half:
-            opponent_rank = effective_rank + half
-        else:
-            opponent_rank = effective_rank - half
+        half = math.ceil(total / 2)
+        opponent_rank = (effective_rank + half) if effective_rank <= half else (effective_rank - half)
         rank_lo = max(1, opponent_rank - buffer)
         rank_hi = min(total, opponent_rank + buffer)
         players = get_research_players_by_rank_range(tournament_source, rank_lo, rank_hi)
         if players:
             tournament_name = players[0]['tournament_name']
+
+    # Round results and predictions for subsequent rounds
+    imported_rounds = list_imported_rounds(tournament_source) if tournament_source else []
+    round_predictions = []  # list of {round, my_result, score_group_size, my_score, opponent_rank, players, buffer}
+
+    if imported_rounds and tournament_source and effective_rank:
+        last_round = max(imported_rounds)
+        scores = get_player_scores_after_round(tournament_source, last_round)
+        my_score = scores.get(effective_rank, 0)
+
+        # Find target player's result in each imported round
+        for rd in imported_rounds:
+            rd_results = get_round_results(tournament_source, rd)
+            my_result = None
+            for pair in rd_results:
+                if pair['white_start_no'] == effective_rank:
+                    raw = pair['result']
+                    outcome = 'Win' if raw == '1 - 0' else ('Loss' if raw == '0 - 1' else 'Draw')
+                    my_result = {'color': 'White', 'opponent_no': pair['black_start_no'],
+                                 'opponent_name': pair['black_name'], 'result': raw, 'outcome': outcome}
+                    break
+                elif pair['black_start_no'] == effective_rank:
+                    raw = pair['result']
+                    outcome = 'Win' if raw == '0 - 1' else ('Loss' if raw == '1 - 0' else 'Draw')
+                    my_result = {'color': 'Black', 'opponent_no': pair['white_start_no'],
+                                 'opponent_name': pair['white_name'], 'result': raw, 'outcome': outcome}
+                    break
+
+            # Predict next round from this point
+            scores_thru = get_player_scores_after_round(tournament_source, rd)
+            my_sc = scores_thru.get(effective_rank, 0)
+            same_group = sorted([no for no, sc in scores_thru.items() if sc == my_sc])
+            if effective_rank not in same_group:
+                same_group.append(effective_rank)
+                same_group.sort()
+            group_size = len(same_group)
+            my_pos = same_group.index(effective_rank)
+            half2 = math.ceil(group_size / 2)
+            opp_pos = (my_pos + half2) if my_pos < half2 else (my_pos - half2)
+            next_opp_no = same_group[opp_pos] if 0 <= opp_pos < group_size else None
+
+            r2_players = []
+            r2_opp_rank = None
+            if next_opp_no:
+                r2_opp_rank = next_opp_no
+                pos_lo = max(0, opp_pos - buffer)
+                pos_hi = min(group_size - 1, opp_pos + buffer)
+                likely_nos = same_group[pos_lo:pos_hi + 1]
+                r2_players = get_research_players_by_start_nos(tournament_source, likely_nos)
+
+            round_predictions.append({
+                'after_round': rd,
+                'predict_round': rd + 1,
+                'my_result': my_result,
+                'my_score': my_sc,
+                'score_group_size': group_size,
+                'opponent_rank': r2_opp_rank,
+                'players': r2_players,
+            })
 
     sources = list_research_sources()
     return templates.TemplateResponse(request=request, name="research_simulate.html", context={
@@ -2490,6 +2677,10 @@ async def research_simulate(
         "buffer": buffer,
         "total": total,
         "players": players,
+        "imported_rounds": imported_rounds,
+        "round_predictions": round_predictions,
+        "import_msg": import_msg,
+        "import_err": import_err,
     })
 
 

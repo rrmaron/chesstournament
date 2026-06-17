@@ -44,14 +44,44 @@
   </div>
 </div>
 
+<!-- Import round results -->
+{% if tournament_source %}
+<div class="card mb-4">
+  <div class="card-body">
+    <h6 class="card-title mb-2">Import Round Results</h6>
+    {% if import_msg %}
+    <div class="alert alert-success py-2 small mb-2">{{ import_msg }}</div>
+    {% endif %}
+    {% if import_err %}
+    <div class="alert alert-danger py-2 small mb-2">{{ import_err }}</div>
+    {% endif %}
+    {% if imported_rounds %}
+    <div class="mb-2 small text-muted">Rounds imported: {% for r in imported_rounds %}<span class="badge bg-secondary me-1">Round {{ r }}</span>{% endfor %}</div>
+    {% endif %}
+    <form method="post" action="/research-players/import-round" class="row g-2 align-items-end">
+      <input type="hidden" name="tournament_source" value="{{ tournament_source }}">
+      <input type="hidden" name="my_rank" value="{{ my_rank or auto_rank or '' }}">
+      <input type="hidden" name="buffer" value="{{ buffer }}">
+      <div class="col-12 col-md-8">
+        <label class="form-label small text-muted mb-1">Chess-Results round pairings URL</label>
+        <input type="url" name="round_url" class="form-control form-control-sm" required
+               placeholder="https://chess-results.com/tnr1435095.aspx?lan=1&art=2&rd=1&flag=30">
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-outline-primary btn-sm">Import Round</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {% if my_rank and opponent_rank %}
-<!-- Pairing explanation -->
-<div class="alert alert-info py-2 mb-4">
-  <strong>Swiss pairing logic:</strong>
-  {{ total }} players → top half = ranks 1–{{ (total / 2) | int }}, bottom half = ranks {{ (total / 2 + 1) | int }}–{{ total }}.
-  Rank <strong>{{ my_rank }}</strong> is paired against rank <strong>{{ opponent_rank }}</strong>
-  ({{ my_rank }} {{ '−' if my_rank > (total/2)|int else '+' }} {{ ((total+1)/2)|int }}).
-  Showing likely opponents: ranks <strong>{{ opponent_rank - buffer }}–{{ opponent_rank + buffer }}</strong> (±{{ buffer }} buffer for byes/withdrawals).
+<!-- Round 1 prediction -->
+<h5 class="mb-2">Round 1 Prediction</h5>
+<div class="alert alert-info py-2 mb-3">
+  <strong>Swiss pairing:</strong> {{ total }} players → ranks 1–{{ (total / 2) | int }} vs {{ (total / 2 + 1) | int }}–{{ total }}.
+  Rank <strong>{{ my_rank }}</strong> likely plays rank <strong>{{ opponent_rank }}</strong>.
+  Showing ranks <strong>{{ opponent_rank - buffer }}–{{ opponent_rank + buffer }}</strong> (±{{ buffer }} buffer).
 </div>
 
 {% if players %}
@@ -137,6 +167,105 @@
 {% elif tournament_source %}
 <p class="text-muted">Enter your starting rank to see the simulation.</p>
 {% endif %}
+
+{# ── Round-by-round predictions based on imported results ── #}
+{% for pred in round_predictions %}
+<div class="card mb-4">
+  <div class="card-header py-2">
+    <strong>Round {{ pred.predict_round }} Prediction</strong>
+    <span class="text-muted small ms-2">(based on Round {{ pred.after_round }} results)</span>
+  </div>
+  <div class="card-body py-2">
+
+    {# My round result #}
+    {% if pred.my_result %}
+    {% set r = pred.my_result %}
+    <div class="mb-3 d-flex align-items-center gap-2 flex-wrap">
+      <span class="small text-muted">Round {{ pred.after_round }} result:</span>
+      <span class="badge {% if r.outcome == 'Win' %}bg-success{% elif r.outcome == 'Loss' %}bg-danger{% else %}bg-secondary{% endif %} fs-6">
+        {{ r.outcome }}
+      </span>
+      <span class="small">as <strong>{{ r.color }}</strong> vs
+        <strong>{{ r.opponent_name }}</strong> (#{{ r.opponent_no }}) — {{ r.result }}
+      </span>
+      <span class="badge bg-primary">Score after round {{ pred.after_round }}: {{ pred.my_score }}</span>
+      <span class="text-muted small">(score group: {{ pred.score_group_size }} players)</span>
+    </div>
+    {% else %}
+    <div class="alert alert-warning py-1 small mb-3">
+      Your player (rank {{ my_rank or auto_rank }}) not found in Round {{ pred.after_round }} pairings.
+    </div>
+    {% endif %}
+
+    {% if pred.players %}
+    <p class="small text-muted mb-2">
+      Swiss pairing within {{ pred.my_score }}-point group ({{ pred.score_group_size }} players) →
+      likely Round {{ pred.predict_round }} opponent: rank <strong>{{ pred.opponent_rank }}</strong>
+      (±{{ buffer }} buffer shown).
+    </p>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead class="table-dark">
+          <tr>
+            <th class="ps-3 text-center" style="width:4em">Rank</th>
+            <th>Name</th>
+            <th class="text-center">Title</th>
+            <th class="text-center">FIDE Rtg</th>
+            <th class="text-center">Country</th>
+            <th class="text-center">Research Links</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in pred.players %}
+          {% set cb_last = p.name.split(',')[0].strip().lower().replace(' ','_') %}
+          {% set cb_first = p.name.split(',')[1].strip().lower().replace(' ','_') if ',' in p.name else '' %}
+          {% set cb_query = cb_last ~ '_' ~ cb_first if cb_first else cb_last ~ '_' %}
+          {% set is_likely = p.start_rank == pred.opponent_rank %}
+          <tr class="{{ 'table-warning fw-bold' if is_likely else '' }}">
+            <td class="text-center ps-3">
+              {{ p.start_rank }}
+              {% if is_likely %}<span class="badge bg-warning text-dark ms-1" style="font-size:0.65rem">Most likely</span>{% endif %}
+            </td>
+            <td class="fw-semibold">
+              {% if p.fide_id %}
+              <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
+                 class="text-decoration-none text-dark">{{ p.name }}</a>
+              {% else %}{{ p.name }}{% endif %}
+            </td>
+            <td class="text-center">
+              {% if p.title %}<span class="badge bg-secondary">{{ p.title }}</span>{% else %}—{% endif %}
+            </td>
+            <td class="text-center fw-semibold {{ 'text-success' if p.fide_rating >= 2400 else ('text-primary' if p.fide_rating >= 2000 else '') }}">
+              {{ p.fide_rating if p.fide_rating else '—' }}
+            </td>
+            <td class="text-center small">{{ p.country or '—' }}</td>
+            <td class="text-center">
+              <div class="d-flex gap-1 justify-content-center flex-wrap">
+                <a href="https://players.chessbase.com/en/search/{{ cb_query }}"
+                   target="_blank" rel="noopener"
+                   class="btn btn-warning btn-sm py-0 px-2 fw-semibold" style="font-size:0.7rem">ChessBase</a>
+                {% if p.fide_id %}
+                <a href="https://ratings.fide.com/profile/{{ p.fide_id }}" target="_blank" rel="noopener"
+                   class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">FIDE</a>
+                {% endif %}
+                {% set search_name = p.name | urlencode %}
+                <a href="https://www.chess.com/search?q={{ search_name }}" target="_blank" rel="noopener"
+                   class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Chess.com</a>
+                <a href="https://lichess.org/search?q={{ search_name }}" target="_blank" rel="noopener"
+                   class="btn btn-outline-secondary btn-sm py-0 px-2" style="font-size:0.7rem">Lichess</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="text-muted small">No player data found for round {{ pred.predict_round }} likely opponents.</p>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
 
 {% if players %}
 <script>
