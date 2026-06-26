@@ -79,6 +79,31 @@
                     </div>
                 </div>
 
+                <!-- Location (optional) -->
+                <hr class="my-2">
+                <p class="small text-muted mb-2">Where are you located? (optional — used to show local tournaments)</p>
+                <div class="mb-3">
+                    <label class="form-label">Country</label>
+                    <select name="country_code" id="countrySelect" class="form-select" onchange="loadFederations()">
+                        <option value="">— Select country —</option>
+                        {% for c in countries %}
+                        <option value="{{ c.country_code }}">{{ c.country_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="mb-3" id="fedBlock" style="display:none">
+                    <label class="form-label">Federation / Rating System</label>
+                    <select name="federation_id" id="fedSelect" class="form-select" onchange="loadCities()">
+                        <option value="">— Select federation —</option>
+                    </select>
+                </div>
+                <div class="mb-3" id="cityBlock" style="display:none">
+                    <label class="form-label">City</label>
+                    <select name="city" id="citySelect" class="form-select">
+                        <option value="">— Select city —</option>
+                    </select>
+                </div>
+
                 <button type="submit" class="btn btn-primary w-100">Send verification code</button>
             </form>
 
@@ -121,5 +146,63 @@ document.getElementById('regForm').addEventListener('submit', function(e) {
 });
 </script>
 {% endif %}
+<script>
+const allFederations = {{ federations | tojson }};
+
+function loadFederations() {
+    const cc = document.getElementById('countrySelect').value;
+    const fedBlock = document.getElementById('fedBlock');
+    const fedSelect = document.getElementById('fedSelect');
+    const cityBlock = document.getElementById('cityBlock');
+    const citySelect = document.getElementById('citySelect');
+
+    fedSelect.innerHTML = '<option value="">— Select federation —</option>';
+    citySelect.innerHTML = '<option value="">— Select city —</option>';
+    cityBlock.style.display = 'none';
+
+    if (!cc) { fedBlock.style.display = 'none'; return; }
+
+    const feds = allFederations.filter(f => f.country_code === cc);
+    if (feds.length === 0) { fedBlock.style.display = 'none'; return; }
+
+    if (feds.length === 1) {
+        // Auto-select single federation, skip showing the dropdown
+        fedBlock.style.display = 'none';
+        fedSelect.innerHTML = `<option value="${feds[0].id}" selected>${feds[0].name}</option>`;
+        loadCities();
+    } else {
+        feds.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.id;
+            opt.textContent = `${f.name} (${f.rating_system || f.abbreviation})`;
+            fedSelect.appendChild(opt);
+        });
+        fedBlock.style.display = 'block';
+    }
+}
+
+async function loadCities() {
+    const fedId = document.getElementById('fedSelect').value;
+    const cityBlock = document.getElementById('cityBlock');
+    const citySelect = document.getElementById('citySelect');
+    citySelect.innerHTML = '<option value="">— Select city —</option>';
+    if (!fedId) { cityBlock.style.display = 'none'; return; }
+
+    try {
+        const resp = await fetch('/api/cities/' + fedId);
+        const cities = await resp.json();
+        if (cities.length === 0) { cityBlock.style.display = 'none'; return; }
+        cities.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.city_name;
+            opt.textContent = c.region ? `${c.city_name} (${c.region})` : c.city_name;
+            citySelect.appendChild(opt);
+        });
+        cityBlock.style.display = 'block';
+    } catch(e) {
+        cityBlock.style.display = 'none';
+    }
+}
+</script>
 </body>
 </html>

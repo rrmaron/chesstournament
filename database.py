@@ -171,6 +171,115 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_player_research_fide ON player_research(fide_id)')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS chess_federations (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        abbreviation TEXT DEFAULT '',
+        country_code TEXT DEFAULT '',
+        country_name TEXT DEFAULT '',
+        rating_system TEXT DEFAULT '',
+        website_url TEXT DEFAULT '',
+        tournaments_url TEXT DEFAULT '',
+        active INTEGER DEFAULT 1,
+        display_order INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS federation_cities (
+        id INTEGER PRIMARY KEY,
+        federation_id INTEGER NOT NULL,
+        city_name TEXT NOT NULL,
+        region TEXT DEFAULT '',
+        active INTEGER DEFAULT 1,
+        display_order INTEGER DEFAULT 0,
+        FOREIGN KEY(federation_id) REFERENCES chess_federations(id)
+    )''')
+
+    # Seed default federations if table is empty
+    if c.execute("SELECT COUNT(*) FROM chess_federations").fetchone()[0] == 0:
+        federations = [
+            ("US Chess Federation", "USCF", "US", "United States", "USCF Rating",
+             "https://www.uschess.org", "https://www.uschess.org/tournaments/", 1, 10),
+            ("Northwest Chess", "NWC", "US", "United States", "NW Chess Rating",
+             "https://www.nwchess.com", "https://www.nwchess.com/tournaments/", 1, 20),
+            ("FIDE", "FIDE", "INT", "International", "FIDE Rating",
+             "https://www.fide.com", "https://www.fide.com/calendar", 1, 5),
+            ("Chess Federation of Canada", "CFC", "CA", "Canada", "CFC Rating",
+             "https://chess.ca", "https://chess.ca/en/tournaments/", 1, 30),
+            ("English Chess Federation", "ECF", "GB", "United Kingdom", "ECF Rating",
+             "https://www.englishchess.org.uk", "https://www.englishchess.org.uk/events/", 1, 40),
+            ("Australian Chess Federation", "ACF", "AU", "Australia", "ACF Rating",
+             "https://auschess.org.au", "https://auschess.org.au/tournaments/", 1, 50),
+            ("Schachbund (Germany)", "DSB", "DE", "Germany", "DWZ Rating",
+             "https://www.schachbund.de", "https://www.schachbund.de/turnierdatenbank.html", 1, 60),
+            ("Fédération Française des Échecs", "FFE", "FR", "France", "FFE Elo",
+             "https://www.echecs.asso.fr", "https://www.echecs.asso.fr/Calendrier.aspx", 1, 70),
+        ]
+        c.executemany(
+            "INSERT INTO chess_federations (name,abbreviation,country_code,country_name,rating_system,website_url,tournaments_url,active,display_order) VALUES (?,?,?,?,?,?,?,?,?)",
+            federations
+        )
+        # Seed cities for USCF (id will be 1)
+        uscf_cities = [
+            ("New York", "NY"), ("Los Angeles", "CA"), ("Chicago", "IL"),
+            ("Houston", "TX"), ("Phoenix", "AZ"), ("Philadelphia", "PA"),
+            ("San Antonio", "TX"), ("San Diego", "CA"), ("Dallas", "TX"),
+            ("San Jose", "CA"), ("Austin", "TX"), ("Jacksonville", "FL"),
+            ("Fort Worth", "TX"), ("Columbus", "OH"), ("Charlotte", "NC"),
+            ("Indianapolis", "IN"), ("San Francisco", "CA"), ("Seattle", "WA"),
+            ("Denver", "CO"), ("Nashville", "TN"), ("Boston", "MA"),
+            ("Atlanta", "GA"), ("Miami", "FL"), ("Minneapolis", "MN"),
+            ("St. Louis", "MO"), ("Las Vegas", "NV"), ("Portland", "OR"),
+        ]
+        uscf_id = c.execute("SELECT id FROM chess_federations WHERE abbreviation='USCF'").fetchone()[0]
+        c.executemany(
+            "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
+            [(uscf_id, city, region) for city, region in uscf_cities]
+        )
+        # Seed cities for NWC
+        nwc_cities = [
+            ("Seattle", "WA"), ("Portland", "OR"), ("Tacoma", "WA"),
+            ("Spokane", "WA"), ("Eugene", "OR"), ("Bellevue", "WA"),
+            ("Boise", "ID"), ("Olympia", "WA"), ("Bend", "OR"),
+        ]
+        nwc_id = c.execute("SELECT id FROM chess_federations WHERE abbreviation='NWC'").fetchone()[0]
+        c.executemany(
+            "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
+            [(nwc_id, city, region) for city, region in nwc_cities]
+        )
+        # Seed cities for CFC
+        cfc_cities = [
+            ("Toronto", "ON"), ("Montreal", "QC"), ("Vancouver", "BC"),
+            ("Ottawa", "ON"), ("Calgary", "AB"), ("Edmonton", "AB"),
+            ("Winnipeg", "MB"), ("Halifax", "NS"),
+        ]
+        cfc_id = c.execute("SELECT id FROM chess_federations WHERE abbreviation='CFC'").fetchone()[0]
+        c.executemany(
+            "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
+            [(cfc_id, city, region) for city, region in cfc_cities]
+        )
+        # Seed cities for ECF
+        ecf_cities = [
+            ("London", "England"), ("Manchester", "England"), ("Birmingham", "England"),
+            ("Leeds", "England"), ("Bristol", "England"), ("Glasgow", "Scotland"),
+            ("Edinburgh", "Scotland"), ("Cardiff", "Wales"),
+        ]
+        ecf_id = c.execute("SELECT id FROM chess_federations WHERE abbreviation='ECF'").fetchone()[0]
+        c.executemany(
+            "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
+            [(ecf_id, city, region) for city, region in ecf_cities]
+        )
+        # Seed cities for ACF
+        acf_cities = [
+            ("Sydney", "NSW"), ("Melbourne", "VIC"), ("Brisbane", "QLD"),
+            ("Perth", "WA"), ("Adelaide", "SA"), ("Canberra", "ACT"),
+        ]
+        acf_id = c.execute("SELECT id FROM chess_federations WHERE abbreviation='ACF'").fetchone()[0]
+        c.executemany(
+            "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
+            [(acf_id, city, region) for city, region in acf_cities]
+        )
+
     # Migrations for existing DBs
     for sql in [
         "ALTER TABLE player_research ADD COLUMN start_rank INTEGER DEFAULT 0",
@@ -201,6 +310,9 @@ def init_db():
         "ALTER TABLE user_tournaments ADD COLUMN tournament_type TEXT DEFAULT 'standard'",
         "ALTER TABLE player_research ADD COLUMN lichess_id TEXT",
         "ALTER TABLE player_research ADD COLUMN chessdotcom_id TEXT",
+        "ALTER TABLE users ADD COLUMN country_code TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN city TEXT DEFAULT ''",
+        "ALTER TABLE users ADD COLUMN federation_id INTEGER",
     ]:
         try:
             c.execute(sql)
@@ -626,29 +738,47 @@ def init_round_results():
         black_start_no INTEGER DEFAULT 0,
         black_name TEXT DEFAULT '',
         result TEXT DEFAULT '*',
+        round_url TEXT DEFAULT '',
         imported_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_rr ON tournament_round_results(tournament_source, round)')
+    # migrate: add round_url if missing
+    try:
+        conn.execute('ALTER TABLE tournament_round_results ADD COLUMN round_url TEXT DEFAULT ""')
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
 init_round_results()
 
-def store_round_results(tournament_source: str, round_num: int, results: list):
+def store_round_results(tournament_source: str, round_num: int, results: list, round_url: str = ''):
     conn = sqlite3.connect(DB_FILE)
     conn.execute("DELETE FROM tournament_round_results WHERE tournament_source=? AND round=?",
                  (tournament_source, round_num))
     for r in results:
         conn.execute(
             "INSERT INTO tournament_round_results "
-            "(tournament_source, round, board_no, white_start_no, white_name, black_start_no, black_name, result) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "(tournament_source, round, board_no, white_start_no, white_name, black_start_no, black_name, result, round_url) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (tournament_source, round_num,
              r.get('board_no', 0), r.get('white_no', 0), r.get('white_name', ''),
-             r.get('black_no', 0), r.get('black_name', ''), r.get('result', '*'))
+             r.get('black_no', 0), r.get('black_name', ''), r.get('result', '*'), round_url)
         )
     conn.commit()
     conn.close()
+
+
+def get_round_urls(tournament_source: str) -> dict:
+    """Return {round_num: url} for all imported rounds."""
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT round, round_url FROM tournament_round_results "
+        "WHERE tournament_source=? AND round_url != '' GROUP BY round",
+        (tournament_source,)
+    ).fetchall()
+    conn.close()
+    return {r[0]: r[1] for r in rows}
 
 def get_round_results(tournament_source: str, round_num: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
@@ -694,6 +824,59 @@ def get_player_scores_after_round(tournament_source: str, through_round: int) ->
             scores.setdefault(w_no, 0)
             scores.setdefault(b_no, 0)
     return scores
+
+def init_standings():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''CREATE TABLE IF NOT EXISTS tournament_standings (
+        id INTEGER PRIMARY KEY,
+        tournament_source TEXT NOT NULL,
+        round INTEGER NOT NULL,
+        start_no INTEGER DEFAULT 0,
+        name TEXT DEFAULT '',
+        pts REAL DEFAULT 0,
+        standings_url TEXT DEFAULT '',
+        imported_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_st ON tournament_standings(tournament_source, round)')
+    conn.commit()
+    conn.close()
+
+init_standings()
+
+
+def store_standings(tournament_source: str, round_num: int, standings: list, standings_url: str = ''):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM tournament_standings WHERE tournament_source=? AND round=?",
+                 (tournament_source, round_num))
+    for s in standings:
+        conn.execute(
+            "INSERT INTO tournament_standings (tournament_source, round, start_no, name, pts, standings_url) VALUES (?,?,?,?,?,?)",
+            (tournament_source, round_num, s['start_no'], s['name'], s['pts'], standings_url)
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_round_standings(tournament_source: str, round_num: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT start_no, name, pts FROM tournament_standings WHERE tournament_source=? AND round=? ORDER BY pts DESC, start_no ASC",
+        (tournament_source, round_num)
+    ).fetchall()
+    conn.close()
+    return [{'start_no': r[0], 'name': r[1], 'pts': r[2]} for r in rows]
+
+
+def list_imported_standings(tournament_source: str) -> List[Dict]:
+    """Return [{round, standings_url}] for all imported standings."""
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT round, standings_url FROM tournament_standings WHERE tournament_source=? GROUP BY round ORDER BY round",
+        (tournament_source,)
+    ).fetchall()
+    conn.close()
+    return [{'round': r[0], 'standings_url': r[1]} for r in rows]
+
 
 def get_research_players_by_start_nos(tournament_source: str, start_nos: List[int]) -> List[Dict]:
     if not start_nos:
@@ -1299,3 +1482,125 @@ def update_player_bye_request(pid: int, round_num: int, action: str) -> Optional
     conn.commit()
     conn.close()
     return tid
+
+
+# ---------------------------------------------------------------------------
+# Chess Federations & Cities
+# ---------------------------------------------------------------------------
+
+def _fed_row(row, cols) -> Dict:
+    return dict(zip(cols, row))
+
+def list_federations(active_only: bool = False) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    sql = "SELECT * FROM chess_federations"
+    if active_only:
+        sql += " WHERE active=1"
+    sql += " ORDER BY display_order, name"
+    c.execute(sql)
+    cols = [d[0] for d in c.description]
+    rows = [_fed_row(r, cols) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def list_countries() -> List[Dict]:
+    """Return unique countries that have at least one active federation."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""
+        SELECT country_code, country_name, MIN(display_order) as ord
+        FROM chess_federations WHERE active=1
+        GROUP BY country_code, country_name
+        ORDER BY country_name
+    """)
+    rows = [{"country_code": r[0], "country_name": r[1]} for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def get_federations_for_country(country_code: str) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM chess_federations WHERE country_code=? AND active=1 ORDER BY display_order, name",
+              (country_code,))
+    cols = [d[0] for d in c.description]
+    rows = [_fed_row(r, cols) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def get_federation(fid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM chess_federations WHERE id=?", (fid,))
+    row = c.fetchone()
+    cols = [d[0] for d in c.description]
+    conn.close()
+    return _fed_row(row, cols) if row else None
+
+def create_federation(name: str, abbreviation: str, country_code: str, country_name: str,
+                      rating_system: str, website_url: str, tournaments_url: str,
+                      display_order: int = 0) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("""INSERT INTO chess_federations
+                 (name, abbreviation, country_code, country_name, rating_system,
+                  website_url, tournaments_url, active, display_order)
+                 VALUES (?,?,?,?,?,?,?,1,?)""",
+              (name, abbreviation, country_code, country_name, rating_system,
+               website_url, tournaments_url, display_order))
+    fid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return fid
+
+def update_federation(fid: int, **kwargs):
+    allowed = {"name", "abbreviation", "country_code", "country_name", "rating_system",
+                "website_url", "tournaments_url", "active", "display_order"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if not fields:
+        return
+    conn = sqlite3.connect(DB_FILE)
+    sets = ", ".join(f"{k}=?" for k in fields)
+    conn.execute(f"UPDATE chess_federations SET {sets} WHERE id=?", (*fields.values(), fid))
+    conn.commit()
+    conn.close()
+
+def delete_federation(fid: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM federation_cities WHERE federation_id=?", (fid,))
+    conn.execute("DELETE FROM chess_federations WHERE id=?", (fid,))
+    conn.commit()
+    conn.close()
+
+def list_cities(federation_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("SELECT * FROM federation_cities WHERE federation_id=? AND active=1 ORDER BY display_order, city_name",
+              (federation_id,))
+    cols = [d[0] for d in c.description]
+    rows = [dict(zip(cols, r)) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def create_city(federation_id: int, city_name: str, region: str = '', display_order: int = 0) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute("INSERT INTO federation_cities (federation_id, city_name, region, display_order) VALUES (?,?,?,?)",
+              (federation_id, city_name.strip(), region.strip(), display_order))
+    cid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+def delete_city(cid: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM federation_cities WHERE id=?", (cid,))
+    conn.commit()
+    conn.close()
+
+def update_user_location(user_id: int, country_code: str, city: str, federation_id: Optional[int]):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET country_code=?, city=?, federation_id=? WHERE id=?",
+                 (country_code, city, federation_id, user_id))
+    conn.commit()
+    conn.close()

@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Admin — Chess Federations{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+<div class="col-lg-11">
+
+<h2 class="mb-1">Chess Federations</h2>
+<p class="text-muted mb-4">Federations drive the country and city dropdowns on the registration page. Each federation can have its own rating system and tournament calendar URL.</p>
+
+{% if federations %}
+{% for fed in federations %}
+<div class="card mb-4 {% if not fed.active %}border-secondary{% endif %}">
+  <div class="card-header d-flex justify-content-between align-items-center {% if not fed.active %}text-muted bg-light{% endif %}">
+    <div>
+      <span class="fw-semibold">{{ fed.name }}</span>
+      {% if fed.abbreviation %}<span class="badge bg-secondary ms-1">{{ fed.abbreviation }}</span>{% endif %}
+      <span class="badge bg-primary ms-1">{{ fed.country_name }} ({{ fed.country_code }})</span>
+      {% if fed.rating_system %}<span class="badge bg-info text-dark ms-1">{{ fed.rating_system }}</span>{% endif %}
+      {% if not fed.active %}<span class="badge bg-secondary ms-1">Hidden</span>{% endif %}
+    </div>
+    <div class="d-flex gap-1">
+      <button class="btn btn-outline-secondary btn-sm py-0" onclick="openEdit({{ fed | tojson }})">Edit</button>
+      <form method="post" action="/admin/federations/{{ fed.id }}/toggle">
+        <button class="btn btn-outline-{% if fed.active %}warning{% else %}success{% endif %} btn-sm py-0">
+          {% if fed.active %}Hide{% else %}Show{% endif %}
+        </button>
+      </form>
+      <form method="post" action="/admin/federations/{{ fed.id }}/delete"
+            onsubmit="return confirm('Delete {{ fed.name }} and all its cities?')">
+        <button class="btn btn-outline-danger btn-sm py-0">Delete</button>
+      </form>
+    </div>
+  </div>
+  <div class="card-body py-2">
+    <div class="row g-2 small text-muted mb-2">
+      {% if fed.website_url %}
+      <div class="col-auto"><a href="{{ fed.website_url }}" target="_blank" rel="noopener">Website ↗</a></div>
+      {% endif %}
+      {% if fed.tournaments_url %}
+      <div class="col-auto"><a href="{{ fed.tournaments_url }}" target="_blank" rel="noopener">Tournament Calendar ↗</a></div>
+      {% endif %}
+    </div>
+
+    <!-- Cities list -->
+    <div class="d-flex flex-wrap gap-1 mb-2">
+      {% for city in fed.cities %}
+      <span class="badge bg-light text-dark border d-flex align-items-center gap-1">
+        {{ city.city_name }}{% if city.region %} <span class="text-muted">({{ city.region }})</span>{% endif %}
+        <form method="post" action="/admin/federations/cities/{{ city.id }}/delete" class="d-inline"
+              onsubmit="return confirm('Remove {{ city.city_name }}?')">
+          <button type="submit" class="btn-close btn-close-sm" style="font-size:0.55rem"></button>
+        </form>
+      </span>
+      {% else %}
+      <span class="text-muted small fst-italic">No cities yet</span>
+      {% endfor %}
+    </div>
+
+    <!-- Add city inline form -->
+    <form method="post" action="/admin/federations/{{ fed.id }}/add-city" class="d-flex gap-2 align-items-end flex-wrap">
+      <div>
+        <label class="form-label small mb-0">City name</label>
+        <input type="text" name="city_name" class="form-control form-control-sm" placeholder="e.g. Atlanta" required style="width:180px">
+      </div>
+      <div>
+        <label class="form-label small mb-0">Region / State</label>
+        <input type="text" name="region" class="form-control form-control-sm" placeholder="e.g. GA" style="width:90px">
+      </div>
+      <button type="submit" class="btn btn-outline-primary btn-sm">+ Add City</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="alert alert-info">No federations yet. Add one below.</div>
+{% endif %}
+
+<!-- Add federation -->
+<div class="card mb-4">
+  <div class="card-header fw-semibold">Add Federation</div>
+  <div class="card-body">
+    <form method="post" action="/admin/federations">
+      <div class="row g-3">
+        <div class="col-sm-5">
+          <label class="form-label small">Federation Name <span class="text-danger">*</span></label>
+          <input type="text" name="name" class="form-control" required placeholder="e.g. US Chess Federation">
+        </div>
+        <div class="col-sm-2">
+          <label class="form-label small">Abbreviation</label>
+          <input type="text" name="abbreviation" class="form-control" placeholder="e.g. USCF">
+        </div>
+        <div class="col-sm-2">
+          <label class="form-label small">Country Code</label>
+          <input type="text" name="country_code" class="form-control" placeholder="US" maxlength="5">
+        </div>
+        <div class="col-sm-3">
+          <label class="form-label small">Country Name</label>
+          <input type="text" name="country_name" class="form-control" placeholder="United States">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Rating System</label>
+          <input type="text" name="rating_system" class="form-control" placeholder="e.g. USCF Rating">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Website URL</label>
+          <input type="url" name="website_url" class="form-control" placeholder="https://...">
+        </div>
+        <div class="col-sm-4">
+          <label class="form-label small">Tournament Calendar URL</label>
+          <input type="url" name="tournaments_url" class="form-control" placeholder="https://...">
+        </div>
+        <div class="col-sm-2">
+          <label class="form-label small">Display Order</label>
+          <input type="number" name="display_order" class="form-control" value="0" min="0">
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-primary">Add Federation</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+</div>
+</div>
+
+<!-- Edit Federation Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit Federation</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="edit-form">
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-sm-5">
+              <label class="form-label small">Federation Name <span class="text-danger">*</span></label>
+              <input type="text" name="name" id="edit-name" class="form-control" required>
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">Abbreviation</label>
+              <input type="text" name="abbreviation" id="edit-abbr" class="form-control">
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">Country Code</label>
+              <input type="text" name="country_code" id="edit-cc" class="form-control" maxlength="5">
+            </div>
+            <div class="col-sm-3">
+              <label class="form-label small">Country Name</label>
+              <input type="text" name="country_name" id="edit-cn" class="form-control">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Rating System</label>
+              <input type="text" name="rating_system" id="edit-rs" class="form-control">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Website URL</label>
+              <input type="url" name="website_url" id="edit-web" class="form-control">
+            </div>
+            <div class="col-sm-4">
+              <label class="form-label small">Tournament Calendar URL</label>
+              <input type="url" name="tournaments_url" id="edit-tc" class="form-control">
+            </div>
+            <div class="col-sm-2">
+              <label class="form-label small">Display Order</label>
+              <input type="number" name="display_order" id="edit-order" class="form-control" min="0">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function openEdit(f) {
+  document.getElementById('edit-form').action = '/admin/federations/' + f.id + '/edit';
+  document.getElementById('edit-name').value  = f.name || '';
+  document.getElementById('edit-abbr').value  = f.abbreviation || '';
+  document.getElementById('edit-cc').value    = f.country_code || '';
+  document.getElementById('edit-cn').value    = f.country_name || '';
+  document.getElementById('edit-rs').value    = f.rating_system || '';
+  document.getElementById('edit-web').value   = f.website_url || '';
+  document.getElementById('edit-tc').value    = f.tournaments_url || '';
+  document.getElementById('edit-order').value = f.display_order ?? 0;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
+}
+</script>
+{% endblock %}

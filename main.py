@@ -43,7 +43,11 @@ from database import (
     get_research_player_fide_id_by_user,
     update_research_player_links, get_research_player_by_id,
     store_round_results, get_round_results, list_imported_rounds,
-    get_player_scores_after_round, get_research_players_by_start_nos,
+    get_player_scores_after_round, get_research_players_by_start_nos, get_round_urls,
+    store_standings, get_round_standings, list_imported_standings,
+    list_federations, list_countries, get_federations_for_country,
+    get_federation, create_federation, update_federation, delete_federation,
+    list_cities, create_city, delete_city, update_user_location,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -162,6 +166,8 @@ async def register_page(request: Request):
     return templates.TemplateResponse(request=request, name="register.html", context={
         "error": None,
         "reg_method": get_setting("registration_method", "both"),
+        "countries": list_countries(),
+        "federations": list_federations(active_only=True),
     })
 
 @app.post("/register", response_class=HTMLResponse)
@@ -172,6 +178,9 @@ async def register_submit(
     confirm: str = Form(...),
     channel: str = Form(...),       # "email" or "sms"
     contact: str = Form(...),       # email address or phone number
+    country_code: str = Form(""),
+    city: str = Form(""),
+    federation_id: str = Form(""),
 ):
     error = None
     username = username.strip()
@@ -194,15 +203,20 @@ async def register_submit(
 
     if error:
         return templates.TemplateResponse(request=request, name="register.html",
-                                          context={"error": error, "reg_method": reg_method})
+                                          context={"error": error, "reg_method": reg_method,
+                                                   "countries": list_countries(),
+                                                   "federations": list_federations(active_only=True)})
 
     email = contact if channel == "email" else None
     phone = contact if channel == "sms" else None
+    fed_id = int(federation_id) if federation_id.isdigit() else None
 
     if get_setting("require_verification", "1") == "0":
         # Verification disabled — activate immediately
         uid = create_pending_user(username, password, email=email, phone=phone)
         activate_user(uid)
+        if country_code or city:
+            update_user_location(uid, country_code.strip(), city.strip(), fed_id)
         from database import DB_FILE
         import sqlite3 as _sq
         row = _sq.connect(DB_FILE).execute("SELECT id, username, role FROM users WHERE id=?", (uid,)).fetchone()
@@ -211,6 +225,8 @@ async def register_submit(
         return RedirectResponse("/", status_code=303)
 
     uid = create_pending_user(username, password, email=email, phone=phone)
+    if country_code or city:
+        update_user_location(uid, country_code.strip(), city.strip(), fed_id)
     token = create_verification_token(uid, channel, contact)
 
     try:
@@ -221,7 +237,9 @@ async def register_submit(
     except Exception as e:
         error = str(e)
         return templates.TemplateResponse(request=request, name="register.html",
-                                          context={"error": error, "reg_method": reg_method})
+                                          context={"error": error, "reg_method": reg_method,
+                                                   "countries": list_countries(),
+                                                   "federations": list_federations(active_only=True)})
 
     request.session["pending_user_id"] = uid
     request.session["pending_contact"] = contact
@@ -1150,6 +1168,92 @@ async def admin_edit_tournament(
         display_order=display_order,
     )
     return RedirectResponse("/admin/tournaments", status_code=303)
+
+@app.get("/api/federations-by-country/{country_code}")
+async def api_federations_by_country(country_code: str):
+    return get_federations_for_country(country_code)
+
+@app.get("/api/cities/{federation_id}")
+async def api_cities(federation_id: int):
+    return list_cities(federation_id)
+
+# ---------------------------------------------------------------------------
+# Admin — Chess Federations
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/federations", response_class=HTMLResponse)
+async def admin_federations_page(request: Request, _user: dict = Depends(require_admin)):
+    feds = list_federations()
+    feds_with_cities = []
+    for f in feds:
+        feds_with_cities.append({**f, "cities": list_cities(f["id"])})
+    return templates.TemplateResponse(request=request, name="admin_federations.html",
+                                      context={"federations": feds_with_cities})
+
+@app.post("/admin/federations")
+async def admin_add_federation(
+    request: Request,
+    name: str = Form(...),
+    abbreviation: str = Form(""),
+    country_code: str = Form(""),
+    country_name: str = Form(""),
+    rating_system: str = Form(""),
+    website_url: str = Form(""),
+    tournaments_url: str = Form(""),
+    display_order: int = Form(0),
+    _user: dict = Depends(require_admin),
+):
+    create_federation(name.strip(), abbreviation.strip(), country_code.strip().upper(),
+                      country_name.strip(), rating_system.strip(),
+                      website_url.strip(), tournaments_url.strip(), display_order)
+    return RedirectResponse("/admin/federations", status_code=303)
+
+@app.post("/admin/federations/{fid}/toggle")
+async def admin_toggle_federation(fid: int, _user: dict = Depends(require_admin)):
+    fed = get_federation(fid)
+    if fed:
+        update_federation(fid, active=0 if fed["active"] else 1)
+    return RedirectResponse("/admin/federations", status_code=303)
+
+@app.post("/admin/federations/{fid}/delete")
+async def admin_delete_federation(fid: int, _user: dict = Depends(require_admin)):
+    delete_federation(fid)
+    return RedirectResponse("/admin/federations", status_code=303)
+
+@app.post("/admin/federations/{fid}/edit")
+async def admin_edit_federation(
+    fid: int,
+    name: str = Form(...),
+    abbreviation: str = Form(""),
+    country_code: str = Form(""),
+    country_name: str = Form(""),
+    rating_system: str = Form(""),
+    website_url: str = Form(""),
+    tournaments_url: str = Form(""),
+    display_order: int = Form(0),
+    _user: dict = Depends(require_admin),
+):
+    update_federation(fid, name=name.strip(), abbreviation=abbreviation.strip(),
+                      country_code=country_code.strip().upper(), country_name=country_name.strip(),
+                      rating_system=rating_system.strip(), website_url=website_url.strip(),
+                      tournaments_url=tournaments_url.strip(), display_order=display_order)
+    return RedirectResponse("/admin/federations", status_code=303)
+
+@app.post("/admin/federations/{fid}/add-city")
+async def admin_add_city(
+    fid: int,
+    city_name: str = Form(...),
+    region: str = Form(""),
+    display_order: int = Form(0),
+    _user: dict = Depends(require_admin),
+):
+    create_city(fid, city_name.strip(), region.strip(), display_order)
+    return RedirectResponse("/admin/federations", status_code=303)
+
+@app.post("/admin/federations/cities/{cid}/delete")
+async def admin_delete_city(cid: int, _user: dict = Depends(require_admin)):
+    delete_city(cid)
+    return RedirectResponse("/admin/federations", status_code=303)
 
 @app.get("/admin/fetch-url")
 async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
@@ -2326,13 +2430,12 @@ async def privacy(request: Request):
 async def _scrape_round_pairings(url: str) -> dict:
     """Fetch and parse a chess-results.com round pairings page.
 
-    Columns (0-based): 0=board, 1=white_no, 2=white_name, 3=white_rtg,
-    4=white_pts, 5=result, 6=black_pts, 7=black_name, 8=black_rtg, 9=black_no
+    Standard flag=30 column layout (0-based):
+      0=Bo. 1=No(white) 2=Name(white) 3=Rtg 4=Pts 5=Result 6=Pts 7=Name(black) 8=Rtg 9=No(black)
     Result strings: '1 - 0', '0 - 1', '½ - ½'
     """
     from bs4 import BeautifulSoup
 
-    # Ensure print view for static HTML
     if 'prt=' not in url:
         sep = '&' if '?' in url else '?'
         url = url + sep + 'prt=1'
@@ -2340,22 +2443,20 @@ async def _scrape_round_pairings(url: str) -> dict:
     m = re.search(r'rd=(\d+)', url)
     round_num = int(m.group(1)) if m else 1
 
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
+    ua = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
     async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
-        resp = await client.get(url, headers=headers)
+        resp = await client.get(url, headers=ua)
         resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Extract tournament name from <title> or <h2>
     title_tag = soup.find('h2') or soup.find('title')
     tournament_name = title_tag.get_text(strip=True) if title_tag else ''
 
-    # Find the pairings table: locate any table whose header contains "Result"
+    # Find the pairings table — contains both "Bo." and "Result"
     pairings_table = None
     for table in soup.find_all('table'):
-        header_text = table.get_text()
-        if 'Result' in header_text and 'Bo.' in header_text:
+        txt = table.get_text()
+        if 'Bo.' in txt and 'Result' in txt:
             pairings_table = table
             break
 
@@ -2363,34 +2464,54 @@ async def _scrape_round_pairings(url: str) -> dict:
         return {'round': round_num, 'pairs': [], 'tournament_name': tournament_name,
                 'error': 'Pairings table not found'}
 
-    # Detect column positions from header row
-    header_row = pairings_table.find('tr')
+    # Find the actual column-header row: the tr that has a cell exactly "Bo."
+    header_row = None
+    all_rows = pairings_table.find_all('tr')
+    for tr in all_rows:
+        cells = tr.find_all(['th', 'td'])
+        if any(c.get_text(strip=True) == 'Bo.' for c in cells):
+            header_row = tr
+            break
+
     if not header_row:
         return {'round': round_num, 'pairs': [], 'tournament_name': tournament_name,
-                'error': 'No header row found'}
+                'error': 'Header row with "Bo." not found'}
 
-    headers_text = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
-    # Default column layout for flag=30: Bo|No|Name|Rtg|Pts|Result|Pts|Name|Rtg|(No)
-    # Detect result column index
-    result_col = next((i for i, h in enumerate(headers_text) if h.lower() in ('result', 'res.')), 5)
-    white_no_col = 1   # "No." for white player
-    white_name_col = 2 # name after No.
-    # Black columns mirror from result: black_name is at result_col+2, black_no is last col
-    black_name_col = result_col + 2
-    black_no_col = len(headers_text) - 1 if headers_text else result_col + 4
+    headers_text = [c.get_text(strip=True) for c in header_row.find_all(['th', 'td'])]
+
+    def _find_col(hdrs, label, default):
+        return next((i for i, h in enumerate(hdrs) if h.strip() == label), default)
+
+    # chess-results flag=30 has 14 cols: Bo|No|flag|title|White|Rtg|Pts|Result|Pts|title|Black|Rtg|flag|No
+    result_col    = _find_col(headers_text, 'Result', 7)
+    white_no_col  = _find_col(headers_text, 'No.', 1)            # first "No." = white start rank
+    white_name_col = _find_col(headers_text, 'White', 4)         # "White" label column
+    black_name_col = _find_col(headers_text, 'Black', result_col + 3)  # "Black" label column
+    # Last "No." = black start rank
+    rev = list(reversed(headers_text))
+    black_no_col  = len(headers_text) - 1 - _find_col(rev, 'No.', 0)
+
+    def _no(val):
+        try:
+            return int(str(val).strip())
+        except Exception:
+            return 0
 
     pairs = []
-    for row in pairings_table.find_all('tr')[1:]:
+    header_row_index = next((i for i, tr in enumerate(all_rows) if tr is header_row), 0)
+    for row in all_rows[header_row_index + 1:]:
         cells = [td.get_text(strip=True) for td in row.find_all('td')]
-        if len(cells) < result_col + 1:
+        if not cells:
             continue
         board_raw = cells[0]
         if not board_raw.isdigit():
-            continue  # skip sub-headers or blank rows
+            continue  # skip sub-headers or section labels
 
-        result_raw = cells[result_col] if result_col < len(cells) else '*'
-        # Normalise result
-        if '½' in result_raw:
+        if len(cells) <= result_col:
+            continue
+
+        result_raw = cells[result_col]
+        if '½' in result_raw or '1/2' in result_raw:
             result = '½ - ½'
         elif '1 - 0' in result_raw or '1-0' in result_raw or '1:0' in result_raw:
             result = '1 - 0'
@@ -2399,25 +2520,32 @@ async def _scrape_round_pairings(url: str) -> dict:
         else:
             result = result_raw or '*'
 
-        def _no(val):
-            try: return int(val)
-            except: return 0
-
-        white_no = _no(cells[white_no_col]) if white_no_col < len(cells) else 0
-        white_name = cells[white_name_col] if white_name_col < len(cells) else ''
-        black_name = cells[black_name_col] if black_name_col < len(cells) else ''
-        black_no = _no(cells[black_no_col]) if black_no_col < len(cells) else 0
+        white_no   = _no(cells[white_no_col])   if white_no_col   < len(cells) else 0
+        white_name = cells[white_name_col]       if white_name_col < len(cells) else ''
+        black_name = cells[black_name_col]       if black_name_col < len(cells) else ''
+        black_no   = _no(cells[black_no_col])   if black_no_col   < len(cells) else 0
 
         pairs.append({
-            'board_no': int(board_raw),
-            'white_no': white_no,
+            'board_no':   int(board_raw),
+            'white_no':   white_no,
             'white_name': white_name,
-            'black_no': black_no,
+            'black_no':   black_no,
             'black_name': black_name,
-            'result': result,
+            'result':     result,
         })
 
-    return {'round': round_num, 'pairs': pairs, 'tournament_name': tournament_name}
+    return {
+        'round': round_num,
+        'pairs': pairs,
+        'tournament_name': tournament_name,
+        'debug': {
+            'headers': headers_text,
+            'result_col': result_col,
+            'white_no_col': white_no_col,
+            'black_no_col': black_no_col,
+            'sample': pairs[:3],
+        },
+    }
 
 async def _scrape_chess_results(url: str):
     """Fetch and parse a chess-results.com player list page.
@@ -2540,6 +2668,179 @@ async def research_delete_source(
     return RedirectResponse("/research-players", status_code=303)
 
 
+async def _scrape_standings(url: str) -> dict:
+    """Fetch chess-results.com 'Rank after Round N' page (art=1 or art=3).
+
+    Returns {round, standings: [{start_no, name, pts}], tournament_name}.
+    Columns: Rk.|SNo|flag|title|Name|FED|Rtg|Pts.|TB1...
+    """
+    from bs4 import BeautifulSoup
+
+    if 'prt=' not in url:
+        sep = '&' if '?' in url else '?'
+        url = url + sep + 'prt=1'
+
+    m = re.search(r'rd=(\d+)', url)
+    round_num = int(m.group(1)) if m else 1
+
+    ua = {"User-Agent": "Mozilla/5.0 (compatible; MyChesspairings/1.0)"}
+    async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+        resp = await client.get(url, headers=ua)
+        resp.raise_for_status()
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    title_tag = soup.find('h2') or soup.find('title')
+    tournament_name = title_tag.get_text(strip=True) if title_tag else ''
+
+    # Find standings table — chess-results uses class="CRs1" for main content tables
+    # Target the specific one whose header row contains "SNo"
+    standings_table = None
+    for table in soup.find_all('table', class_='CRs1'):
+        if 'SNo' in table.get_text():
+            standings_table = table
+            break
+    # Fallback: any table containing SNo + Pts.
+    if not standings_table:
+        for table in soup.find_all('table'):
+            if 'SNo' in table.get_text() and 'Pts.' in table.get_text():
+                standings_table = table
+                break
+
+    if not standings_table:
+        return {'round': round_num, 'standings': [], 'tournament_name': tournament_name,
+                'error': 'Standings table not found'}
+
+    # Find the header row (the tr that has a cell with exactly "SNo")
+    header_row = None
+    all_rows = standings_table.find_all('tr', recursive=False)  # direct children only
+    if not all_rows:
+        # table may use tbody
+        all_rows = standings_table.find_all('tr')
+    for tr in all_rows:
+        if any(c.get_text(strip=True) == 'SNo' for c in tr.find_all(['th', 'td'])):
+            header_row = tr
+            break
+
+    if not header_row:
+        return {'round': round_num, 'standings': [], 'tournament_name': tournament_name,
+                'error': 'Header row with "SNo" not found'}
+
+    headers = [c.get_text(strip=True) for c in header_row.find_all(['th', 'td'])]
+
+    def _col(hdrs, label, default):
+        return next((i for i, h in enumerate(hdrs) if h.strip() == label), default)
+
+    sno_col  = _col(headers, 'SNo',  1)
+    name_col = _col(headers, 'Name', 4)
+    pts_col  = _col(headers, 'Pts.', 7)
+
+    def _pts(val):
+        try:
+            return float(str(val).replace(',', '.').strip())
+        except Exception:
+            return 0.0
+
+    standings = []
+    header_idx = next((i for i, tr in enumerate(all_rows) if tr is header_row), 0)
+    for row in all_rows[header_idx + 1:]:
+        cells = [td.get_text(strip=True) for td in row.find_all('td')]
+        if not cells:
+            continue
+        try:
+            start_no = int(cells[sno_col])
+        except Exception:
+            continue
+        name = cells[name_col] if name_col < len(cells) else ''
+        pts = _pts(cells[pts_col]) if pts_col < len(cells) else 0.0
+        standings.append({'start_no': start_no, 'name': name, 'pts': pts})
+
+    return {'round': round_num, 'standings': standings, 'tournament_name': tournament_name}
+
+
+@app.get("/api/research/debug-standings")
+async def debug_standings(url: str, user: dict = Depends(require_login)):
+    """Return raw standings scrape result for debugging."""
+    try:
+        data = await _scrape_standings(url)
+        return JSONResponse({
+            'round': data.get('round'),
+            'tournament_name': data.get('tournament_name'),
+            'error': data.get('error'),
+            'player_count': len(data.get('standings', [])),
+            'first_5': data.get('standings', [])[:5],
+        })
+    except Exception as e:
+        return JSONResponse({'exception': str(e)}, status_code=500)
+
+
+@app.post("/research-players/import-standings", response_class=HTMLResponse)
+async def research_import_standings(
+    request: Request,
+    tournament_source: str = Form(''),
+    standings_url: str = Form(''),
+    my_rank: int = Form(0),
+    buffer: int = Form(4),
+    user: dict = Depends(require_login),
+):
+    from urllib.parse import quote
+    import_ok = None
+    import_error = None
+    try:
+        data = await _scrape_standings(standings_url)
+        if data.get('error'):
+            import_error = data['error']
+        else:
+            store_standings(tournament_source, data['round'], data['standings'], standings_url=standings_url)
+            n = len(data['standings'])
+            import_ok = f"Standings for round {data['round']} imported ({n} players)"
+    except Exception as e:
+        import_error = str(e)
+
+    qs = f"tournament_source={quote(tournament_source)}&my_rank={my_rank}&buffer={buffer}"
+    if import_ok:
+        qs += f"&import_msg={quote(import_ok)}"
+    else:
+        qs += f"&import_err={quote(str(import_error))}"
+    return RedirectResponse(f"/research-players/simulate?{qs}", status_code=303)
+
+
+@app.post("/research-players/refresh-standings", response_class=HTMLResponse)
+async def research_refresh_standings(
+    request: Request,
+    tournament_source: str = Form(''),
+    round_num: int = Form(0),
+    my_rank: int = Form(0),
+    buffer: int = Form(4),
+    user: dict = Depends(require_login),
+):
+    from urllib.parse import quote
+    imported = list_imported_standings(tournament_source)
+    entry = next((s for s in imported if s['round'] == round_num), None)
+    standings_url = entry['standings_url'] if entry else ''
+    import_ok = None
+    import_error = None
+    if not standings_url:
+        import_error = f"No stored URL for standings round {round_num}"
+    else:
+        try:
+            data = await _scrape_standings(standings_url)
+            if data.get('error'):
+                import_error = data['error']
+            else:
+                store_standings(tournament_source, data['round'], data['standings'], standings_url=standings_url)
+                n = len(data['standings'])
+                import_ok = f"Round {round_num} standings refreshed ({n} players)"
+        except Exception as e:
+            import_error = str(e)
+
+    qs = f"tournament_source={quote(tournament_source)}&my_rank={my_rank}&buffer={buffer}"
+    if import_ok:
+        qs += f"&import_msg={quote(import_ok)}"
+    else:
+        qs += f"&import_err={quote(str(import_error))}"
+    return RedirectResponse(f"/research-players/simulate?{qs}", status_code=303)
+
+
 @app.post("/research-players/import-round", response_class=HTMLResponse)
 async def research_import_round(
     request: Request,
@@ -2555,18 +2856,65 @@ async def research_import_round(
             import_error = data['error']
             import_ok = None
         else:
-            store_round_results(tournament_source, data['round'], data['pairs'])
-            import_ok = f"Imported {len(data['pairs'])} pairings for round {data['round']}"
+            store_round_results(tournament_source, data['round'], data['pairs'], round_url=round_url)
+            pairs = data['pairs']
+            sample = ', '.join(
+                f"#{p['white_no']} vs #{p['black_no']}"
+                for p in pairs[:3]
+            )
+            import_ok = (
+                f"Imported {len(pairs)} pairings for round {data['round']}. "
+                f"Sample: {sample}"
+            )
             import_error = None
     except Exception as e:
         import_ok = None
         import_error = str(e)
 
-    qs = f"tournament_source={tournament_source}&my_rank={my_rank}&buffer={buffer}"
+    from urllib.parse import quote
+    qs = f"tournament_source={quote(tournament_source)}&my_rank={my_rank}&buffer={buffer}"
     if import_ok:
-        qs += f"&import_msg={import_ok}"
+        qs += f"&import_msg={quote(import_ok)}"
     else:
-        qs += f"&import_err={import_error}"
+        qs += f"&import_err={quote(str(import_error))}"
+    return RedirectResponse(f"/research-players/simulate?{qs}", status_code=303)
+
+
+@app.post("/research-players/refresh-round", response_class=HTMLResponse)
+async def research_refresh_round(
+    request: Request,
+    tournament_source: str = Form(''),
+    round_num: int = Form(0),
+    my_rank: int = Form(0),
+    buffer: int = Form(4),
+    user: dict = Depends(require_login),
+):
+    """Re-scrape a previously imported round using its stored URL."""
+    from urllib.parse import quote
+    urls = get_round_urls(tournament_source)
+    round_url = urls.get(round_num, '')
+    import_ok = None
+    import_error = None
+    if not round_url:
+        import_error = f"No stored URL for round {round_num}"
+    else:
+        try:
+            data = await _scrape_round_pairings(round_url)
+            if data.get('error'):
+                import_error = data['error']
+            else:
+                store_round_results(tournament_source, data['round'], data['pairs'], round_url=round_url)
+                pairs = data['pairs']
+                done = sum(1 for p in pairs if p['result'] != '*')
+                import_ok = f"Round {round_num} refreshed: {done}/{len(pairs)} results in"
+        except Exception as e:
+            import_error = str(e)
+
+    qs = f"tournament_source={quote(tournament_source)}&my_rank={my_rank}&buffer={buffer}"
+    if import_ok:
+        qs += f"&import_msg={quote(import_ok)}"
+    else:
+        qs += f"&import_err={quote(str(import_error))}"
     return RedirectResponse(f"/research-players/simulate?{qs}", status_code=303)
 
 
@@ -2607,16 +2955,12 @@ async def research_simulate(
         if players:
             tournament_name = players[0]['tournament_name']
 
-    # Round results and predictions for subsequent rounds
+    # Round results and predictions for subsequent rounds (pairings-based)
     imported_rounds = list_imported_rounds(tournament_source) if tournament_source else []
-    round_predictions = []  # list of {round, my_result, score_group_size, my_score, opponent_rank, players, buffer}
+    round_urls = get_round_urls(tournament_source) if tournament_source else {}
+    round_predictions = []
 
     if imported_rounds and tournament_source and effective_rank:
-        last_round = max(imported_rounds)
-        scores = get_player_scores_after_round(tournament_source, last_round)
-        my_score = scores.get(effective_rank, 0)
-
-        # Find target player's result in each imported round
         for rd in imported_rounds:
             rd_results = get_round_results(tournament_source, rd)
             my_result = None
@@ -2634,7 +2978,6 @@ async def research_simulate(
                                  'opponent_name': pair['white_name'], 'result': raw, 'outcome': outcome}
                     break
 
-            # Predict next round from this point
             scores_thru = get_player_scores_after_round(tournament_source, rd)
             my_sc = scores_thru.get(effective_rank, 0)
             same_group = sorted([no for no, sc in scores_thru.items() if sc == my_sc])
@@ -2648,13 +2991,10 @@ async def research_simulate(
             next_opp_no = same_group[opp_pos] if 0 <= opp_pos < group_size else None
 
             r2_players = []
-            r2_opp_rank = None
             if next_opp_no:
-                r2_opp_rank = next_opp_no
                 pos_lo = max(0, opp_pos - buffer)
                 pos_hi = min(group_size - 1, opp_pos + buffer)
-                likely_nos = same_group[pos_lo:pos_hi + 1]
-                r2_players = get_research_players_by_start_nos(tournament_source, likely_nos)
+                r2_players = get_research_players_by_start_nos(tournament_source, same_group[pos_lo:pos_hi + 1])
 
             round_predictions.append({
                 'after_round': rd,
@@ -2662,8 +3002,83 @@ async def research_simulate(
                 'my_result': my_result,
                 'my_score': my_sc,
                 'score_group_size': group_size,
-                'opponent_rank': r2_opp_rank,
+                'opponent_rank': next_opp_no,
                 'players': r2_players,
+            })
+
+    # Standings-based predictions (primary path when standings are imported)
+    imported_standings_list = list_imported_standings(tournament_source) if tournament_source else []
+    standings_predictions = []
+
+    if imported_standings_list and tournament_source and effective_rank:
+        # Build a lookup of round → in-progress pairings from imported round results
+        in_progress_by_round: dict = {}
+        for rd in imported_rounds:
+            rd_results = get_round_results(tournament_source, rd)
+            in_progress_by_round[rd] = {
+                pair['white_start_no'] for pair in rd_results if pair['result'] == '*'
+            } | {pair['black_start_no'] for pair in rd_results if pair['result'] == '*'}
+
+        for st_info in imported_standings_list:
+            st_round = st_info['round']
+            all_st = get_round_standings(tournament_source, st_round)
+            if not all_st:
+                continue
+
+            score_map = {s['start_no']: s for s in all_st}
+            me = score_map.get(effective_rank)
+            if not me:
+                continue
+            my_score = me['pts']
+
+            # Who is in the score group right now?
+            confirmed_group = sorted(
+                [s for s in all_st if s['pts'] == my_score],
+                key=lambda s: s['start_no']
+            )
+
+            # For in-progress games this round: classify potential entrants
+            # score shown in standings = pre-round score for still-playing players
+            in_progress_nos = in_progress_by_round.get(st_round, set())
+            potential = []  # {'start_no', 'name', 'current_pts', 'needed'}
+            for s in all_st:
+                if s['start_no'] in in_progress_nos and s['pts'] != my_score:
+                    # Can any outcome bring them to my_score?
+                    for delta, needed in [(1.0, 'win'), (0.5, 'draw'), (0.0, 'loss')]:
+                        if abs(s['pts'] + delta - my_score) < 0.01:
+                            potential.append({**s, 'needed': needed})
+                            break
+
+            # Swiss pairing within confirmed group
+            group_size = len(confirmed_group)
+            my_pos = next((i for i, s in enumerate(confirmed_group) if s['start_no'] == effective_rank), -1)
+            half2 = math.ceil(group_size / 2)
+            opp_pos = (my_pos + half2) if my_pos >= 0 and my_pos < half2 else max(0, my_pos - half2)
+            predicted_opp = confirmed_group[opp_pos] if 0 <= opp_pos < group_size else None
+
+            # Show ±buffer window around predicted opponent
+            pos_lo = max(0, opp_pos - buffer)
+            pos_hi = min(group_size - 1, opp_pos + buffer)
+            likely_nos = [s['start_no'] for s in confirmed_group[pos_lo:pos_hi + 1]]
+            st_players = get_research_players_by_start_nos(tournament_source, likely_nos)
+            # Also load any potential entrants from player_research
+            pot_nos = [p['start_no'] for p in potential]
+            pot_players = get_research_players_by_start_nos(tournament_source, pot_nos)
+            pot_player_map = {p['start_rank']: p for p in pot_players}
+
+            standings_predictions.append({
+                'standings_round': st_round,
+                'predict_round': st_round + 1,
+                'my_score': my_score,
+                'confirmed_group': confirmed_group,
+                'my_pos': my_pos,
+                'predicted_opp': predicted_opp,
+                'players': st_players,
+                'potential': [
+                    {**p, 'research': pot_player_map.get(p['start_no'])}
+                    for p in potential
+                ],
+                'has_in_progress': bool(in_progress_nos),
             })
 
     sources = list_research_sources()
@@ -2678,7 +3093,10 @@ async def research_simulate(
         "total": total,
         "players": players,
         "imported_rounds": imported_rounds,
+        "round_urls": round_urls,
         "round_predictions": round_predictions,
+        "imported_standings_list": imported_standings_list,
+        "standings_predictions": standings_predictions,
         "import_msg": import_msg,
         "import_err": import_err,
     })
