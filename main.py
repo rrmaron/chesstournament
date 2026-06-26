@@ -35,7 +35,9 @@ from database import (
     save_user_tournament, list_user_tournaments, update_user_tournament, delete_user_tournament,
     list_deleted_user_tournaments, undelete_user_tournament,
     update_user_contact,
-    add_featured_tournament, list_featured_tournaments, update_featured_tournament, delete_featured_tournament,
+    add_featured_tournament, list_featured_tournaments, list_featured_tournaments_for_user,
+    update_featured_tournament, delete_featured_tournament,
+    get_user_location,
     upsert_research_players, list_research_players, delete_research_player,
     delete_research_by_source, list_research_sources,
     get_research_players_by_rank_range, get_research_player_count,
@@ -70,6 +72,17 @@ def _cache_get(key: str):
 
 def _cache_set(key: str, value, ttl: int = 300):
     _cache[key] = (value, time.monotonic() + ttl)
+
+def _user_tournament_context(user_id: int) -> dict:
+    """Return featured_tournaments and federation info scoped to the user's location."""
+    loc = get_user_location(user_id)
+    federation = get_federation(loc["federation_id"]) if loc.get("federation_id") else None
+    tournaments = list_featured_tournaments_for_user(user_id)
+    return {
+        "featured_tournaments": tournaments,
+        "user_federation": federation,
+        "user_location": loc,
+    }
 
 app = FastAPI(title="MyChessRating Pairings")
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
@@ -1106,7 +1119,8 @@ async def uscf_col_debug(_user: dict = Depends(require_admin)):
 @app.get("/admin/tournaments", response_class=HTMLResponse)
 async def admin_tournaments_page(request: Request, user: dict = Depends(require_admin)):
     return templates.TemplateResponse(request=request, name="admin_tournaments.html",
-                                      context={"tournaments": list_featured_tournaments()})
+                                      context={"tournaments": list_featured_tournaments(),
+                                               "countries": list_countries()})
 
 @app.post("/admin/tournaments")
 async def admin_add_tournament(
@@ -1119,6 +1133,7 @@ async def admin_add_tournament(
     source: str = Form("manual"),
     source_url: str = Form(""),
     display_order: int = Form(0),
+    country_code: str = Form(""),
     _user: dict = Depends(require_admin),
 ):
     add_featured_tournament(
@@ -1130,6 +1145,7 @@ async def admin_add_tournament(
         source=source or "manual",
         source_url=source_url.strip() or None,
         display_order=display_order,
+        country_code=country_code.strip(),
     )
     return RedirectResponse("/admin/tournaments", status_code=303)
 
@@ -1156,6 +1172,7 @@ async def admin_edit_tournament(
     info_url: str = Form(""),
     pairings_url: str = Form(""),
     display_order: int = Form(0),
+    country_code: str = Form(""),
     _user: dict = Depends(require_admin),
 ):
     update_featured_tournament(
@@ -1166,6 +1183,7 @@ async def admin_edit_tournament(
         info_url=info_url.strip() or None,
         pairings_url=pairings_url.strip() or None,
         display_order=display_order,
+        country_code=country_code.strip(),
     )
     return RedirectResponse("/admin/tournaments", status_code=303)
 
@@ -1649,7 +1667,7 @@ async def api_uscf_tournament_games(
 async def player_lookup_page(request: Request, user: dict = Depends(require_login)):
     return templates.TemplateResponse(request=request, name="player_lookup.html",
                                       context={"current_user": user,
-                                               "featured_tournaments": list_featured_tournaments(active_only=True)})
+                                               **_user_tournament_context(user["id"])})
 
 @app.get("/api/player-lookup-search", response_class=HTMLResponse)
 async def player_lookup_search(name: str = "", _user: dict = Depends(require_login)):
@@ -2090,7 +2108,7 @@ async def uscf_calculator_page(request: Request, user: dict = Depends(require_lo
     saved = list_user_tournaments(user["id"])
     return templates.TemplateResponse(request=request, name="uscf_calculator.html",
                                       context={"profile": profile, "saved_tournaments": saved,
-                                               "featured_tournaments": list_featured_tournaments(active_only=True)})
+                                               **_user_tournament_context(user["id"])})
 
 @app.post("/api/uscf-tournaments")
 async def api_save_tournament(request: Request, user: dict = Depends(require_login)):

@@ -1,9 +1,47 @@
+{% if user_federation %}
+<div class="card mb-3 border-0 bg-light">
+  <div class="card-body py-2 px-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <span class="small text-muted">Your federation:</span>
+      <strong class="ms-1">{{ user_federation.name }}</strong>
+      {% if user_federation.rating_system %}
+      <span class="badge bg-info text-dark ms-1">{{ user_federation.rating_system }}</span>
+      {% endif %}
+      {% if user_location and user_location.city %}
+      <span class="text-muted small ms-1">· {{ user_location.city }}</span>
+      {% endif %}
+    </div>
+    {% if user_federation.tournaments_url %}
+    <a href="{{ user_federation.tournaments_url }}" target="_blank" rel="noopener"
+       class="btn btn-outline-success btn-sm">Browse {{ user_federation.abbreviation or user_federation.name }} Tournaments ↗</a>
+    {% endif %}
+  </div>
+</div>
+{% elif user_location is defined %}
+<div class="alert alert-light border py-2 px-3 small mb-3 d-flex justify-content-between align-items-center">
+  <span class="text-muted">Set your location to see local tournaments.</span>
+  <a href="/profile" class="btn btn-outline-secondary btn-sm py-0">Update Profile</a>
+</div>
+{% endif %}
+
 {% if featured_tournaments %}
+{% set local_ts = featured_tournaments | selectattr("country_code") | list %}
+{% set global_ts = featured_tournaments | rejectattr("country_code") | list %}
+
+{% if local_ts and user_federation %}
+<p class="small fw-semibold text-muted mb-1">
+  Tournaments in {{ user_federation.country_name }}
+</p>
+{% endif %}
+
 {% for ft in featured_tournaments %}
-<div class="card mb-4 border-primary">
+<div class="card mb-3 border-primary">
   <div class="card-body py-2 px-3">
-    <div class="fw-semibold mb-2">
+    <div class="fw-semibold mb-1">
       ♛ {{ ft.name }}{% if ft.subtitle %} — {{ ft.subtitle }}{% endif %}
+      {% if ft.country_code %}
+      <span class="badge bg-success ms-1" style="font-size:0.65rem">{{ ft.country_code }}</span>
+      {% endif %}
     </div>
     {% if ft.description %}<p class="small text-muted mb-2">{{ ft.description }}</p>{% endif %}
     <div class="d-flex flex-wrap gap-2">

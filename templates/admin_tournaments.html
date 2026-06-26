@@ -15,7 +15,7 @@
     <table class="table table-sm align-middle mb-0">
       <thead class="table-light">
         <tr>
-          <th>Order</th><th>Name</th><th>Source</th><th>Info URL</th><th>Pairings URL</th><th>Status</th><th></th>
+          <th>Order</th><th>Name</th><th>Country</th><th>Source</th><th>Info URL</th><th>Pairings URL</th><th>Status</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -27,6 +27,7 @@
             {% if t.subtitle %}<div class="small text-muted">{{ t.subtitle }}</div>{% endif %}
             {% if t.description %}<div class="small text-muted fst-italic">{{ t.description }}</div>{% endif %}
           </td>
+          <td>{% if t.country_code %}<span class="badge bg-success">{{ t.country_code }}</span>{% else %}<span class="text-muted small">Global</span>{% endif %}</td>
           <td><span class="badge bg-secondary">{{ t.source }}</span></td>
           <td class="small">{% if t.info_url %}<a href="{{ t.info_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
           <td class="small">{% if t.pairings_url %}<a href="{{ t.pairings_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
@@ -105,7 +106,16 @@
           <input type="url" name="pairings_url" id="new-pairings-url" class="form-control"
                  placeholder="https://...">
         </div>
-        <div class="col-sm-4">
+        <div class="col-sm-3">
+          <label class="form-label small">Country <span class="text-muted">(leave blank = global)</span></label>
+          <select name="country_code" class="form-select">
+            <option value="">— All countries —</option>
+            {% for c in countries %}
+            <option value="{{ c.country_code }}">{{ c.country_name }} ({{ c.country_code }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-sm-3">
           <label class="form-label small">Source</label>
           <select name="source" class="form-select">
             <option value="manual">Manual</option>
@@ -114,12 +124,12 @@
             <option value="other">Other</option>
           </select>
         </div>
-        <div class="col-sm-4">
+        <div class="col-sm-3">
           <label class="form-label small">Source URL (original page)</label>
           <input type="url" name="source_url" id="new-source-url" class="form-control"
                  placeholder="https://...">
         </div>
-        <div class="col-sm-4">
+        <div class="col-sm-3">
           <label class="form-label small">Display Order</label>
           <input type="number" name="display_order" class="form-control" value="0" min="0">
         </div>
@@ -165,7 +175,16 @@
               <label class="form-label small">Pairings URL</label>
               <input type="url" name="pairings_url" id="edit-pairings-url" class="form-control">
             </div>
-            <div class="col-sm-4">
+            <div class="col-sm-3">
+              <label class="form-label small">Country <span class="text-muted">(blank = global)</span></label>
+              <select name="country_code" id="edit-cc" class="form-select">
+                <option value="">— All countries —</option>
+                {% for c in countries %}
+                <option value="{{ c.country_code }}">{{ c.country_name }} ({{ c.country_code }})</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-sm-3">
               <label class="form-label small">Display Order</label>
               <input type="number" name="display_order" id="edit-order" class="form-control" min="0">
             </div>
@@ -189,6 +208,7 @@ function openEdit(t) {
   document.getElementById('edit-info-url').value    = t.info_url    || '';
   document.getElementById('edit-pairings-url').value= t.pairings_url|| '';
   document.getElementById('edit-order').value       = t.display_order ?? 0;
+  document.getElementById('edit-cc').value          = t.country_code  || '';
   bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();
 }
 

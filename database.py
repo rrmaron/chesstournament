@@ -313,6 +313,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN country_code TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN city TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN federation_id INTEGER",
+        "ALTER TABLE featured_tournaments ADD COLUMN country_code TEXT DEFAULT ''",
     ]:
         try:
             c.execute(sql)
@@ -589,31 +590,53 @@ def undelete_user_tournament(tournament_id: int, user_id: int) -> bool:
 def add_featured_tournament(name: str, subtitle: str = None, description: str = None,
                              info_url: str = None, pairings_url: str = None,
                              source: str = 'manual', source_url: str = None,
-                             display_order: int = 0) -> int:
+                             display_order: int = 0, country_code: str = '') -> int:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.execute(
-        "INSERT INTO featured_tournaments (name, subtitle, description, info_url, pairings_url, source, source_url, display_order) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (name.strip(), subtitle, description, info_url, pairings_url, source, source_url, display_order)
+        "INSERT INTO featured_tournaments (name, subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name.strip(), subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code or '')
     )
     fid = cur.lastrowid
     conn.commit()
     conn.close()
     return fid
 
-def list_featured_tournaments(active_only: bool = False) -> List[Dict]:
+_FT_COLS = ["id", "name", "subtitle", "description", "info_url", "pairings_url",
+            "source", "source_url", "active", "display_order", "created_at", "country_code"]
+
+def list_featured_tournaments(active_only: bool = False, country_code: str = None) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
-    sql = "SELECT id, name, subtitle, description, info_url, pairings_url, source, source_url, active, display_order, created_at FROM featured_tournaments"
+    conditions = []
     if active_only:
-        sql += " WHERE active=1"
+        conditions.append("active=1")
+    if country_code:
+        conditions.append(f"(country_code='' OR country_code='{country_code}')")
+    sql = "SELECT id, name, subtitle, description, info_url, pairings_url, source, source_url, active, display_order, created_at, COALESCE(country_code,'') FROM featured_tournaments"
+    if conditions:
+        sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY display_order ASC, created_at DESC"
     rows = conn.execute(sql).fetchall()
     conn.close()
-    cols = ["id", "name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order", "created_at"]
-    return [dict(zip(cols, r)) for r in rows]
+    return [dict(zip(_FT_COLS, r)) for r in rows]
+
+def get_user_location(user_id: int) -> Dict:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT COALESCE(country_code,''), COALESCE(city,''), federation_id FROM users WHERE id=?",
+        (user_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {"country_code": "", "city": "", "federation_id": None}
+    return {"country_code": row[0], "city": row[1], "federation_id": row[2]}
+
+def list_featured_tournaments_for_user(user_id: int) -> List[Dict]:
+    loc = get_user_location(user_id)
+    return list_featured_tournaments(active_only=True, country_code=loc["country_code"] or None)
 
 def update_featured_tournament(fid: int, **kwargs) -> bool:
-    allowed = {"name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order"}
+    allowed = {"name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order", "country_code"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return False
