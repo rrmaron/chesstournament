@@ -3434,55 +3434,40 @@ async def pgn_import(
             if not round_id:
                 raise ValueError("Could not extract round ID from URL")
 
-            # Fetch round metadata to get the broadcast tournament ID
-            round_meta = await ph.lichess_round_info(round_id)
-            tour_id = ''
-            tour_name = ''
-            round_name = ''
-            is_live = False
-
-            if round_meta:
-                tour = round_meta.get('tour', {})
-                rd   = round_meta.get('round', {})
-                tour_id   = tour.get('id', '')
-                tour_name = tour.get('name', info.get('tour_slug', '').replace('-', ' ').title())
-                round_name = rd.get('name', f"Round {rd.get('round', '')}")
-                is_live = not rd.get('finished', True)
-            else:
-                tour_name = info.get('tour_slug', '').replace('-', ' ').title()
-
-            # Determine round number from name or slug
-            rnum_m = re.search(r'(\d+)', info.get('round_slug', ''))
-            round_num = int(rnum_m.group(1)) if rnum_m else 0
-
-            # If we have the tour ID, discover & import ALL rounds
+            # Scrape the broadcast page to get tour ID (no direct API for this)
+            tour_id = await ph.lichess_tour_id_from_round_page(url)
             total_imported = 0
             rounds_imported = 0
+
             if tour_id:
-                all_rounds = await ph.lichess_broadcast_all_rounds(tour_id)
-                for rd in all_rounds:
+                binfo = await ph.lichess_broadcast_info(tour_id)
+                tour_name = binfo.get('name') or info.get('tour_slug', '').replace('-', ' ').title()
+                for rd in binfo.get('rounds', []):
                     rid = rd.get('id', '')
-                    if not rid:
+                    rd_url = rd.get('url', '')
+                    if not rid or not rd_url:
                         continue
                     rname = rd.get('name', '')
-                    rnum_m2 = re.search(r'(\d+)', rname)
-                    rnum2 = int(rnum_m2.group(1)) if rnum_m2 else 0
+                    rnum_m = re.search(r'(\d+)', rname)
+                    rnum = int(rnum_m.group(1)) if rnum_m else 0
                     rd_live = not rd.get('finished', True)
-                    rd_url = f"https://lichess.org/broadcast/{info['tour_slug']}/{info['round_slug'].rsplit('-',1)[0]}-{rnum2}/{rid}"
                     sid = upsert_pgn_source('lichess', rd_url, tour_name,
-                                            rnum2, rname, tour_id, rid, rd_live, org_id)
-                    n = await ph.import_lichess_round(rid, sid, insert_pgn_games)
+                                            rnum, rname, tour_id, rid, rd_live, org_id)
+                    n = await ph.import_lichess_round(rid, sid, insert_pgn_games, rd_url)
                     update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                     total_imported += n
                     rounds_imported += 1
                 msg = f"Imported {total_imported} games across {rounds_imported} rounds of '{tour_name}'"
             else:
-                # Fall back to single round
+                # Could not find tour — import just the single round from user URL
+                tour_name = info.get('tour_slug', '').replace('-', ' ').title()
+                rnum_m = re.search(r'(\d+)', info.get('round_slug', ''))
+                round_num = int(rnum_m.group(1)) if rnum_m else 0
                 sid = upsert_pgn_source('lichess', url, tour_name,
-                                        round_num, round_name, tour_id, round_id, is_live, org_id)
-                n = await ph.import_lichess_round(round_id, sid, insert_pgn_games)
+                                        round_num, '', '', round_id, False, org_id)
+                n = await ph.import_lichess_round(round_id, sid, insert_pgn_games, url)
                 update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
-                msg = f"Imported {n} games from {round_name or 'round'} of '{tour_name}'"
+                msg = f"Imported {n} games from round of '{tour_name}'"
 
         elif source_type == 'chesscom':
             tour_url_id = ph.parse_chesscom_tournament_url(url)
@@ -3613,10 +3598,10 @@ async def pgn_harvest_organizer(oid: int, user: dict = Depends(require_login)):
             rd_live = not rd.get('finished', True)
             rnum_m  = re.search(r'(\d+)', rname)
             rnum    = int(rnum_m.group(1)) if rnum_m else 0
-            rd_url  = f"https://lichess.org/broadcast/{tour_id}/{rid}"
+            rd_url  = rd.get('url', f"https://lichess.org/broadcast/{tour_id}/{rid}")
             sid = upsert_pgn_source('lichess', rd_url, tour_name, rnum,
                                     rname, tour_id, rid, rd_live, oid, auto_discovered=True)
-            await ph.import_lichess_round(rid, sid, insert_pgn_games)
+            await ph.import_lichess_round(rid, sid, insert_pgn_games, rd_url)
             update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
             discovered += 1
 
@@ -3645,7 +3630,8 @@ async def _harvest_loop():
                 try:
                     if src['source_type'] == 'lichess' and src.get('lichess_round_id'):
                         await ph.import_lichess_round(
-                            src['lichess_round_id'], src['id'], insert_pgn_games
+                            src['lichess_round_id'], src['id'], insert_pgn_games,
+                            src.get('source_url', '')
                         )
                         update_pgn_source_fetched(src['id'], count_pgn_games_for_source(src['id']))
                 except Exception as e:
@@ -3671,12 +3657,12 @@ async def _harvest_loop():
                                 rd_live = not rd.get('finished', True)
                                 rnum_m  = re.search(r'(\d+)', rname)
                                 rnum    = int(rnum_m.group(1)) if rnum_m else 0
-                                rd_url  = f"https://lichess.org/broadcast/{tour_id}/{rid}"
+                                rd_url  = rd.get('url', f"https://lichess.org/broadcast/{tour_id}/{rid}")
                                 sid = upsert_pgn_source(
                                     'lichess', rd_url, tour_name, rnum,
                                     rname, tour_id, rid, rd_live, org['id'], auto_discovered=True
                                 )
-                                await ph.import_lichess_round(rid, sid, insert_pgn_games)
+                                await ph.import_lichess_round(rid, sid, insert_pgn_games, rd_url)
                                 update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                     except Exception as e:
                         logging.warning("harvest organizer %s: %s", org['lichess_id'], e)

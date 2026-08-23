@@ -91,36 +91,53 @@ def parse_chesscom_tournament_url(url: str) -> Optional[str]:
 # Lichess API
 # ---------------------------------------------------------------------------
 
-async def lichess_round_pgn(round_id: str) -> str:
-    async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}) as client:
-        r = await client.get(
-            f"https://lichess.org/api/broadcast/round/{round_id}/pgn",
-            headers={'Accept': 'application/x-chess-pgn'},
-        )
+async def lichess_round_pgn(round_id: str, round_url: str = '') -> str:
+    """Fetch PGN for a Lichess broadcast round.
+    Uses the web URL + .pgn (reliable). Falls back to /api path if no URL given.
+    """
+    if round_url:
+        pgn_url = round_url.split('#')[0].rstrip('/') + '.pgn'
+    else:
+        pgn_url = f"https://lichess.org/api/broadcast/round/{round_id}/pgn"
+    async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        r = await client.get(pgn_url)
         r.raise_for_status()
         return r.text
 
-async def lichess_round_info(round_id: str) -> dict:
-    """Fetch broadcast+round info by round ID via NDJSON stream."""
-    async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA}) as client:
-        r = await client.get(
-            f"https://lichess.org/api/broadcast/round/{round_id}",
-            headers={'Accept': 'application/json'},
-        )
-        if r.status_code == 200:
-            return r.json()
-    return {}
+async def lichess_tour_id_from_round_page(round_url: str) -> str:
+    """Scrape the broadcast round HTML to extract the tour ID."""
+    url = round_url.split('#')[0]
+    async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        try:
+            r = await client.get(url)
+            if r.status_code == 200:
+                m = re.search(r'"tour"\s*:\s*\{[^}]*"id"\s*:\s*"([A-Za-z0-9]{8})"', r.text)
+                if m:
+                    return m.group(1)
+        except Exception as e:
+            log.warning("lichess_tour_id_from_round_page: %s", e)
+    return ''
 
-async def lichess_broadcast_all_rounds(tour_id: str) -> list[dict]:
-    """Get all rounds for a Lichess broadcast tournament by tour ID."""
+async def lichess_broadcast_info(tour_id: str) -> dict:
+    """Return {'name': str, 'rounds': [...]} for a broadcast tour.
+    Each round dict has: id, name, slug, url, finished.
+    """
     async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA}) as client:
         r = await client.get(
             f"https://lichess.org/api/broadcast/{tour_id}",
             headers={'Accept': 'application/json'},
         )
         if r.status_code == 200:
-            return r.json().get('rounds', [])
-    return []
+            d = r.json()
+            return {
+                'name':   d.get('tour', {}).get('name', ''),
+                'rounds': d.get('rounds', []),
+            }
+    return {'name': '', 'rounds': []}
+
+async def lichess_broadcast_all_rounds(tour_id: str) -> list[dict]:
+    """Get all rounds for a Lichess broadcast tournament by tour ID."""
+    return (await lichess_broadcast_info(tour_id)).get('rounds', [])
 
 async def lichess_organizer_broadcasts(username: str) -> list[dict]:
     """Stream all broadcasts created by a Lichess user."""
@@ -242,10 +259,10 @@ async def fetch_direct_pgn(url: str) -> str:
 # High-level import helpers (used by routes + background task)
 # ---------------------------------------------------------------------------
 
-async def import_lichess_round(round_id: str, source_id: int, db_insert_fn) -> int:
+async def import_lichess_round(round_id: str, source_id: int, db_insert_fn, round_url: str = '') -> int:
     """Fetch PGN for one Lichess round and store games. Returns count inserted."""
     try:
-        raw = await lichess_round_pgn(round_id)
+        raw = await lichess_round_pgn(round_id, round_url)
     except Exception as e:
         log.warning("import_lichess_round(%s): %s", round_id, e)
         return 0
