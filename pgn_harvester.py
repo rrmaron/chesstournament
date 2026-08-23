@@ -70,6 +70,8 @@ def pgn_to_game_dict(pgn: str, source_id: int) -> Optional[dict]:
 def detect_source_type(url: str) -> str:
     if 'lichess.org/broadcast' in url:
         return 'lichess'
+    if 'chess.com/events/info/' in url or 'chess.com/events/' in url:
+        return 'chesscom_event'
     if 'chess.com/tournament' in url or 'chess.com/live/tournament' in url:
         return 'chesscom'
     if 'chess-results.com' in url:
@@ -266,6 +268,92 @@ async def chesscom_round_pgn(tour_url_id: str, round_num: int) -> str:
                         pgns.append(pgn)
                 await asyncio.sleep(0.15)  # gentle rate limit
     return '\n\n'.join(pgns)
+
+# ---------------------------------------------------------------------------
+# Chess.com Events API (OTB broadcasts via chessbomb/clono)
+# ---------------------------------------------------------------------------
+
+def parse_chesscom_event_url(url: str) -> str:
+    """Extract event index slug from a chess.com events URL."""
+    m = re.search(r'chess\.com/events/(?:info/)?([^/?#]+)', url)
+    return m.group(1) if m else ''
+
+async def chesscom_event_info(index_slug: str) -> dict:
+    """Return event index metadata and list of rooms (sections)."""
+    async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA, 'Accept': 'application/json'}, follow_redirects=True) as client:
+        r = await client.post(f"https://www.chess.com/events/v1/api/index/{index_slug}")
+        if r.status_code != 200:
+            return {}
+        d = r.json()
+        idx = d.get('index', {})
+        rooms = d.get('rooms', [])
+        return {'name': idx.get('name', index_slug), 'id': idx.get('id'), 'slug': index_slug, 'rooms': rooms}
+
+async def chesscom_room_data(room_slug: str) -> dict:
+    """Return room details including rounds and games from chess.com events API."""
+    async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA, 'Accept': 'application/json'}, follow_redirects=True) as client:
+        r = await client.post(f"https://www.chess.com/events/v1/api/room/{room_slug}")
+        if r.status_code != 200:
+            return {}
+        return r.json()
+
+async def _chessbomb_source_url(room_id: int) -> str:
+    """Fetch chessbomb Next.js page and extract sourceUrl from embedded game data."""
+    async with httpx.AsyncClient(timeout=20, headers={'User-Agent': UA, 'Accept': 'text/html'}, follow_redirects=True) as client:
+        try:
+            r = await client.get(f"https://nxt.chessbomb.com/cp/rooms/{room_id}")
+            if r.status_code != 200:
+                return ''
+            m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.DOTALL)
+            if not m:
+                return ''
+            nd = json.loads(m.group(1))
+            games = nd.get('props', {}).get('pageProps', {}).get('games', [])
+            for g in games:
+                src = g.get('sourceUrl', '')
+                if src:
+                    return src
+        except Exception as e:
+            log.warning("_chessbomb_source_url(%s): %s", room_id, e)
+    return ''
+
+async def chesscom_event_pgns(room_id: int, rounds: list[dict]) -> list[tuple[str, str]]:
+    """Download PGN text for all rounds of a chess.com event room.
+
+    Returns list of (round_name, pgn_text) tuples.
+    Uses clono.no sourceUrl when available; falls back to empty string.
+    """
+    source_url = await _chessbomb_source_url(room_id)
+    if not source_url:
+        log.warning("chesscom_event_pgns: no sourceUrl for room %s", room_id)
+        return []
+
+    # Detect clono.no pattern: https://clono.no/pgn/{event_id}/{section_id}/{round}/games.pgn
+    clono_m = re.match(r'https://clono\.no/pgn/(\d+)/(\d+)/\d+/games\.pgn', source_url)
+    if not clono_m:
+        log.info("chesscom_event_pgns: unknown source URL format: %s", source_url)
+        return []
+
+    event_id, section_id = clono_m.groups()
+    results = []
+    async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        for rnd in sorted(rounds, key=lambda r: r.get('slug', '0')):
+            round_slug = rnd.get('slug', '')
+            try:
+                round_num = int(round_slug)
+            except ValueError:
+                continue
+            pgn_url = f"https://clono.no/pgn/{event_id}/{section_id}/{round_num}/games.pgn"
+            try:
+                r = await client.get(pgn_url)
+                if r.status_code == 200 and '[Event' in r.text:
+                    results.append((f"Round {round_slug}", r.text))
+                else:
+                    log.info("chesscom_event_pgns: %s -> %s", pgn_url, r.status_code)
+            except Exception as e:
+                log.warning("chesscom_event_pgns round %s: %s", round_slug, e)
+            await asyncio.sleep(0.2)
+    return results
 
 # ---------------------------------------------------------------------------
 # Chess-results PGN

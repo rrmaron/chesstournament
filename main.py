@@ -3481,6 +3481,45 @@ async def pgn_import(
                 update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                 msg = f"Imported {n} games from round of '{tour_name}'"
 
+        elif source_type == 'chesscom_event':
+            index_slug = ph.parse_chesscom_event_url(url)
+            if not index_slug:
+                raise ValueError("Could not extract event slug from Chess.com events URL")
+            einfo = await ph.chesscom_event_info(index_slug)
+            if not einfo:
+                raise ValueError(f"Could not fetch event info for '{index_slug}'")
+            event_name = einfo.get('name', index_slug)
+            rooms = einfo.get('rooms', [])
+            if not rooms:
+                raise ValueError("No sections (rooms) found for this event")
+
+            total_imported = 0
+            rooms_done = 0
+            for room in rooms:
+                room_slug = room.get('slug', '')
+                room_name = room.get('name', room_slug)
+                room_id   = room.get('id')
+                if not room_slug or not room_id:
+                    continue
+                rdata = await ph.chesscom_room_data(room_slug)
+                rounds = rdata.get('rounds', [])
+                if not rounds:
+                    continue
+                round_pgns = await ph.chesscom_event_pgns(room_id, rounds)
+                for rnd_name, pgn_text in round_pgns:
+                    rnum_m = re.search(r'(\d+)', rnd_name)
+                    rnum = int(rnum_m.group(1)) if rnum_m else 0
+                    section_name = f"{event_name} — {room_name}"
+                    sid = upsert_pgn_source(
+                        'chesscom_event', url, section_name,
+                        rnum, rnd_name, '', '', False, org_id
+                    )
+                    n = await ph.import_pgn_text(pgn_text, sid, insert_pgn_games)
+                    update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+                    total_imported += n
+                rooms_done += 1
+            msg = f"Imported {total_imported} games from {rooms_done} sections of '{event_name}'"
+
         elif source_type == 'chesscom':
             tour_url_id = ph.parse_chesscom_tournament_url(url)
             if not tour_url_id:
