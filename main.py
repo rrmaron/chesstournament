@@ -3482,31 +3482,45 @@ async def pgn_import(
                 msg = f"Imported {n} games from round of '{tour_name}'"
 
         elif source_type == 'chesscom_event':
-            index_slug = ph.parse_chesscom_event_url(url)
-            if not index_slug:
+            slug = ph.parse_chesscom_event_url(url)
+            if not slug:
                 raise ValueError("Could not extract event slug from Chess.com events URL")
-            einfo = await ph.chesscom_event_info(index_slug)
-            if not einfo:
-                raise ValueError(f"Could not fetch event info for '{index_slug}'")
-            event_name = einfo.get('name', index_slug)
-            rooms = einfo.get('rooms', [])
-            if not rooms:
-                raise ValueError("No sections (rooms) found for this event")
+
+            # Determine rooms: /events/info/{index-slug} → all sections via index API;
+            # /events/{room-slug} → single room directly.
+            is_info_url = '/events/info/' in url
+            if is_info_url:
+                einfo = await ph.chesscom_event_info(slug)
+                if not einfo:
+                    raise ValueError(f"Could not fetch event info for '{slug}'")
+                event_name = einfo.get('name', slug)
+                rooms_to_import = einfo.get('rooms', [])
+                if not rooms_to_import:
+                    raise ValueError("No sections (rooms) found for this event")
+            else:
+                # Room URL — fetch that single room and build a synthetic rooms list
+                rdata_single = await ph.chesscom_room_data(slug)
+                if not rdata_single:
+                    raise ValueError(f"Could not fetch room data for '{slug}'")
+                room_meta = rdata_single.get('room', {})
+                event_name = room_meta.get('name', slug)
+                rooms_to_import = [{'slug': slug, 'name': event_name, 'id': room_meta.get('id')}]
 
             total_imported = 0
             rooms_done = 0
-            for room in rooms:
+            for room in rooms_to_import:
                 room_slug = room.get('slug', '')
                 room_name = room.get('name', room_slug)
                 room_id   = room.get('id')
                 if not room_slug or not room_id:
                     continue
-                rdata = await ph.chesscom_room_data(room_slug)
+                rdata = await ph.chesscom_room_data(room_slug) if is_info_url else rdata_single
                 rounds = rdata.get('rounds', [])
                 api_games = rdata.get('games', [])
                 if not rounds:
                     continue
-                section_name = f"{event_name} — {room_name}"
+                # For multi-section events include section name; for single room just use room name
+                section_name = f"{event_name} — {room_name}" if is_info_url else event_name
                 round_pgns = await ph.chesscom_event_pgns(
                     room_id, rounds, api_games=api_games, event_name=section_name
                 )
@@ -3522,7 +3536,7 @@ async def pgn_import(
                     update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                     total_imported += n
                 rooms_done += 1
-            msg = f"Imported {total_imported} games from {rooms_done} sections of '{event_name}'"
+            msg = f"Imported {total_imported} games from {rooms_done} section(s) of '{event_name}'"
 
         elif source_type == 'chesscom':
             tour_url_id = ph.parse_chesscom_tournament_url(url)
