@@ -152,7 +152,7 @@ async def lichess_tour_id_from_round_page(round_url: str) -> str:
     return ''
 
 async def lichess_broadcast_info(tour_id: str) -> dict:
-    """Return {'name': str, 'rounds': [...]} for a broadcast tour.
+    """Return {'name': str, 'owner_id': str, 'owner_name': str, 'rounds': [...]} for a broadcast tour.
     Each round dict has: id, name, slug, url, finished.
     """
     async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA}) as client:
@@ -162,36 +162,47 @@ async def lichess_broadcast_info(tour_id: str) -> dict:
         )
         if r.status_code == 200:
             d = r.json()
+            tour = d.get('tour', {})
+            owner = tour.get('communityOwner', {})
             return {
-                'name':   d.get('tour', {}).get('name', ''),
-                'rounds': d.get('rounds', []),
+                'name':       tour.get('name', ''),
+                'owner_id':   owner.get('id', ''),
+                'owner_name': owner.get('name', ''),
+                'rounds':     d.get('rounds', []),
             }
-    return {'name': '', 'rounds': []}
+    return {'name': '', 'owner_id': '', 'owner_name': '', 'rounds': []}
 
 async def lichess_broadcast_all_rounds(tour_id: str) -> list[dict]:
     """Get all rounds for a Lichess broadcast tournament by tour ID."""
     return (await lichess_broadcast_info(tour_id)).get('rounds', [])
 
 async def lichess_organizer_broadcasts(username: str) -> list[dict]:
-    """Stream all broadcasts created by a Lichess user."""
-    broadcasts = []
+    """Return all broadcast tours created by a Lichess user.
+    The API returns paginated JSON; we collect all pages.
+    Each item has a 'tour' dict (with id, name, slug) — rounds are NOT included
+    and must be fetched separately via lichess_broadcast_info(tour_id).
+    """
+    tours = []
     async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}) as client:
-        try:
-            async with client.stream(
-                'GET', f"https://lichess.org/api/broadcast/by/{username}",
-                headers={'Accept': 'application/x-ndjson'},
-            ) as r:
-                if r.status_code == 200:
-                    async for line in r.aiter_lines():
-                        line = line.strip()
-                        if line:
-                            try:
-                                broadcasts.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                pass
-        except Exception as e:
-            log.warning("lichess_organizer_broadcasts(%s): %s", username, e)
-    return broadcasts
+        page = 1
+        while True:
+            try:
+                r = await client.get(
+                    f"https://lichess.org/api/broadcast/by/{username}?page={page}",
+                    headers={'Accept': 'application/json'},
+                )
+                if r.status_code != 200:
+                    break
+                d = r.json()
+                results = d.get('currentPageResults', [])
+                tours.extend(results)
+                if len(results) < d.get('maxPerPage', 24):
+                    break
+                page += 1
+            except Exception as e:
+                log.warning("lichess_organizer_broadcasts(%s) page %d: %s", username, page, e)
+                break
+    return tours
 
 async def lichess_recent_broadcasts(nb: int = 100) -> list[dict]:
     """Stream recent Lichess broadcasts (all users)."""

@@ -3442,6 +3442,17 @@ async def pgn_import(
             if tour_id:
                 binfo = await ph.lichess_broadcast_info(tour_id)
                 tour_name = binfo.get('name') or info.get('tour_slug', '').replace('-', ' ').title()
+
+                # Auto-save organizer if not already tracked
+                owner_lichess_id = binfo.get('owner_id', '')
+                owner_name       = binfo.get('owner_name', '') or owner_lichess_id
+                if owner_lichess_id and not org_id:
+                    existing = [o for o in list_pgn_organizers() if o.get('lichess_id') == owner_lichess_id]
+                    if existing:
+                        org_id = existing[0]['id']
+                    else:
+                        org_id = add_pgn_organizer(owner_name, owner_lichess_id, '', '', user['id'])
+
                 for rd in binfo.get('rounds', []):
                     rid = rd.get('id', '')
                     rd_url = rd.get('url', '')
@@ -3457,7 +3468,8 @@ async def pgn_import(
                     update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                     total_imported += n
                     rounds_imported += 1
-                msg = f"Imported {total_imported} games across {rounds_imported} rounds of '{tour_name}'"
+                auto_org_note = f" (organizer '{owner_name}' auto-saved)" if owner_lichess_id else ''
+                msg = f"Imported {total_imported} games across {rounds_imported} rounds of '{tour_name}'{auto_org_note}"
             else:
                 # Could not find tour — import just the single round from user URL
                 tour_name = info.get('tour_slug', '').replace('-', ' ').title()
@@ -3583,14 +3595,16 @@ async def pgn_harvest_organizer(oid: int, user: dict = Depends(require_login)):
     if not lichess_id:
         return RedirectResponse("/pgn-database?err=No+Lichess+ID+set", status_code=303)
 
-    broadcasts = await ph.lichess_organizer_broadcasts(lichess_id)
+    tour_listings = await ph.lichess_organizer_broadcasts(lichess_id)
     discovered = 0
-    for bc in broadcasts:
+    for bc in tour_listings:
         tour = bc.get('tour', {})
-        rounds = bc.get('rounds', [])
-        tour_id   = tour.get('id', '')
-        tour_name = tour.get('name', '')
-        for rd in rounds:
+        tour_id = tour.get('id', '')
+        if not tour_id:
+            continue
+        binfo = await ph.lichess_broadcast_info(tour_id)
+        tour_name = binfo.get('name') or tour.get('name', '')
+        for rd in binfo.get('rounds', []):
             rid = rd.get('id', '')
             if not rid or lichess_round_already_known(rid):
                 continue
@@ -3643,13 +3657,15 @@ async def _harvest_loop():
                     if not org.get('lichess_id'):
                         continue
                     try:
-                        broadcasts = await ph.lichess_organizer_broadcasts(org['lichess_id'])
-                        for bc in broadcasts:
+                        tour_listings = await ph.lichess_organizer_broadcasts(org['lichess_id'])
+                        for bc in tour_listings:
                             tour = bc.get('tour', {})
-                            rounds = bc.get('rounds', [])
-                            tour_id   = tour.get('id', '')
-                            tour_name = tour.get('name', '')
-                            for rd in rounds:
+                            tour_id = tour.get('id', '')
+                            if not tour_id:
+                                continue
+                            binfo = await ph.lichess_broadcast_info(tour_id)
+                            tour_name = binfo.get('name') or tour.get('name', '')
+                            for rd in binfo.get('rounds', []):
                                 rid = rd.get('id', '')
                                 if not rid or lichess_round_already_known(rid):
                                     continue
