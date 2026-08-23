@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}PGN Database{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-3 mb-3 flex-wrap">
+  <h4 class="mb-0">PGN Database</h4>
+  <span class="badge bg-secondary">{{ total }} games</span>
+</div>
+
+{% if import_msg %}
+<div class="alert alert-success py-2 small">{{ import_msg }}</div>
+{% endif %}
+{% if import_err %}
+<div class="alert alert-danger py-2 small">{{ import_err }}</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+
+  {# ── Left column: Organizers + Import ── #}
+  <div class="col-12 col-lg-4">
+
+    {# Organizer subscriptions #}
+    <div class="card mb-3">
+      <div class="card-header py-2 fw-semibold d-flex align-items-center justify-content-between">
+        <span>Followed Organizers</span>
+        <button class="btn btn-outline-primary btn-sm py-0" data-bs-toggle="collapse"
+                data-bs-target="#add-org-form">+ Add</button>
+      </div>
+      <div class="collapse" id="add-org-form">
+        <div class="card-body border-bottom pb-3">
+          <form method="post" action="/pgn-database/add-organizer" class="row g-2">
+            <div class="col-12">
+              <input type="text" name="name" class="form-control form-control-sm" placeholder="Display name *" required>
+            </div>
+            <div class="col-12">
+              <input type="text" name="lichess_id" class="form-control form-control-sm"
+                     placeholder="Lichess username (e.g. coppell-cc)">
+            </div>
+            <div class="col-12">
+              <input type="text" name="chesscom_id" class="form-control form-control-sm"
+                     placeholder="Chess.com organizer (optional)">
+            </div>
+            <div class="col-12">
+              <input type="text" name="notes" class="form-control form-control-sm" placeholder="Notes (optional)">
+            </div>
+            <div class="col-auto">
+              <button class="btn btn-primary btn-sm">Save Organizer</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {% if organizers %}
+      <ul class="list-group list-group-flush">
+        {% for org in organizers %}
+        <li class="list-group-item py-2 d-flex align-items-center gap-2">
+          <div class="flex-grow-1">
+            <div class="fw-semibold small">{{ org.name }}</div>
+            {% if org.lichess_id %}
+            <div class="text-muted" style="font-size:0.7rem">
+              Lichess: <a href="https://lichess.org/@/{{ org.lichess_id }}" target="_blank" rel="noopener">{{ org.lichess_id }}</a>
+            </div>
+            {% endif %}
+          </div>
+          <form method="post" action="/pgn-database/harvest-organizer/{{ org.id }}" class="m-0">
+            <button class="btn btn-outline-success btn-sm py-0 px-2"
+                    title="Discover &amp; import all broadcasts by this organizer" style="font-size:0.7rem">↓ Harvest</button>
+          </form>
+          <form method="post" action="/pgn-database/delete-organizer/{{ org.id }}" class="m-0">
+            <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Remove organizer">✕</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <div class="card-body text-muted small">No organizers yet — add one above.</div>
+      {% endif %}
+    </div>
+
+    {# Import form #}
+    <div class="card mb-3">
+      <div class="card-header py-2 fw-semibold">Import URL</div>
+      <div class="card-body">
+        <form method="post" action="/pgn-database/import" class="row g-2">
+          <div class="col-12">
+            <textarea name="url" class="form-control form-control-sm" rows="2" required
+                      placeholder="Lichess broadcast, Chess.com tournament, chess-results, or direct PGN URL"></textarea>
+            <div class="form-text" style="font-size:0.7rem">
+              All rounds are imported automatically. Supports Lichess, Chess.com, chess-results, and raw PGN URLs.
+            </div>
+          </div>
+          {% if organizers %}
+          <div class="col-12">
+            <select name="organizer_id" class="form-select form-select-sm">
+              <option value="">— Link to organizer (optional) —</option>
+              {% for org in organizers %}
+              <option value="{{ org.id }}">{{ org.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+          <div class="col-auto">
+            <button class="btn btn-primary btn-sm">Import</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {# Sources list #}
+    {% if sources %}
+    <div class="card">
+      <div class="card-header py-2 fw-semibold">Imported Sources
+        <span class="badge bg-secondary ms-1">{{ sources | length }}</span>
+      </div>
+      <div style="max-height:340px;overflow-y:auto">
+        <table class="table table-sm table-hover mb-0 align-middle" style="font-size:0.75rem">
+          <thead class="table-light sticky-top">
+            <tr><th>Tournament / Round</th><th class="text-center">Games</th><th></th></tr>
+          </thead>
+          <tbody>
+          {% for s in sources %}
+          <tr>
+            <td>
+              <div class="fw-semibold text-truncate" style="max-width:180px" title="{{ s.tournament_name }}">
+                {{ s.tournament_name or s.source_url[:30] }}
+              </div>
+              <div class="text-muted" style="font-size:0.65rem">
+                {{ s.round_name or ('Rd ' + s.round_num|string if s.round_num else '') }}
+                <span class="badge {% if s.source_type=='lichess' %}bg-info text-dark{% elif s.source_type=='chesscom' %}bg-warning text-dark{% else %}bg-secondary{% endif %} ms-1" style="font-size:0.6rem">{{ s.source_type }}</span>
+                {% if s.is_live %}<span class="badge bg-success ms-1" style="font-size:0.6rem">LIVE</span>{% endif %}
+                {% if s.auto_discovered %}<span class="badge bg-light text-dark border ms-1" style="font-size:0.6rem">auto</span>{% endif %}
+              </div>
+              {% if s.last_fetched %}
+              <div class="text-muted" style="font-size:0.6rem">fetched {{ s.last_fetched[:16] }}</div>
+              {% endif %}
+            </td>
+            <td class="text-center fw-semibold">{{ s.game_count }}</td>
+            <td class="text-nowrap">
+              <form method="post" action="/pgn-database/refresh/{{ s.id }}" class="d-inline m-0">
+                <button class="btn btn-outline-secondary btn-sm py-0 px-1" title="Re-fetch">↻</button>
+              </form>
+              <form method="post" action="/pgn-database/delete-source/{{ s.id }}" class="d-inline m-0">
+                <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Delete source and its games">✕</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>{# /left column #}
+
+  {# ── Right column: Games ── #}
+  <div class="col-12 col-lg-8">
+    <div class="card">
+      <div class="card-header py-2 d-flex align-items-center gap-2 flex-wrap">
+        <form method="get" action="/pgn-database" class="d-flex gap-2 flex-wrap align-items-center flex-grow-1">
+          <input type="text" name="search" value="{{ search }}" placeholder="Search player…"
+                 class="form-control form-control-sm" style="max-width:160px" oninput="this.form.submit()">
+          <select name="event" class="form-select form-select-sm" style="max-width:220px" onchange="this.form.submit()">
+            <option value="">All events</option>
+            {% for ev in events %}
+            <option value="{{ ev }}" {% if ev == event %}selected{% endif %}>{{ ev }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-check form-check-inline mb-0">
+            <input class="form-check-input" type="checkbox" name="research_only" value="1"
+                   id="ro-chk" {% if research_only %}checked{% endif %} onchange="this.form.submit()">
+            <label class="form-check-label small" for="ro-chk" title="Show only games involving players in your research database">Research players</label>
+          </div>
+        </form>
+        <a href="/pgn-database/download?search={{ search | urlencode }}&event={{ event | urlencode }}&research_only={{ research_only }}"
+           class="btn btn-outline-success btn-sm">↓ Download PGN</a>
+      </div>
+
+      {% if games %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle" style="font-size:0.8rem">
+          <thead class="table-dark">
+            <tr>
+              <th>White</th>
+              <th>Black</th>
+              <th class="text-center">Result</th>
+              <th class="text-center">Elo</th>
+              <th>Event / Round</th>
+              <th class="text-center">Date</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for g in games %}
+          <tr class="{% if g.research_white_id or g.research_black_id %}table-warning{% endif %}"
+              onclick="showPgn({{ g.id }})" style="cursor:pointer" title="Click to view PGN">
+            <td>
+              {% if g.research_white_id %}
+              <span class="badge bg-warning text-dark me-1" title="In research database">★</span>
+              {% endif %}
+              <span class="fw-semibold">{{ g.white }}</span>
+              {% if g.white_elo %}<span class="text-muted ms-1">({{ g.white_elo }})</span>{% endif %}
+            </td>
+            <td>
+              {% if g.research_black_id %}
+              <span class="badge bg-warning text-dark me-1" title="In research database">★</span>
+              {% endif %}
+              {{ g.black }}
+              {% if g.black_elo %}<span class="text-muted ms-1">({{ g.black_elo }})</span>{% endif %}
+            </td>
+            <td class="text-center fw-semibold
+              {% if g.result == '1-0' %}text-success
+              {% elif g.result == '0-1' %}text-danger
+              {% else %}text-muted{% endif %}">
+              {{ g.result }}
+            </td>
+            <td class="text-center text-muted small">
+              {% if g.white_elo and g.black_elo %}
+              {{ ((g.white_elo + g.black_elo) // 2) }}
+              {% else %}—{% endif %}
+            </td>
+            <td class="small text-truncate" style="max-width:180px">
+              {{ g.event or g.tournament_name or '—' }}
+              {% if g.round %}<span class="text-muted">· R{{ g.round }}</span>{% endif %}
+              {% if g.eco %}<span class="text-muted ms-1">{{ g.eco }}</span>{% endif %}
+            </td>
+            <td class="text-center text-muted small text-nowrap">{{ g.date or '—' }}</td>
+          </tr>
+          <tr id="pgn-row-{{ g.id }}" class="d-none">
+            <td colspan="6" class="p-0">
+              <pre id="pgn-text-{{ g.id }}" class="mb-0 p-3 bg-light border-top"
+                   style="font-size:0.72rem;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto"></pre>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {# Pagination #}
+      {% if pages > 1 %}
+      <div class="card-footer d-flex justify-content-center gap-1 py-2 flex-wrap">
+        {% for p in range(1, pages + 1) %}
+        <a href="/pgn-database?page={{ p }}&search={{ search | urlencode }}&event={{ event | urlencode }}&research_only={{ research_only }}"
+           class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline-secondary{% endif %}">{{ p }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% else %}
+      <div class="card-body text-muted text-center py-5">
+        {% if search or event or research_only %}
+        No games match your filters.
+        {% else %}
+        No games yet — import a tournament URL to get started.
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+
+<script>
+const pgnCache = {};
+
+async function showPgn(gid) {
+  const row = document.getElementById('pgn-row-' + gid);
+  if (!row) return;
+  const pre = document.getElementById('pgn-text-' + gid);
+  if (row.classList.toggle('d-none')) return;  // hide
+
+  if (pgnCache[gid]) {
+    pre.textContent = pgnCache[gid];
+    return;
+  }
+  pre.textContent = 'Loading…';
+  try {
+    const r = await fetch('/pgn-database/game/' + gid);
+    const t = await r.text();
+    pgnCache[gid] = t;
+    pre.textContent = t;
+  } catch(e) {
+    pre.textContent = 'Error loading PGN';
+  }
+}
+</script>
+{% endblock %}

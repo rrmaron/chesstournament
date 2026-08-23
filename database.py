@@ -3,6 +3,222 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 import os
+
+# ---------------------------------------------------------------------------
+# All FIDE member federations — idempotent seed used at startup
+# Format: (name, abbreviation, country_code, country_name, rating_system,
+#          website_url, tournaments_url)
+# ---------------------------------------------------------------------------
+_ALL_FEDERATIONS = [
+    # ── AFRICA ──────────────────────────────────────────────────────────────
+    ("Algerian Chess Federation",                "ALG", "DZ", "Algeria",                  "FIDE Rating", "https://www.algerchess.org",            ""),
+    ("Angola Chess Federation",                  "ANG", "AO", "Angola",                   "FIDE Rating", "",                                      ""),
+    ("Benin Chess Federation",                   "BEN", "BJ", "Benin",                    "FIDE Rating", "",                                      ""),
+    ("Botswana Chess Association",               "BOT", "BW", "Botswana",                 "FIDE Rating", "",                                      ""),
+    ("Burkina Faso Chess Federation",            "BUF", "BF", "Burkina Faso",             "FIDE Rating", "",                                      ""),
+    ("Burundian Chess Federation",               "BDI", "BI", "Burundi",                  "FIDE Rating", "",                                      ""),
+    ("Cameroonian Chess Federation",             "CMR", "CM", "Cameroon",                 "FIDE Rating", "",                                      ""),
+    ("Cape Verde Chess Federation",              "CPV", "CV", "Cape Verde",               "FIDE Rating", "",                                      ""),
+    ("Central African Chess Federation",         "CAF", "CF", "Central African Republic", "FIDE Rating", "",                                      ""),
+    ("Chad Chess Federation",                    "CHA", "TD", "Chad",                     "FIDE Rating", "",                                      ""),
+    ("Comoros Chess Federation",                 "COM", "KM", "Comoros",                  "FIDE Rating", "",                                      ""),
+    ("Congo Chess Federation",                   "CGO", "CG", "Congo",                    "FIDE Rating", "",                                      ""),
+    ("DR Congo Chess Federation",                "COD", "CD", "DR Congo",                 "FIDE Rating", "",                                      ""),
+    ("Ivory Coast Chess Federation",             "CIV", "CI", "Côte d'Ivoire",            "FIDE Rating", "",                                      ""),
+    ("Djibouti Chess Federation",                "DJI", "DJ", "Djibouti",                 "FIDE Rating", "",                                      ""),
+    ("Egyptian Chess Federation",                "EGY", "EG", "Egypt",                    "FIDE Rating", "https://www.egyptchess.com",             ""),
+    ("Equatorial Guinea Chess Federation",       "GEQ", "GQ", "Equatorial Guinea",        "FIDE Rating", "",                                      ""),
+    ("Eritrea Chess Federation",                 "ERI", "ER", "Eritrea",                  "FIDE Rating", "",                                      ""),
+    ("Ethiopian Chess Federation",               "ETH", "ET", "Ethiopia",                 "FIDE Rating", "",                                      ""),
+    ("Gabonese Chess Federation",                "GAB", "GA", "Gabon",                    "FIDE Rating", "",                                      ""),
+    ("Gambia Chess Association",                 "GAM", "GM", "Gambia",                   "FIDE Rating", "",                                      ""),
+    ("Ghana Chess Federation",                   "GHA", "GH", "Ghana",                    "FIDE Rating", "",                                      ""),
+    ("Guinea Chess Federation",                  "GUI", "GN", "Guinea",                   "FIDE Rating", "",                                      ""),
+    ("Guinea-Bissau Chess Federation",           "GBS", "GW", "Guinea-Bissau",            "FIDE Rating", "",                                      ""),
+    ("Kenya Chess Federation",                   "KEN", "KE", "Kenya",                    "FIDE Rating", "https://www.kenyachess.co.ke",           ""),
+    ("Lesotho Chess Association",                "LES", "LS", "Lesotho",                  "FIDE Rating", "",                                      ""),
+    ("Liberian Chess Federation",                "LBR", "LR", "Liberia",                  "FIDE Rating", "",                                      ""),
+    ("Libyan Chess Federation",                  "LBA", "LY", "Libya",                    "FIDE Rating", "",                                      ""),
+    ("Madagascar Chess Federation",              "MAD", "MG", "Madagascar",               "FIDE Rating", "",                                      ""),
+    ("Malawi Chess Federation",                  "MAW", "MW", "Malawi",                   "FIDE Rating", "",                                      ""),
+    ("Mali Chess Federation",                    "MLI", "ML", "Mali",                     "FIDE Rating", "",                                      ""),
+    ("Mauritanian Chess Federation",             "MTN", "MR", "Mauritania",               "FIDE Rating", "",                                      ""),
+    ("Mauritius Chess Federation",               "MRI", "MU", "Mauritius",                "FIDE Rating", "",                                      ""),
+    ("Royal Moroccan Chess Federation",          "MAR", "MA", "Morocco",                  "FIDE Rating", "https://www.royalechecs.ma",             ""),
+    ("Mozambique Chess Federation",              "MOZ", "MZ", "Mozambique",               "FIDE Rating", "",                                      ""),
+    ("Chess Federation of Namibia",              "NAM", "NA", "Namibia",                  "FIDE Rating", "https://www.namibiachess.org",           "https://www.namibiachess.org/tournaments"),
+    ("Niger Chess Federation",                   "NIG", "NE", "Niger",                    "FIDE Rating", "",                                      ""),
+    ("Nigerian Chess Federation",                "NGR", "NG", "Nigeria",                  "FIDE Rating", "https://www.nigeriachess.com",           ""),
+    ("Rwanda Chess Federation",                  "RWA", "RW", "Rwanda",                   "FIDE Rating", "",                                      ""),
+    ("São Tomé and Príncipe Chess Federation",   "STP", "ST", "São Tomé and Príncipe",    "FIDE Rating", "",                                      ""),
+    ("Senegalese Chess Federation",              "SEN", "SN", "Senegal",                  "FIDE Rating", "",                                      ""),
+    ("Seychelles Chess Federation",              "SEY", "SC", "Seychelles",               "FIDE Rating", "",                                      ""),
+    ("Sierra Leone Chess Federation",            "SLE", "SL", "Sierra Leone",             "FIDE Rating", "",                                      ""),
+    ("Somali Chess Federation",                  "SOM", "SO", "Somalia",                  "FIDE Rating", "",                                      ""),
+    ("South African Chess Federation",           "RSA", "ZA", "South Africa",             "FIDE Rating", "https://www.chesssa.co.za",              "https://www.chesssa.co.za/tournaments"),
+    ("South Sudan Chess Federation",             "SSD", "SS", "South Sudan",              "FIDE Rating", "",                                      ""),
+    ("Sudan Chess Federation",                   "SUD", "SD", "Sudan",                    "FIDE Rating", "",                                      ""),
+    ("Eswatini Chess Federation",                "SWZ", "SZ", "Eswatini",                 "FIDE Rating", "",                                      ""),
+    ("Tanzania Chess Association",               "TAN", "TZ", "Tanzania",                 "FIDE Rating", "",                                      ""),
+    ("Togo Chess Federation",                    "TOG", "TG", "Togo",                     "FIDE Rating", "",                                      ""),
+    ("Tunisian Chess Federation",                "TUN", "TN", "Tunisia",                  "FIDE Rating", "https://www.fide.tn",                    ""),
+    ("Uganda Chess Federation",                  "UGA", "UG", "Uganda",                   "FIDE Rating", "",                                      ""),
+    ("Zambia Chess Federation",                  "ZAM", "ZM", "Zambia",                   "FIDE Rating", "",                                      ""),
+    ("Zimbabwe Chess Federation",                "ZIM", "ZW", "Zimbabwe",                 "FIDE Rating", "",                                      ""),
+
+    # ── AMERICAS ────────────────────────────────────────────────────────────
+    ("Argentine Chess Federation",               "ARG", "AR", "Argentina",                "FIDE Rating", "https://www.ajedrezargentino.com.ar",    ""),
+    ("Bahamas Chess Federation",                 "BAH", "BS", "Bahamas",                  "FIDE Rating", "",                                      ""),
+    ("Barbados Chess Federation",                "BAR", "BB", "Barbados",                 "FIDE Rating", "",                                      ""),
+    ("Belize Chess Federation",                  "BLZ", "BZ", "Belize",                   "FIDE Rating", "",                                      ""),
+    ("Bolivian Chess Federation",                "BOL", "BO", "Bolivia",                  "FIDE Rating", "",                                      ""),
+    ("Brazilian Chess Confederation",            "BRA", "BR", "Brazil",                   "FIDE Rating", "https://www.cbx.org.br",                 ""),
+    ("Chilean Chess Federation",                 "CHI", "CL", "Chile",                    "FIDE Rating", "https://www.ajedreztotal.cl",             ""),
+    ("Colombian Chess Federation",               "COL", "CO", "Colombia",                 "FIDE Rating", "https://www.fecodaz.org",                 ""),
+    ("Costa Rica Chess Federation",              "CRC", "CR", "Costa Rica",               "FIDE Rating", "",                                      ""),
+    ("Cuban Chess Federation",                   "CUB", "CU", "Cuba",                     "FIDE Rating", "",                                      ""),
+    ("Dominican Republic Chess Federation",      "DOM", "DO", "Dominican Republic",       "FIDE Rating", "",                                      ""),
+    ("Ecuadorian Chess Federation",              "ECU", "EC", "Ecuador",                  "FIDE Rating", "",                                      ""),
+    ("El Salvador Chess Federation",             "ESA", "SV", "El Salvador",              "FIDE Rating", "",                                      ""),
+    ("Guatemala Chess Federation",               "GUA", "GT", "Guatemala",                "FIDE Rating", "",                                      ""),
+    ("Guyana Chess Federation",                  "GUY", "GY", "Guyana",                   "FIDE Rating", "",                                      ""),
+    ("Haiti Chess Federation",                   "HAI", "HT", "Haiti",                    "FIDE Rating", "",                                      ""),
+    ("Honduras Chess Federation",                "HON", "HN", "Honduras",                 "FIDE Rating", "",                                      ""),
+    ("Jamaica Chess Federation",                 "JAM", "JM", "Jamaica",                  "FIDE Rating", "",                                      ""),
+    ("Mexican Chess Federation",                 "MEX", "MX", "Mexico",                   "FIDE Rating", "https://www.fmaj.org",                   ""),
+    ("Nicaragua Chess Federation",               "NCA", "NI", "Nicaragua",                "FIDE Rating", "",                                      ""),
+    ("Panama Chess Federation",                  "PAN", "PA", "Panama",                   "FIDE Rating", "",                                      ""),
+    ("Paraguay Chess Federation",                "PAR", "PY", "Paraguay",                 "FIDE Rating", "",                                      ""),
+    ("Peruvian Chess Federation",                "PER", "PE", "Peru",                     "FIDE Rating", "https://www.ajedrezperu.com",             ""),
+    ("Puerto Rico Chess Federation",             "PUR", "PR", "Puerto Rico",              "FIDE Rating", "",                                      ""),
+    ("Suriname Chess Federation",                "SUR", "SR", "Suriname",                 "FIDE Rating", "",                                      ""),
+    ("Trinidad & Tobago Chess Association",      "TTO", "TT", "Trinidad & Tobago",        "FIDE Rating", "",                                      ""),
+    ("Uruguayan Chess Association",              "URU", "UY", "Uruguay",                  "FIDE Rating", "https://www.ajedrezuruguay.org",          ""),
+    ("Venezuela Chess Federation",               "VEN", "VE", "Venezuela",                "FIDE Rating", "",                                      ""),
+
+    # ── ASIA ────────────────────────────────────────────────────────────────
+    ("Afghanistan Chess Federation",             "AFG", "AF", "Afghanistan",              "FIDE Rating", "",                                      ""),
+    ("Bangladesh Chess Federation",              "BAN", "BD", "Bangladesh",               "FIDE Rating", "",                                      ""),
+    ("Bhutan Chess Federation",                  "BHU", "BT", "Bhutan",                   "FIDE Rating", "",                                      ""),
+    ("Cambodia Chess Federation",                "CAM", "KH", "Cambodia",                 "FIDE Rating", "",                                      ""),
+    ("Chinese Chess Association",                "CHN", "CN", "China",                    "FIDE Rating", "https://www.chess.org.cn",               ""),
+    ("Chinese Taipei Chess Association",         "TPE", "TW", "Chinese Taipei",           "FIDE Rating", "",                                      ""),
+    ("Hong Kong Chess Federation",               "HKG", "HK", "Hong Kong",                "FIDE Rating", "https://www.hkchess.com",                "https://www.hkchess.com/events"),
+    ("All India Chess Federation",               "IND", "IN", "India",                    "FIDE Rating", "https://www.aicf.in",                    "https://www.aicf.in/tournaments"),
+    ("Indonesian Chess Association",             "INA", "ID", "Indonesia",                "FIDE Rating", "https://www.percasi.or.id",              ""),
+    ("Japan Chess Association",                  "JPN", "JP", "Japan",                    "FIDE Rating", "https://www.jca.or.jp",                  ""),
+    ("Kazakhstan Chess Federation",              "KAZ", "KZ", "Kazakhstan",               "FIDE Rating", "https://chess.kz",                       ""),
+    ("Kyrgyzstan Chess Federation",              "KGZ", "KG", "Kyrgyzstan",               "FIDE Rating", "",                                      ""),
+    ("Lao Chess Federation",                     "LAO", "LA", "Laos",                     "FIDE Rating", "",                                      ""),
+    ("Macau Chess Federation",                   "MAC", "MO", "Macau",                    "FIDE Rating", "",                                      ""),
+    ("Malaysian Chess Federation",               "MAS", "MY", "Malaysia",                 "FIDE Rating", "https://www.malaysiachess.org",           ""),
+    ("Maldives Chess Federation",                "MDV", "MV", "Maldives",                 "FIDE Rating", "",                                      ""),
+    ("Mongolian Chess Federation",               "MGL", "MN", "Mongolia",                 "FIDE Rating", "https://www.chess.mn",                   ""),
+    ("Myanmar Chess Federation",                 "MYA", "MM", "Myanmar",                  "FIDE Rating", "",                                      ""),
+    ("Nepal Chess Association",                  "NEP", "NP", "Nepal",                    "FIDE Rating", "",                                      ""),
+    ("North Korea Chess Federation",             "PRK", "KP", "North Korea",              "FIDE Rating", "",                                      ""),
+    ("Pakistan Chess Federation",                "PAK", "PK", "Pakistan",                 "FIDE Rating", "https://www.pakistanchessfederation.com", ""),
+    ("National Chess Federation of Philippines", "PHI", "PH", "Philippines",              "FIDE Rating", "https://www.ncfp.com.ph",                ""),
+    ("Singapore Chess Federation",               "SGP", "SG", "Singapore",                "FIDE Rating", "https://www.singaporechess.org.sg",      "https://www.singaporechess.org.sg/tournaments"),
+    ("Korea Chess Federation",                   "KOR", "KR", "South Korea",              "FIDE Rating", "https://www.chess.or.kr",                ""),
+    ("Sri Lanka Chess Federation",               "SRI", "LK", "Sri Lanka",                "FIDE Rating", "",                                      ""),
+    ("Tajikistan Chess Federation",              "TJK", "TJ", "Tajikistan",               "FIDE Rating", "",                                      ""),
+    ("Chess Association of Thailand",            "THA", "TH", "Thailand",                 "FIDE Rating", "https://www.thachess.com",               ""),
+    ("Timor-Leste Chess Federation",             "TLS", "TL", "Timor-Leste",              "FIDE Rating", "",                                      ""),
+    ("Turkmenistan Chess Federation",            "TKM", "TM", "Turkmenistan",             "FIDE Rating", "",                                      ""),
+    ("Uzbekistan Chess Federation",              "UZB", "UZ", "Uzbekistan",               "FIDE Rating", "https://chess.uz",                       ""),
+    ("Vietnam Chess Federation",                 "VIE", "VN", "Vietnam",                  "FIDE Rating", "https://www.chess.org.vn",               ""),
+
+    # ── EUROPE ──────────────────────────────────────────────────────────────
+    ("Albanian Chess Federation",                "ALB", "AL", "Albania",                  "FIDE Rating", "",                                      ""),
+    ("Andorra Chess Federation",                 "AND", "AD", "Andorra",                  "FIDE Rating", "",                                      ""),
+    ("Armenian Chess Federation",                "ARM", "AM", "Armenia",                  "FIDE Rating", "https://www.chessfed.am",               ""),
+    ("Austrian Chess Federation",                "AUT", "AT", "Austria",                  "FIDE Rating", "https://www.schachbund.at",             ""),
+    ("Azerbaijan Chess Federation",              "AZE", "AZ", "Azerbaijan",               "FIDE Rating", "https://www.azchess.az",                ""),
+    ("Belarusian Chess Federation",              "BLR", "BY", "Belarus",                  "FIDE Rating", "https://chess.by",                      ""),
+    ("Belgian Chess Federation",                 "BEL", "BE", "Belgium",                  "FIDE Rating", "https://www.frbe-kbsb-ksb.be",          ""),
+    ("Chess Federation of Bosnia & Herzegovina", "BIH", "BA", "Bosnia & Herzegovina",     "FIDE Rating", "",                                      ""),
+    ("Bulgarian Chess Federation",               "BUL", "BG", "Bulgaria",                 "FIDE Rating", "https://www.bgchess.com",               ""),
+    ("Croatian Chess Federation",                "CRO", "HR", "Croatia",                  "FIDE Rating", "https://www.hrs.hr",                    ""),
+    ("Cyprus Chess Federation",                  "CYP", "CY", "Cyprus",                   "FIDE Rating", "https://www.cyprussachess.org",         ""),
+    ("Czech Chess Federation",                   "CZE", "CZ", "Czech Republic",           "FIDE Rating", "https://www.chess.cz",                  "https://www.chess.cz/souteze"),
+    ("Danish Chess Federation",                  "DEN", "DK", "Denmark",                  "FIDE Rating", "https://www.skak.dk",                   ""),
+    ("Chess Federation of England",              "ENG", "GB", "United Kingdom",           "ECF Rating",  "https://www.englishchess.org.uk",       "https://www.englishchess.org.uk/events/"),
+    ("Estonian Chess Federation",                "EST", "EE", "Estonia",                  "FIDE Rating", "https://www.male.ee",                   ""),
+    ("Faroe Islands Chess Federation",           "FAI", "FO", "Faroe Islands",            "FIDE Rating", "",                                      ""),
+    ("Finnish Chess Federation",                 "FIN", "FI", "Finland",                  "FIDE Rating", "https://www.chess.fi",                  ""),
+    ("Georgian Chess Federation",                "GEO", "GE", "Georgia",                  "FIDE Rating", "https://www.georgianfide.com",          ""),
+    ("Gibraltar Chess Association",              "GIB", "GI", "Gibraltar",                "FIDE Rating", "https://www.gibchess.com",              ""),
+    ("Hellenic Chess Federation",                "GRE", "GR", "Greece",                   "FIDE Rating", "https://www.chess.gr",                  ""),
+    ("Hungarian Chess Federation",               "HUN", "HU", "Hungary",                  "FIDE Rating", "https://www.chess.hu",                  ""),
+    ("Icelandic Chess Federation",               "ISL", "IS", "Iceland",                  "FIDE Rating", "https://www.skak.is",                   ""),
+    ("Chess Ireland",                            "IRL", "IE", "Ireland",                  "FIDE Rating", "https://www.icu.ie",                    "https://www.icu.ie/tournaments"),
+    ("Israel Chess Federation",                  "ISR", "IL", "Israel",                   "FIDE Rating", "https://www.chess.org.il",              ""),
+    ("Italian Chess Federation",                 "ITA", "IT", "Italy",                    "FIDE Rating", "https://www.federscacchi.it",           ""),
+    ("Kosovo Chess Federation",                  "KOS", "XK", "Kosovo",                   "FIDE Rating", "",                                      ""),
+    ("Latvian Chess Federation",                 "LAT", "LV", "Latvia",                   "FIDE Rating", "https://www.sahafederacija.lv",         ""),
+    ("Liechtenstein Chess Federation",           "LIE", "LI", "Liechtenstein",            "FIDE Rating", "",                                      ""),
+    ("Lithuanian Chess Federation",              "LTU", "LT", "Lithuania",                "FIDE Rating", "https://www.chess.lt",                  ""),
+    ("Luxembourg Chess Federation",              "LUX", "LU", "Luxembourg",               "FIDE Rating", "",                                      ""),
+    ("Malta Chess Federation",                   "MLT", "MT", "Malta",                    "FIDE Rating", "https://www.maltachess.com",            ""),
+    ("Moldovan Chess Federation",                "MDA", "MD", "Moldova",                  "FIDE Rating", "",                                      ""),
+    ("Monaco Chess Club",                        "MON", "MC", "Monaco",                   "FIDE Rating", "",                                      ""),
+    ("Montenegrin Chess Federation",             "MNE", "ME", "Montenegro",               "FIDE Rating", "",                                      ""),
+    ("Royal Dutch Chess Federation",             "NED", "NL", "Netherlands",              "FIDE Rating", "https://www.schaakbond.nl",             ""),
+    ("North Macedonia Chess Federation",         "MKD", "MK", "North Macedonia",          "FIDE Rating", "",                                      ""),
+    ("Norwegian Chess Federation",               "NOR", "NO", "Norway",                   "FIDE Rating", "https://www.sjakk.no",                  ""),
+    ("Polish Chess Federation",                  "POL", "PL", "Poland",                   "FIDE Rating", "https://www.pzszach.pl",                ""),
+    ("Portuguese Chess Federation",              "POR", "PT", "Portugal",                 "FIDE Rating", "https://www.fpx.pt",                    ""),
+    ("Romanian Chess Federation",                "ROU", "RO", "Romania",                  "FIDE Rating", "https://www.frsh.ro",                   ""),
+    ("Russian Chess Federation",                 "RUS", "RU", "Russia",                   "FIDE Rating", "https://www.chess-russia.ru",           ""),
+    ("San Marino Chess Federation",              "SMR", "SM", "San Marino",               "FIDE Rating", "",                                      ""),
+    ("Scottish Chess",                           "SCO", "GB", "United Kingdom",           "FIDE Rating", "https://www.scottishchess.org.uk",      "https://www.scottishchess.org.uk/events"),
+    ("Chess Federation of Serbia",               "SRB", "RS", "Serbia",                   "FIDE Rating", "https://www.sahsavez.rs",               ""),
+    ("Slovak Chess Federation",                  "SVK", "SK", "Slovakia",                 "FIDE Rating", "https://www.chess.sk",                  ""),
+    ("Chess Federation of Slovenia",             "SLO", "SI", "Slovenia",                 "FIDE Rating", "https://www.sahist.si",                 ""),
+    ("Spanish Chess Federation",                 "ESP", "ES", "Spain",                    "FIDE Rating", "https://www.feda.es",                   "https://www.feda.es/torneos"),
+    ("Swedish Chess Federation",                 "SWE", "SE", "Sweden",                   "FIDE Rating", "https://www.schack.se",                 ""),
+    ("Swiss Chess Federation",                   "SUI", "CH", "Switzerland",              "FIDE Rating", "https://www.swisschess.ch",             "https://www.swisschess.ch/turniere.html"),
+    ("Turkish Chess Federation",                 "TUR", "TR", "Turkey",                   "FIDE Rating", "https://www.tsf.org.tr",                ""),
+    ("Ukrainian Chess Federation",               "UKR", "UA", "Ukraine",                  "FIDE Rating", "https://chess.ua",                      ""),
+    ("Chess Wales",                              "WLS", "GB", "United Kingdom",           "FIDE Rating", "https://www.chesswales.org",            ""),
+
+    # ── MIDDLE EAST ─────────────────────────────────────────────────────────
+    ("Bahrain Chess Federation",                 "BRN", "BH", "Bahrain",                  "FIDE Rating", "",                                      ""),
+    ("Iranian Chess Federation",                 "IRI", "IR", "Iran",                     "FIDE Rating", "https://www.irichess.ir",               ""),
+    ("Iraqi Chess Federation",                   "IRQ", "IQ", "Iraq",                     "FIDE Rating", "",                                      ""),
+    ("Jordan Chess Federation",                  "JOR", "JO", "Jordan",                   "FIDE Rating", "",                                      ""),
+    ("Kuwait Chess Federation",                  "KUW", "KW", "Kuwait",                   "FIDE Rating", "",                                      ""),
+    ("Lebanese Chess Federation",                "LIB", "LB", "Lebanon",                  "FIDE Rating", "",                                      ""),
+    ("Oman Chess Association",                   "OMA", "OM", "Oman",                     "FIDE Rating", "",                                      ""),
+    ("Palestinian Chess Federation",             "PLE", "PS", "Palestine",                "FIDE Rating", "",                                      ""),
+    ("Qatar Chess Association",                  "QAT", "QA", "Qatar",                    "FIDE Rating", "https://www.qca-chess.qa",              ""),
+    ("Saudi Arabian Chess Federation",           "KSA", "SA", "Saudi Arabia",             "FIDE Rating", "https://www.chess.org.sa",              ""),
+    ("Syrian Chess Federation",                  "SYR", "SY", "Syria",                    "FIDE Rating", "",                                      ""),
+    ("UAE Chess Federation",                     "UAE", "AE", "United Arab Emirates",     "FIDE Rating", "https://www.uaechess.ae",               ""),
+    ("Yemen Chess Federation",                   "YEM", "YE", "Yemen",                    "FIDE Rating", "",                                      ""),
+
+    # ── OCEANIA ─────────────────────────────────────────────────────────────
+    ("Fiji Chess Federation",                    "FIJ", "FJ", "Fiji",                     "FIDE Rating", "",                                      ""),
+    ("Guam Chess Federation",                    "GUM", "GU", "Guam",                     "FIDE Rating", "",                                      ""),
+    ("New Zealand Chess Federation",             "NZL", "NZ", "New Zealand",              "FIDE Rating", "https://www.chess.org.nz",              "https://www.chess.org.nz/tournaments"),
+    ("Papua New Guinea Chess Federation",        "PNG", "PG", "Papua New Guinea",         "FIDE Rating", "",                                      ""),
+    ("Solomon Islands Chess Federation",         "SOL", "SB", "Solomon Islands",          "FIDE Rating", "",                                      ""),
+    ("Vanuatu Chess Federation",                 "VAN", "VU", "Vanuatu",                  "FIDE Rating", "",                                      ""),
+]
+
+
+def _seed_all_federations(c) -> int:
+    """Insert any FIDE member federation not yet in the table. Returns number added."""
+    existing = {row[0] for row in c.execute("SELECT abbreviation FROM chess_federations").fetchall()}
+    to_insert = [f for f in _ALL_FEDERATIONS if f[1] not in existing]
+    if to_insert:
+        c.executemany(
+            "INSERT INTO chess_federations (name,abbreviation,country_code,country_name,rating_system,website_url,tournaments_url,active,display_order) "
+            "VALUES (?,?,?,?,?,?,?,1,0)",
+            to_insert,
+        )
+    return len(to_insert)
 DB_FILE = os.environ.get("DB_FILE", "/data/mychessrating.db" if os.path.isdir("/data") else "mychessrating.db")
 
 import hashlib
@@ -279,6 +495,9 @@ def init_db():
             "INSERT INTO federation_cities (federation_id, city_name, region) VALUES (?, ?, ?)",
             [(acf_id, city, region) for city, region in acf_cities]
         )
+
+    # Idempotent: add any FIDE member federations not yet present
+    _seed_all_federations(c)
 
     # Migrations for existing DBs
     for sql in [
@@ -993,6 +1212,347 @@ def get_research_player_by_id(player_id: int) -> Optional[Dict]:
     if not row:
         return None
     return dict(zip(['id','start_rank','name','title','fide_id','fide_rating','country','lichess_id','chessdotcom_id'], row))
+
+
+# ---------------------------------------------------------------------------
+# PGN Database
+# ---------------------------------------------------------------------------
+
+def init_pgn_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS pgn_organizers (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        lichess_id TEXT,
+        chesscom_id TEXT,
+        notes TEXT,
+        created_by INTEGER REFERENCES users(id),
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS pgn_sources (
+        id INTEGER PRIMARY KEY,
+        organizer_id INTEGER REFERENCES pgn_organizers(id),
+        source_type TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        tournament_name TEXT,
+        round_num INTEGER,
+        round_name TEXT,
+        lichess_tour_id TEXT,
+        lichess_round_id TEXT,
+        is_live INTEGER DEFAULT 0,
+        auto_refresh INTEGER DEFAULT 1,
+        last_fetched TEXT,
+        game_count INTEGER DEFAULT 0,
+        auto_discovered INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_sources_tour ON pgn_sources(lichess_tour_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_sources_round ON pgn_sources(lichess_round_id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS pgn_games (
+        id INTEGER PRIMARY KEY,
+        source_id INTEGER REFERENCES pgn_sources(id),
+        event TEXT,
+        site TEXT,
+        date TEXT,
+        round TEXT,
+        white TEXT,
+        black TEXT,
+        result TEXT,
+        white_elo INTEGER,
+        black_elo INTEGER,
+        eco TEXT,
+        opening TEXT,
+        time_control TEXT,
+        raw_pgn TEXT NOT NULL,
+        game_hash TEXT UNIQUE NOT NULL,
+        research_white_id INTEGER,
+        research_black_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_white ON pgn_games(white COLLATE NOCASE)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_black ON pgn_games(black COLLATE NOCASE)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_event ON pgn_games(event)')
+    conn.commit()
+    conn.close()
+
+init_pgn_db()
+
+# -- Organizers --
+
+def list_pgn_organizers() -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, name, lichess_id, chesscom_id, notes, created_at FROM pgn_organizers ORDER BY name"
+    ).fetchall()
+    conn.close()
+    return [dict(zip(['id','name','lichess_id','chesscom_id','notes','created_at'], r)) for r in rows]
+
+def add_pgn_organizer(name: str, lichess_id: str, chesscom_id: str, notes: str, created_by: int) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO pgn_organizers (name, lichess_id, chesscom_id, notes, created_by) VALUES (?,?,?,?,?)",
+        (name, lichess_id or None, chesscom_id or None, notes or None, created_by)
+    )
+    oid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return oid
+
+def delete_pgn_organizer(oid: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM pgn_organizers WHERE id=?", (oid,))
+    conn.commit()
+    conn.close()
+
+# -- Sources --
+
+def list_pgn_sources(organizer_id: int = None) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    if organizer_id:
+        rows = conn.execute(
+            "SELECT s.id, s.organizer_id, o.name as organizer_name, s.source_type, s.source_url, "
+            "s.tournament_name, s.round_num, s.round_name, s.lichess_tour_id, s.lichess_round_id, "
+            "s.is_live, s.auto_refresh, s.last_fetched, s.game_count, s.auto_discovered, s.created_at "
+            "FROM pgn_sources s LEFT JOIN pgn_organizers o ON o.id=s.organizer_id "
+            "WHERE s.organizer_id=? ORDER BY s.tournament_name, s.round_num",
+            (organizer_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT s.id, s.organizer_id, o.name as organizer_name, s.source_type, s.source_url, "
+            "s.tournament_name, s.round_num, s.round_name, s.lichess_tour_id, s.lichess_round_id, "
+            "s.is_live, s.auto_refresh, s.last_fetched, s.game_count, s.auto_discovered, s.created_at "
+            "FROM pgn_sources s LEFT JOIN pgn_organizers o ON o.id=s.organizer_id "
+            "ORDER BY s.created_at DESC"
+        ).fetchall()
+    conn.close()
+    cols = ['id','organizer_id','organizer_name','source_type','source_url','tournament_name',
+            'round_num','round_name','lichess_tour_id','lichess_round_id',
+            'is_live','auto_refresh','last_fetched','game_count','auto_discovered','created_at']
+    return [dict(zip(cols, r)) for r in rows]
+
+def get_pgn_source(sid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT id, organizer_id, source_type, source_url, tournament_name, round_num, round_name, "
+        "lichess_tour_id, lichess_round_id, is_live, auto_refresh, last_fetched, game_count "
+        "FROM pgn_sources WHERE id=?", (sid,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return dict(zip(['id','organizer_id','source_type','source_url','tournament_name','round_num',
+                     'round_name','lichess_tour_id','lichess_round_id','is_live','auto_refresh',
+                     'last_fetched','game_count'], row))
+
+def upsert_pgn_source(source_type: str, source_url: str, tournament_name: str,
+                       round_num: int, round_name: str, lichess_tour_id: str,
+                       lichess_round_id: str, is_live: bool, organizer_id: int = None,
+                       auto_discovered: bool = False) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    existing = None
+    if lichess_round_id:
+        existing = conn.execute(
+            "SELECT id FROM pgn_sources WHERE lichess_round_id=?", (lichess_round_id,)
+        ).fetchone()
+    if not existing:
+        existing = conn.execute(
+            "SELECT id FROM pgn_sources WHERE source_url=? AND round_num=?",
+            (source_url, round_num or 0)
+        ).fetchone()
+    if existing:
+        conn.execute(
+            "UPDATE pgn_sources SET tournament_name=?, is_live=?, lichess_tour_id=?, "
+            "lichess_round_id=?, round_name=? WHERE id=?",
+            (tournament_name, int(is_live), lichess_tour_id or None,
+             lichess_round_id or None, round_name, existing[0])
+        )
+        conn.commit()
+        conn.close()
+        return existing[0]
+    cur = conn.execute(
+        "INSERT INTO pgn_sources (organizer_id, source_type, source_url, tournament_name, "
+        "round_num, round_name, lichess_tour_id, lichess_round_id, is_live, auto_discovered) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (organizer_id, source_type, source_url, tournament_name,
+         round_num or 0, round_name, lichess_tour_id or None,
+         lichess_round_id or None, int(is_live), int(auto_discovered))
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+def update_pgn_source_fetched(sid: int, game_count: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(
+        "UPDATE pgn_sources SET last_fetched=datetime('now'), game_count=? WHERE id=?",
+        (game_count, sid)
+    )
+    conn.commit()
+    conn.close()
+
+def list_live_pgn_sources() -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, source_type, source_url, lichess_round_id, tournament_name, round_num "
+        "FROM pgn_sources WHERE is_live=1 AND auto_refresh=1"
+    ).fetchall()
+    conn.close()
+    return [dict(zip(['id','source_type','source_url','lichess_round_id','tournament_name','round_num'], r))
+            for r in rows]
+
+def delete_pgn_source(sid: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM pgn_games WHERE source_id=?", (sid,))
+    conn.execute("DELETE FROM pgn_sources WHERE id=?", (sid,))
+    conn.commit()
+    conn.close()
+
+# -- Games --
+
+def _match_research_player(conn, name: str) -> Optional[int]:
+    """Fuzzy match a PGN player name against player_research."""
+    if not name:
+        return None
+    # Try exact match first
+    row = conn.execute(
+        "SELECT id FROM player_research WHERE name=? COLLATE NOCASE LIMIT 1", (name,)
+    ).fetchone()
+    if row:
+        return row[0]
+    # Try last name match (PGN: "Last, First" or "First Last")
+    parts = [p.strip() for p in name.split(',')]
+    last = parts[0]
+    if len(last) >= 3:
+        row = conn.execute(
+            "SELECT id FROM player_research WHERE name LIKE ? COLLATE NOCASE LIMIT 1",
+            (f"{last}%",)
+        ).fetchone()
+        if row:
+            return row[0]
+    return None
+
+def insert_pgn_games(games: list) -> int:
+    """Insert games (list of dicts from pgn_to_game_dict), skip duplicates. Returns count inserted."""
+    if not games:
+        return 0
+    conn = sqlite3.connect(DB_FILE)
+    inserted = 0
+    for g in games:
+        try:
+            rw = _match_research_player(conn, g.get('white', ''))
+            rb = _match_research_player(conn, g.get('black', ''))
+            conn.execute(
+                "INSERT OR IGNORE INTO pgn_games "
+                "(source_id, event, site, date, round, white, black, result, "
+                "white_elo, black_elo, eco, opening, time_control, raw_pgn, game_hash, "
+                "research_white_id, research_black_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (g['source_id'], g.get('event',''), g.get('site',''), g.get('date',''),
+                 g.get('round',''), g.get('white',''), g.get('black',''), g.get('result',''),
+                 g.get('white_elo'), g.get('black_elo'), g.get('eco',''), g.get('opening',''),
+                 g.get('time_control',''), g['raw_pgn'], g['game_hash'], rw, rb)
+            )
+            if conn.execute("SELECT changes()").fetchone()[0]:
+                inserted += 1
+        except Exception:
+            pass
+    conn.commit()
+    conn.close()
+    return inserted
+
+def count_pgn_games_for_source(sid: int) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    n = conn.execute("SELECT COUNT(*) FROM pgn_games WHERE source_id=?", (sid,)).fetchone()[0]
+    conn.close()
+    return n
+
+def list_pgn_games(search: str = '', event: str = '', research_only: bool = False,
+                   limit: int = 200, offset: int = 0) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    wheres, params = [], []
+    if search:
+        wheres.append("(white LIKE ? OR black LIKE ?)")
+        params += [f'%{search}%', f'%{search}%']
+    if event:
+        wheres.append("event LIKE ?")
+        params.append(f'%{event}%')
+    if research_only:
+        wheres.append("(research_white_id IS NOT NULL OR research_black_id IS NOT NULL)")
+    where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+    rows = conn.execute(
+        f"SELECT g.id, g.event, g.site, g.date, g.round, g.white, g.black, g.result, "
+        f"g.white_elo, g.black_elo, g.eco, g.opening, g.research_white_id, g.research_black_id, "
+        f"s.tournament_name, s.source_type "
+        f"FROM pgn_games g LEFT JOIN pgn_sources s ON s.id=g.source_id "
+        f"{where_sql} ORDER BY g.date DESC, g.id DESC LIMIT ? OFFSET ?",
+        params + [limit, offset]
+    ).fetchall()
+    conn.close()
+    cols = ['id','event','site','date','round','white','black','result','white_elo','black_elo',
+            'eco','opening','research_white_id','research_black_id','tournament_name','source_type']
+    return [dict(zip(cols, r)) for r in rows]
+
+def count_pgn_games(search: str = '', event: str = '', research_only: bool = False) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    wheres, params = [], []
+    if search:
+        wheres.append("(white LIKE ? OR black LIKE ?)")
+        params += [f'%{search}%', f'%{search}%']
+    if event:
+        wheres.append("event LIKE ?")
+        params.append(f'%{event}%')
+    if research_only:
+        wheres.append("(research_white_id IS NOT NULL OR research_black_id IS NOT NULL)")
+    where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+    n = conn.execute(f"SELECT COUNT(*) FROM pgn_games {where_sql}", params).fetchone()[0]
+    conn.close()
+    return n
+
+def get_pgn_game_raw(gid: int) -> Optional[str]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT raw_pgn FROM pgn_games WHERE id=?", (gid,)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def download_pgn_games(search: str = '', event: str = '',
+                        research_only: bool = False) -> str:
+    """Return all matching games concatenated as a single PGN string."""
+    conn = sqlite3.connect(DB_FILE)
+    wheres, params = [], []
+    if search:
+        wheres.append("(white LIKE ? OR black LIKE ?)")
+        params += [f'%{search}%', f'%{search}%']
+    if event:
+        wheres.append("event LIKE ?")
+        params.append(f'%{event}%')
+    if research_only:
+        wheres.append("(research_white_id IS NOT NULL OR research_black_id IS NOT NULL)")
+    where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
+    rows = conn.execute(
+        f"SELECT raw_pgn FROM pgn_games {where_sql} ORDER BY date DESC, id DESC",
+        params
+    ).fetchall()
+    conn.close()
+    return '\n\n'.join(r[0] for r in rows)
+
+def list_pgn_events() -> List[str]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT DISTINCT event FROM pgn_games WHERE event != '' ORDER BY event"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def lichess_round_already_known(lichess_round_id: str) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT id FROM pgn_sources WHERE lichess_round_id=?", (lichess_round_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
 
 
 def ensure_admin_exists():

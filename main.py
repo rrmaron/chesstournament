@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 import time
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
@@ -50,11 +51,17 @@ from database import (
     list_federations, list_countries, get_federations_for_country,
     get_federation, create_federation, update_federation, delete_federation,
     list_cities, create_city, delete_city, update_user_location,
+    list_pgn_organizers, add_pgn_organizer, delete_pgn_organizer,
+    list_pgn_sources, get_pgn_source, upsert_pgn_source, update_pgn_source_fetched,
+    list_live_pgn_sources, delete_pgn_source,
+    insert_pgn_games, list_pgn_games, count_pgn_games, get_pgn_game_raw, download_pgn_games,
+    list_pgn_events, count_pgn_games_for_source, lichess_round_already_known,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
 from notify import send_verification_email, send_verification_sms, send_password_reset_email
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
+import pgn_harvester as ph
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
@@ -1200,13 +1207,20 @@ async def api_cities(federation_id: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/admin/federations", response_class=HTMLResponse)
-async def admin_federations_page(request: Request, _user: dict = Depends(require_admin)):
-    feds = list_federations()
-    feds_with_cities = []
-    for f in feds:
-        feds_with_cities.append({**f, "cities": list_cities(f["id"])})
+async def admin_federations_page(request: Request, q: str = "", _user: dict = Depends(require_admin)):
+    all_feds = list_federations()
+    total_count = len(all_feds)
+    if q:
+        q_lower = q.lower()
+        feds = [f for f in all_feds if q_lower in f["name"].lower() or q_lower in f["country_name"].lower()
+                or q_lower in (f["abbreviation"] or "").lower() or q_lower in (f["country_code"] or "").lower()]
+    else:
+        feds = all_feds
+    # Only load cities when searching (avoids 190+ queries on unfiltered view)
+    feds_with_cities = [{**f, "cities": list_cities(f["id"]) if q else []} for f in feds]
     return templates.TemplateResponse(request=request, name="admin_federations.html",
-                                      context={"federations": feds_with_cities})
+                                      context={"federations": feds_with_cities, "q": q,
+                                               "total_count": total_count})
 
 @app.post("/admin/federations")
 async def admin_add_federation(
@@ -3347,6 +3361,332 @@ async def research_player_info(
             result["chessdotcom"] = None
 
     return JSONResponse(result)
+
+
+# ---------------------------------------------------------------------------
+# PGN Database
+# ---------------------------------------------------------------------------
+
+@app.get("/pgn-database", response_class=HTMLResponse)
+async def pgn_database_page(
+    request: Request,
+    search: str = '',
+    event: str = '',
+    research_only: int = 0,
+    page: int = 1,
+    user: dict = Depends(require_login),
+):
+    limit = 50
+    offset = (page - 1) * limit
+    games = list_pgn_games(search=search, event=event,
+                            research_only=bool(research_only), limit=limit, offset=offset)
+    total = count_pgn_games(search=search, event=event, research_only=bool(research_only))
+    return templates.TemplateResponse(request=request, name="pgn_database.html", context={
+        "organizers": list_pgn_organizers(),
+        "sources":    list_pgn_sources(),
+        "games":      games,
+        "total":      total,
+        "page":       page,
+        "pages":      max(1, (total + limit - 1) // limit),
+        "search":     search,
+        "event":      event,
+        "research_only": research_only,
+        "events":     list_pgn_events(),
+    })
+
+
+@app.post("/pgn-database/add-organizer")
+async def pgn_add_organizer(
+    request: Request,
+    name: str = Form(...),
+    lichess_id: str = Form(''),
+    chesscom_id: str = Form(''),
+    notes: str = Form(''),
+    user: dict = Depends(require_login),
+):
+    add_pgn_organizer(name.strip(), lichess_id.strip(), chesscom_id.strip(),
+                      notes.strip(), user['id'])
+    return RedirectResponse("/pgn-database", status_code=303)
+
+
+@app.post("/pgn-database/delete-organizer/{oid}")
+async def pgn_delete_organizer(oid: int, user: dict = Depends(require_login)):
+    delete_pgn_organizer(oid)
+    return RedirectResponse("/pgn-database", status_code=303)
+
+
+@app.post("/pgn-database/import")
+async def pgn_import(
+    request: Request,
+    url: str = Form(...),
+    organizer_id: str = Form(''),
+    user: dict = Depends(require_login),
+):
+    url = url.strip()
+    org_id = int(organizer_id) if organizer_id.strip().isdigit() else None
+    source_type = ph.detect_source_type(url)
+    msg, err = '', ''
+
+    try:
+        if source_type == 'lichess':
+            info = ph.parse_lichess_broadcast_url(url)
+            round_id = info.get('round_id', '')
+            if not round_id:
+                raise ValueError("Could not extract round ID from URL")
+
+            # Fetch round metadata to get the broadcast tournament ID
+            round_meta = await ph.lichess_round_info(round_id)
+            tour_id = ''
+            tour_name = ''
+            round_name = ''
+            is_live = False
+
+            if round_meta:
+                tour = round_meta.get('tour', {})
+                rd   = round_meta.get('round', {})
+                tour_id   = tour.get('id', '')
+                tour_name = tour.get('name', info.get('tour_slug', '').replace('-', ' ').title())
+                round_name = rd.get('name', f"Round {rd.get('round', '')}")
+                is_live = not rd.get('finished', True)
+            else:
+                tour_name = info.get('tour_slug', '').replace('-', ' ').title()
+
+            # Determine round number from name or slug
+            rnum_m = re.search(r'(\d+)', info.get('round_slug', ''))
+            round_num = int(rnum_m.group(1)) if rnum_m else 0
+
+            # If we have the tour ID, discover & import ALL rounds
+            total_imported = 0
+            rounds_imported = 0
+            if tour_id:
+                all_rounds = await ph.lichess_broadcast_all_rounds(tour_id)
+                for rd in all_rounds:
+                    rid = rd.get('id', '')
+                    if not rid:
+                        continue
+                    rname = rd.get('name', '')
+                    rnum_m2 = re.search(r'(\d+)', rname)
+                    rnum2 = int(rnum_m2.group(1)) if rnum_m2 else 0
+                    rd_live = not rd.get('finished', True)
+                    rd_url = f"https://lichess.org/broadcast/{info['tour_slug']}/{info['round_slug'].rsplit('-',1)[0]}-{rnum2}/{rid}"
+                    sid = upsert_pgn_source('lichess', rd_url, tour_name,
+                                            rnum2, rname, tour_id, rid, rd_live, org_id)
+                    n = await ph.import_lichess_round(rid, sid, insert_pgn_games)
+                    update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+                    total_imported += n
+                    rounds_imported += 1
+                msg = f"Imported {total_imported} games across {rounds_imported} rounds of '{tour_name}'"
+            else:
+                # Fall back to single round
+                sid = upsert_pgn_source('lichess', url, tour_name,
+                                        round_num, round_name, tour_id, round_id, is_live, org_id)
+                n = await ph.import_lichess_round(round_id, sid, insert_pgn_games)
+                update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+                msg = f"Imported {n} games from {round_name or 'round'} of '{tour_name}'"
+
+        elif source_type == 'chesscom':
+            tour_url_id = ph.parse_chesscom_tournament_url(url)
+            if not tour_url_id:
+                raise ValueError("Could not extract tournament ID from Chess.com URL")
+            tinfo = await ph.chesscom_tournament_info(tour_url_id)
+            tour_name = tinfo.get('name', tour_url_id)
+            rounds_list = tinfo.get('rounds', [])
+            total_imported = 0
+            for i, _ in enumerate(rounds_list, start=1):
+                sid = upsert_pgn_source('chesscom', url, tour_name, i,
+                                        f"Round {i}", '', '', False, org_id)
+                raw = await ph.chesscom_round_pgn(tour_url_id, i)
+                n = await ph.import_pgn_text(raw, sid, insert_pgn_games)
+                update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+                total_imported += n
+            msg = f"Imported {total_imported} games from Chess.com '{tour_name}'"
+
+        elif source_type == 'chessresults':
+            raw = await ph.chessresults_pgn(url)
+            if not raw:
+                raise ValueError("No PGN found at this chess-results URL (tournament may not have PGN available)")
+            sid = upsert_pgn_source('chessresults', url, '', 0, '', '', '', False, org_id)
+            n = await ph.import_pgn_text(raw, sid, insert_pgn_games)
+            update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+            msg = f"Imported {n} games from chess-results"
+
+        else:  # direct
+            raw = await ph.fetch_direct_pgn(url)
+            if not raw or '[Event' not in raw:
+                raise ValueError("URL did not return valid PGN content")
+            sid = upsert_pgn_source('direct', url, '', 0, '', '', '', False, org_id)
+            n = await ph.import_pgn_text(raw, sid, insert_pgn_games)
+            update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+            msg = f"Imported {n} games from direct URL"
+
+    except Exception as exc:
+        err = str(exc)
+
+    limit = 50
+    games = list_pgn_games(limit=limit, offset=0)
+    total = count_pgn_games()
+    return templates.TemplateResponse(request=request, name="pgn_database.html", context={
+        "organizers": list_pgn_organizers(),
+        "sources":    list_pgn_sources(),
+        "games":      games,
+        "total":      total,
+        "page":       1,
+        "pages":      max(1, (total + limit - 1) // limit),
+        "search":     '',
+        "event":      '',
+        "research_only": 0,
+        "events":     list_pgn_events(),
+        "import_msg": msg,
+        "import_err": err,
+    })
+
+
+@app.post("/pgn-database/refresh/{sid}")
+async def pgn_refresh_source(sid: int, user: dict = Depends(require_login)):
+    src = get_pgn_source(sid)
+    if not src:
+        raise HTTPException(404)
+    try:
+        if src['source_type'] == 'lichess' and src.get('lichess_round_id'):
+            await ph.import_lichess_round(src['lichess_round_id'], sid, insert_pgn_games)
+        elif src['source_type'] == 'chessresults':
+            raw = await ph.chessresults_pgn(src['source_url'])
+            await ph.import_pgn_text(raw, sid, insert_pgn_games)
+        else:
+            raw = await ph.fetch_direct_pgn(src['source_url'])
+            await ph.import_pgn_text(raw, sid, insert_pgn_games)
+        update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    return RedirectResponse("/pgn-database", status_code=303)
+
+
+@app.post("/pgn-database/delete-source/{sid}")
+async def pgn_delete_source(sid: int, user: dict = Depends(require_login)):
+    delete_pgn_source(sid)
+    return RedirectResponse("/pgn-database", status_code=303)
+
+
+@app.get("/pgn-database/download")
+async def pgn_download(
+    search: str = '',
+    event: str = '',
+    research_only: int = 0,
+    user: dict = Depends(require_login),
+):
+    raw = download_pgn_games(search=search, event=event, research_only=bool(research_only))
+    fname = "games.pgn"
+    if event:
+        fname = event.replace(' ', '_')[:40] + ".pgn"
+    elif search:
+        fname = search.replace(' ', '_')[:40] + ".pgn"
+    return Response(
+        content=raw,
+        media_type="application/x-chess-pgn",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.post("/pgn-database/harvest-organizer/{oid}")
+async def pgn_harvest_organizer(oid: int, user: dict = Depends(require_login)):
+    """Discover and import all broadcasts by this organizer's Lichess ID."""
+    organizers = list_pgn_organizers()
+    org = next((o for o in organizers if o['id'] == oid), None)
+    if not org:
+        raise HTTPException(404)
+    lichess_id = org.get('lichess_id', '')
+    if not lichess_id:
+        return RedirectResponse("/pgn-database?err=No+Lichess+ID+set", status_code=303)
+
+    broadcasts = await ph.lichess_organizer_broadcasts(lichess_id)
+    discovered = 0
+    for bc in broadcasts:
+        tour = bc.get('tour', {})
+        rounds = bc.get('rounds', [])
+        tour_id   = tour.get('id', '')
+        tour_name = tour.get('name', '')
+        for rd in rounds:
+            rid = rd.get('id', '')
+            if not rid or lichess_round_already_known(rid):
+                continue
+            rname   = rd.get('name', '')
+            rd_live = not rd.get('finished', True)
+            rnum_m  = re.search(r'(\d+)', rname)
+            rnum    = int(rnum_m.group(1)) if rnum_m else 0
+            rd_url  = f"https://lichess.org/broadcast/{tour_id}/{rid}"
+            sid = upsert_pgn_source('lichess', rd_url, tour_name, rnum,
+                                    rname, tour_id, rid, rd_live, oid, auto_discovered=True)
+            await ph.import_lichess_round(rid, sid, insert_pgn_games)
+            update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+            discovered += 1
+
+    return RedirectResponse(f"/pgn-database?msg=Discovered+{discovered}+rounds", status_code=303)
+
+
+@app.get("/pgn-database/game/{gid}")
+async def pgn_game_raw(gid: int, user: dict = Depends(require_login)):
+    raw = get_pgn_game_raw(gid)
+    if raw is None:
+        raise HTTPException(404, "Game not found")
+    return Response(content=raw, media_type="text/plain")
+
+
+# Background harvest task
+
+async def _harvest_loop():
+    """Refresh live sources every 60 s; discover new organizer broadcasts every 10 min."""
+    counter = 0
+    while True:
+        await asyncio.sleep(60)
+        counter += 1
+        try:
+            # Refresh all live sources
+            for src in list_live_pgn_sources():
+                try:
+                    if src['source_type'] == 'lichess' and src.get('lichess_round_id'):
+                        await ph.import_lichess_round(
+                            src['lichess_round_id'], src['id'], insert_pgn_games
+                        )
+                        update_pgn_source_fetched(src['id'], count_pgn_games_for_source(src['id']))
+                except Exception as e:
+                    logging.warning("harvest live source %s: %s", src['id'], e)
+
+            # Every 10 minutes check organizers for new broadcasts
+            if counter % 10 == 0:
+                for org in list_pgn_organizers():
+                    if not org.get('lichess_id'):
+                        continue
+                    try:
+                        broadcasts = await ph.lichess_organizer_broadcasts(org['lichess_id'])
+                        for bc in broadcasts:
+                            tour = bc.get('tour', {})
+                            rounds = bc.get('rounds', [])
+                            tour_id   = tour.get('id', '')
+                            tour_name = tour.get('name', '')
+                            for rd in rounds:
+                                rid = rd.get('id', '')
+                                if not rid or lichess_round_already_known(rid):
+                                    continue
+                                rname   = rd.get('name', '')
+                                rd_live = not rd.get('finished', True)
+                                rnum_m  = re.search(r'(\d+)', rname)
+                                rnum    = int(rnum_m.group(1)) if rnum_m else 0
+                                rd_url  = f"https://lichess.org/broadcast/{tour_id}/{rid}"
+                                sid = upsert_pgn_source(
+                                    'lichess', rd_url, tour_name, rnum,
+                                    rname, tour_id, rid, rd_live, org['id'], auto_discovered=True
+                                )
+                                await ph.import_lichess_round(rid, sid, insert_pgn_games)
+                                update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+                    except Exception as e:
+                        logging.warning("harvest organizer %s: %s", org['lichess_id'], e)
+        except Exception as e:
+            logging.warning("harvest loop: %s", e)
+
+
+@app.on_event("startup")
+async def start_harvest_loop():
+    asyncio.create_task(_harvest_loop())
 
 
 if __name__ == "__main__":
