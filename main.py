@@ -3503,18 +3503,22 @@ async def pgn_import(
                     continue
                 rdata = await ph.chesscom_room_data(room_slug)
                 rounds = rdata.get('rounds', [])
+                api_games = rdata.get('games', [])
                 if not rounds:
                     continue
-                round_pgns = await ph.chesscom_event_pgns(room_id, rounds)
+                section_name = f"{event_name} — {room_name}"
+                round_pgns = await ph.chesscom_event_pgns(
+                    room_id, rounds, api_games=api_games, event_name=section_name
+                )
                 for rnd_name, pgn_text in round_pgns:
                     rnum_m = re.search(r'(\d+)', rnd_name)
                     rnum = int(rnum_m.group(1)) if rnum_m else 0
-                    section_name = f"{event_name} — {room_name}"
                     sid = upsert_pgn_source(
                         'chesscom_event', url, section_name,
                         rnum, rnd_name, '', '', False, org_id
                     )
-                    n = await ph.import_pgn_text(pgn_text, sid, insert_pgn_games)
+                    n = await ph.import_pgn_text(pgn_text, sid, insert_pgn_games,
+                                                 event_override=section_name)
                     update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
                     total_imported += n
                 rooms_done += 1

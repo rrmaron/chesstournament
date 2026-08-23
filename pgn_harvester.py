@@ -317,43 +317,93 @@ async def _chessbomb_source_url(room_id: int) -> str:
             log.warning("_chessbomb_source_url(%s): %s", room_id, e)
     return ''
 
-async def chesscom_event_pgns(room_id: int, rounds: list[dict]) -> list[tuple[str, str]]:
+def chesscom_api_games_to_pgn(api_games: list[dict], rounds: list[dict], event_name: str) -> str:
+    """Build minimal PGN from chess.com room API game objects (no moves, headers + result only)."""
+    rounds_by_id = {r['id']: r for r in rounds}
+    pgns = []
+    for g in api_games:
+        w = g.get('white', {})
+        b = g.get('black', {})
+        meta = g.get('metadata', {})
+        white_name = w.get('name', '') or meta.get('sourceWhiteName', '')
+        black_name = b.get('name', '') or meta.get('sourceBlackName', '')
+        if not white_name or not black_name:
+            continue
+        result = g.get('result') or '*'
+        if result not in ('1-0', '0-1', '1/2-1/2', '*'):
+            result = '*'
+        rnd = rounds_by_id.get(g.get('roundId', 0), {})
+        round_slug = rnd.get('slug', '?')
+        date_raw = g.get('startAt') or g.get('createAt') or ''
+        date = date_raw[:10].replace('-', '.') if date_raw else '????.??.??'
+        lines = [
+            f'[Event "{event_name}"]',
+            f'[Site "{g.get("site", "")}"]',
+            f'[Date "{date}"]',
+            f'[Round "{round_slug}"]',
+            f'[White "{white_name}"]',
+            f'[Black "{black_name}"]',
+            f'[Result "{result}"]',
+        ]
+        if g.get('whiteElo'):
+            lines.append(f'[WhiteElo "{g["whiteElo"]}"]')
+        if g.get('blackElo'):
+            lines.append(f'[BlackElo "{g["blackElo"]}"]')
+        if w.get('title'):
+            lines.append(f'[WhiteTitle "{w["title"]}"]')
+        if b.get('title'):
+            lines.append(f'[BlackTitle "{b["title"]}"]')
+        lines += ['', result]
+        pgns.append('\n'.join(lines))
+    return '\n\n'.join(pgns)
+
+
+async def chesscom_event_pgns(
+    room_id: int, rounds: list[dict],
+    api_games: list[dict] | None = None, event_name: str = '',
+) -> list[tuple[str, str]]:
     """Download PGN text for all rounds of a chess.com event room.
 
     Returns list of (round_name, pgn_text) tuples.
-    Uses clono.no sourceUrl when available; falls back to empty string.
+    Uses clono.no sourceUrl when available; falls back to header-only PGN
+    built from api_games when api_games is provided and clono.no is unavailable.
     """
     source_url = await _chessbomb_source_url(room_id)
-    if not source_url:
-        log.warning("chesscom_event_pgns: no sourceUrl for room %s", room_id)
-        return []
 
     # Detect clono.no pattern: https://clono.no/pgn/{event_id}/{section_id}/{round}/games.pgn
-    clono_m = re.match(r'https://clono\.no/pgn/(\d+)/(\d+)/\d+/games\.pgn', source_url)
-    if not clono_m:
-        log.info("chesscom_event_pgns: unknown source URL format: %s", source_url)
-        return []
+    clono_m = re.match(r'https://clono\.no/pgn/(\d+)/(\d+)/\d+/games\.pgn', source_url) if source_url else None
 
-    event_id, section_id = clono_m.groups()
-    results = []
-    async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}, follow_redirects=True) as client:
-        for rnd in sorted(rounds, key=lambda r: r.get('slug', '0')):
-            round_slug = rnd.get('slug', '')
-            try:
-                round_num = int(round_slug)
-            except ValueError:
-                continue
-            pgn_url = f"https://clono.no/pgn/{event_id}/{section_id}/{round_num}/games.pgn"
-            try:
-                r = await client.get(pgn_url)
-                if r.status_code == 200 and '[Event' in r.text:
-                    results.append((f"Round {round_slug}", r.text))
-                else:
-                    log.info("chesscom_event_pgns: %s -> %s", pgn_url, r.status_code)
-            except Exception as e:
-                log.warning("chesscom_event_pgns round %s: %s", round_slug, e)
-            await asyncio.sleep(0.2)
-    return results
+    if clono_m:
+        event_id, section_id = clono_m.groups()
+        results = []
+        async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}, follow_redirects=True) as client:
+            for rnd in sorted(rounds, key=lambda r: r.get('slug', '0')):
+                round_slug = rnd.get('slug', '')
+                try:
+                    round_num = int(round_slug)
+                except ValueError:
+                    continue
+                pgn_url = f"https://clono.no/pgn/{event_id}/{section_id}/{round_num}/games.pgn"
+                try:
+                    r = await client.get(pgn_url)
+                    if r.status_code == 200 and '[Event' in r.text:
+                        results.append((f"Round {round_slug}", r.text))
+                    else:
+                        log.info("chesscom_event_pgns: %s -> %s", pgn_url, r.status_code)
+                except Exception as e:
+                    log.warning("chesscom_event_pgns round %s: %s", round_slug, e)
+                await asyncio.sleep(0.2)
+        return results
+
+    # No clono.no — fall back to header-only PGN from API game objects
+    if api_games:
+        log.info("chesscom_event_pgns: no sourceUrl for room %s, using API fallback", room_id)
+        pgn_text = chesscom_api_games_to_pgn(api_games, rounds, event_name)
+        if pgn_text:
+            return [("All rounds", pgn_text)]
+
+    log.warning("chesscom_event_pgns: no data available for room %s", room_id)
+    return []
 
 # ---------------------------------------------------------------------------
 # Chess-results PGN
@@ -402,7 +452,10 @@ async def import_lichess_round(round_id: str, source_id: int, db_insert_fn, roun
     games = [g for g in games if g]
     return db_insert_fn(games)
 
-async def import_pgn_text(raw: str, source_id: int, db_insert_fn) -> int:
+async def import_pgn_text(raw: str, source_id: int, db_insert_fn, event_override: str = '') -> int:
     games = [pgn_to_game_dict(g, source_id) for g in split_pgn(raw)]
     games = [g for g in games if g]
+    if event_override:
+        for g in games:
+            g['event'] = event_override
     return db_insert_fn(games)
