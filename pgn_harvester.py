@@ -91,9 +91,27 @@ def parse_chesscom_tournament_url(url: str) -> Optional[str]:
 # Lichess API
 # ---------------------------------------------------------------------------
 
+def _extract_chapter_ids(html: str) -> list[str]:
+    """Extract Lichess study chapter IDs from broadcast round HTML."""
+    m = re.search(r'"chapters"\s*:\s*(\[)', html)
+    if not m:
+        return []
+    start = m.start(1)
+    depth, i = 0, start
+    while i < len(html):
+        c = html[i]
+        if c == '[': depth += 1
+        elif c == ']':
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+    return re.findall(r'"id"\s*:\s*"([A-Za-z0-9]{8})"', html[start:i+1])
+
 async def lichess_round_pgn(round_id: str, round_url: str = '') -> str:
     """Fetch PGN for a Lichess broadcast round.
-    Uses the web URL + .pgn (reliable). Falls back to /api path if no URL given.
+    Tries web URL + .pgn first; if 403, falls back to chapter-by-chapter
+    download via the Lichess Study API (works even when bulk export is blocked).
     """
     if round_url:
         pgn_url = round_url.split('#')[0].rstrip('/') + '.pgn'
@@ -101,8 +119,23 @@ async def lichess_round_pgn(round_id: str, round_url: str = '') -> str:
         pgn_url = f"https://lichess.org/api/broadcast/round/{round_id}/pgn"
     async with httpx.AsyncClient(timeout=30, headers={'User-Agent': UA}, follow_redirects=True) as client:
         r = await client.get(pgn_url)
-        r.raise_for_status()
-        return r.text
+        if r.status_code == 200 and '[Event' in r.text:
+            return r.text
+
+        # Bulk export blocked — fall back to chapter-by-chapter via Study API
+        # Fetch round page HTML to discover chapter IDs
+        page_url = round_url.split('#')[0] if round_url else pgn_url.removesuffix('.pgn')
+        rp = await client.get(page_url)
+        if rp.status_code != 200:
+            return ''
+        chapter_ids = _extract_chapter_ids(rp.text)
+        pgns = []
+        for cid in chapter_ids:
+            rc = await client.get(f"https://lichess.org/api/study/{round_id}/{cid}.pgn")
+            if rc.status_code == 200 and '[Event' in rc.text:
+                pgns.append(rc.text)
+            await asyncio.sleep(0.1)
+        return '\n\n'.join(pgns)
 
 async def lichess_tour_id_from_round_page(round_url: str) -> str:
     """Scrape the broadcast round HTML to extract the tour ID."""
