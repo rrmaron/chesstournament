@@ -378,6 +378,8 @@ function restoreLiveRatings() {
 // ── Per-type helpers ───────────────────────────────────────────────────────────
 function gameRating(g, rType) {
   if (g.ratings && g.ratings[rType] != null) return g.ratings[rType];
+  // FIDE only rates against FIDE-rated opponents — never fall back to the USCF rating
+  if (rType === 'fide') return null;
   // g.rating covers standard and backward-compat for blitz/quick imported games
   if (g.rating != null) return g.rating;
   // Two-pass: use opponent's post-event rating when they were unrated pre-tournament
@@ -731,8 +733,11 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       const expP        = expValP !== null ? expValP.toFixed(3) : '—';
       const pendRatingCells = types.map(rt => {
         const val = gameRating(g, rt);
-        return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px"
-                 value="${val || ''}" placeholder="Rating" min="100" max="3000"
+        const unratedFide = rt === 'fide' && val == null;
+        const ph    = unratedFide ? 'Unrated' : 'Rating';
+        const style = unratedFide ? 'max-width:80px;background:#fff3cd' : 'max-width:80px';
+        return `<td><input type="number" class="form-control form-control-sm" style="${style}"
+                 value="${val || ''}" placeholder="${ph}" min="100" max="3000"
                  onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
       }).join('');
       const pendPhotoUrls = getPhotoUrls(g);
@@ -801,10 +806,13 @@ function renderGamesTable(ti, games, myRatings, calcs) {
       const val = gameRating(g, rt);
       // Two-pass: opponent was unrated pre-event; using post-event rating
       const usingPost = val != null && !(g.ratings && g.ratings[rt] != null) && g.rating == null && g.postRating != null;
+      const unratedFide = rt === 'fide' && val == null;
       const postStyle = usingPost ? ' border-color:#6c757d;background:#f8f9fa' : '';
+      const unratedStyle = unratedFide ? 'background:#fff3cd' : '';
       const postTitle = usingPost ? ' title="Post-event rating (opponent was unrated before this tournament)"' : '';
-      return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px;${postStyle}"
-                value="${val||''}" min="100" max="3000"${postTitle}
+      const unratedTitle = unratedFide ? ' title="Opponent has no FIDE rating — excluded from FIDE calculation"' : '';
+      return `<td><input type="number" class="form-control form-control-sm" style="max-width:80px;${postStyle}${unratedStyle}"
+                value="${val||''}" min="100" max="3000" placeholder="${unratedFide ? 'Unrated' : ''}"${postTitle}${unratedTitle}
                 onchange="updateGameRating(${ti},${gi},'${rt}',this.value)"></td>`;
     }).join('');
     const photoUrls = getPhotoUrls(g);
