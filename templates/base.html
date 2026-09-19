@@ -13,38 +13,43 @@
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
   <div class="container">
     <a class="navbar-brand" href="/">♟️ MyChessRating.com</a>
-    <div class="ms-auto d-flex align-items-center gap-3">
-      {% set u = request.session.get("user") %}
-      {% if u %}
-        <a class="nav-link text-light" href="/player-lookup">Player Lookup</a>
-        <a class="nav-link text-light" href="/uscf-calculator">USCF Calculator</a>
-        <div class="dropdown">
-          <a class="nav-link text-light dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Get a FIDE rating</a>
-          <ul class="dropdown-menu dropdown-menu-dark">
-            <li><a class="dropdown-item" href="/fide-calculator">Calculate initial FIDE rating</a></li>
-            <li><a class="dropdown-item" href="https://docs.google.com/forms/d/e/1FAIpQLSc60v_VmaEiYBG0uMWJJ46mMOVnPEzpw1b2kG5ZMcw_SOvQvg/viewform" target="_blank" rel="noopener">Get USA FIDE ID</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="/research-players">Research Advanced Players</a></li>
-          </ul>
+    {% set u = request.session.get("user") %}
+    {% if u %}
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar" aria-controls="mainNavbar" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="mainNavbar">
+        <div class="ms-auto d-flex flex-column flex-lg-row align-items-lg-center gap-lg-3 gap-2 mt-3 mt-lg-0">
+          <a class="nav-link text-light" href="/player-lookup">Player Lookup</a>
+          <a class="nav-link text-light" href="/uscf-calculator">USCF Calculator</a>
+          <div class="dropdown">
+            <a class="nav-link text-light dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Get a FIDE rating</a>
+            <ul class="dropdown-menu dropdown-menu-dark">
+              <li><a class="dropdown-item" href="/fide-calculator">Calculate initial FIDE rating</a></li>
+              <li><a class="dropdown-item" href="https://docs.google.com/forms/d/e/1FAIpQLSc60v_VmaEiYBG0uMWJJ46mMOVnPEzpw1b2kG5ZMcw_SOvQvg/viewform" target="_blank" rel="noopener">Get USA FIDE ID</a></li>
+              <li><hr class="dropdown-divider"></li>
+              <li><a class="dropdown-item" href="/research-players">Research Advanced Players</a></li>
+            </ul>
+          </div>
+          <a class="btn btn-warning btn-sm fw-semibold" href="https://mychessstyle.ai" target="_blank" rel="noopener">Evaluate My Chess Style</a>
+          <a class="nav-link text-light" href="/profile">My Profile</a>
+          {% if u.role in ("td", "admin") %}
+            <a class="nav-link text-light" href="/tournaments">Tournaments</a>
+          {% endif %}
+          {% if u.role == "admin" %}
+            <a class="nav-link text-light" href="/users">Users</a>
+            <a class="nav-link text-light" href="/uscf-db">USCF DB</a>
+            <a class="nav-link text-light" href="/admin/tournaments">Featured</a>
+            <a class="nav-link text-light" href="/admin/federations">Federations</a>
+            <a class="nav-link text-light" href="/pgn-database">PGN DB</a>
+          {% endif %}
+          <span class="text-light small">{{ u.username }} <span class="badge bg-secondary">{{ u.role }}</span></span>
+          <form method="post" action="/logout" class="d-inline">
+            <button class="btn btn-outline-light btn-sm">Logout</button>
+          </form>
         </div>
-        <a class="btn btn-warning btn-sm fw-semibold" href="https://mychessstyle.ai" target="_blank" rel="noopener">Evaluate My Chess Style</a>
-        <a class="nav-link text-light" href="/profile">My Profile</a>
-        {% if u.role in ("td", "admin") %}
-          <a class="nav-link text-light" href="/tournaments">Tournaments</a>
-        {% endif %}
-        {% if u.role == "admin" %}
-          <a class="nav-link text-light" href="/users">Users</a>
-          <a class="nav-link text-light" href="/uscf-db">USCF DB</a>
-          <a class="nav-link text-light" href="/admin/tournaments">Featured</a>
-          <a class="nav-link text-light" href="/admin/federations">Federations</a>
-          <a class="nav-link text-light" href="/pgn-database">PGN DB</a>
-        {% endif %}
-        <span class="text-light small">{{ u.username }} <span class="badge bg-secondary">{{ u.role }}</span></span>
-        <form method="post" action="/logout" class="d-inline">
-          <button class="btn btn-outline-light btn-sm">Logout</button>
-        </form>
-      {% endif %}
-    </div>
+      </div>
+    {% endif %}
   </div>
 </nav>
 <div class="container">
