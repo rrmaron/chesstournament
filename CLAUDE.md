@@ -52,13 +52,12 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
 ```
+
+Tests run against a throwaway temp-file SQLite DB (see `tests/conftest.py`) — they never touch the real app data or make real Stripe/network calls.
 
 ## Architecture Overview
 

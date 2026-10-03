@@ -1,5 +1,7 @@
 import asyncio
+import ipaddress
 import logging
+import socket
 import uuid
 import time
 from fastapi import FastAPI, Form, Request, HTTPException, UploadFile, File, Depends
@@ -98,6 +100,51 @@ def _verify_cancel_token(token: str, max_age: int = 86400) -> Optional[int]:
     except (BadSignature, SignatureExpired, ValueError, TypeError):
         return None
 
+# Unguessable receipt token for the registration success/receipt page — a
+# sequential player_id alone must never be enough to view someone else's
+# registration (name/email/phone/payment status).
+_view_serializer = URLSafeTimedSerializer(SECRET_KEY, salt="register-view")
+
+def _make_view_token(player_id: int) -> str:
+    return _view_serializer.dumps(player_id)
+
+def _verify_view_token(token: str) -> Optional[int]:
+    try:
+        return int(_view_serializer.loads(token))
+    except (BadSignature, SignatureExpired, ValueError, TypeError):
+        return None
+
+# ---------------------------------------------------------------------------
+# Simple in-memory brute-force lockout for login / OTP verification.
+#
+# Single-process in-memory state is good enough here: the app runs as one
+# uvicorn worker (see Dockerfile) and the goal is slowing down automated
+# guessing, not perfect distributed rate limiting.
+# ---------------------------------------------------------------------------
+_RATE_LIMIT_THRESHOLD = 5
+_RATE_LIMIT_WINDOW = 15 * 60  # seconds
+_failed_attempts: dict = {}  # key -> (count, window_start_monotonic)
+
+def _rate_limit_allows(key: str) -> bool:
+    entry = _failed_attempts.get(key)
+    if not entry:
+        return True
+    count, window_start = entry
+    if time.monotonic() - window_start > _RATE_LIMIT_WINDOW:
+        del _failed_attempts[key]
+        return True
+    return count < _RATE_LIMIT_THRESHOLD
+
+def _rate_limit_record_failure(key: str):
+    now = time.monotonic()
+    count, window_start = _failed_attempts.get(key, (0, now))
+    if now - window_start > _RATE_LIMIT_WINDOW:
+        count, window_start = 0, now
+    _failed_attempts[key] = (count + 1, window_start)
+
+def _rate_limit_clear(key: str):
+    _failed_attempts.pop(key, None)
+
 # ---------------------------------------------------------------------------
 # Simple in-memory TTL cache for external API responses
 # ---------------------------------------------------------------------------
@@ -178,10 +225,18 @@ async def login_submit(
     password: str = Form(...),
     next: str = Form("/"),
 ):
+    client_ip = request.client.host if request.client else "unknown"
+    rl_key = f"login:{client_ip}:{username.strip().lower()}"
+    if not _rate_limit_allows(rl_key):
+        return templates.TemplateResponse(request=request, name="login.html",
+                                          context={"next": next, "error": "Too many failed attempts. Please try again in a few minutes."},
+                                          status_code=429)
     user = get_user_by_username(username)
     if not user or not verify_password(password, user["password_hash"]):
+        _rate_limit_record_failure(rl_key)
         return templates.TemplateResponse(request=request, name="login.html",
                                           context={"next": next, "error": "Invalid username or password"})
+    _rate_limit_clear(rl_key)
     if user.get("status") == "pending":
         # Account exists but not verified — resend OTP and send to verify page
         contact = user.get("email") or user.get("phone")
@@ -316,12 +371,22 @@ async def verify_submit(request: Request, code: str = Form(...)):
     if not uid:
         return RedirectResponse("/register", status_code=303)
 
+    rl_key = f"verify:{uid}"
+    if not _rate_limit_allows(rl_key):
+        return templates.TemplateResponse(request=request, name="verify.html", context={
+            "contact": request.session.get("pending_contact"),
+            "channel": request.session.get("pending_channel"),
+            "error": "Too many incorrect attempts. Request a new code.",
+        }, status_code=429)
+
     if not check_and_consume_token(uid, code.strip()):
+        _rate_limit_record_failure(rl_key)
         return templates.TemplateResponse(request=request, name="verify.html", context={
             "contact": request.session.get("pending_contact"),
             "channel": request.session.get("pending_channel"),
             "error": "Invalid or expired code. Request a new one.",
         })
+    _rate_limit_clear(rl_key)
 
     activate_user(uid)
     from database import DB_FILE
@@ -1319,14 +1384,54 @@ async def admin_delete_city(cid: int, _user: dict = Depends(require_admin)):
     delete_city(cid)
     return RedirectResponse("/admin/federations", status_code=303)
 
+def _is_safe_external_url(url: str) -> bool:
+    """Reject URLs that would make the server fetch something internal
+    (loopback, private/link-local ranges, cloud metadata endpoints, etc)."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    hostname = parsed.hostname.lower()
+    if hostname in ("localhost",) or hostname.endswith(".localhost"):
+        return False
+    try:
+        addrs = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return False
+    for family, _, _, _, sockaddr in addrs:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or
+                ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False
+    return True
+
+
+async def _fetch_url_safely(url: str, max_redirects: int = 5) -> httpx.Response:
+    """Like httpx's follow_redirects=True, but re-validates every hop so a
+    redirect can't be used to bounce the request at an internal address."""
+    async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
+        for _ in range(max_redirects + 1):
+            if not _is_safe_external_url(url):
+                raise ValueError("Blocked request to an internal or non-HTTP(S) address")
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"})
+            location = resp.headers.get("location")
+            if resp.is_redirect and location:
+                url = str(httpx.URL(url).join(location))
+                continue
+            return resp
+    raise ValueError("Too many redirects")
+
+
 @app.get("/admin/fetch-url")
 async def admin_fetch_url(url: str, _user: dict = Depends(require_admin)):
     """Fetch a URL and return the page title for auto-fill when importing from external sources."""
-    if not url.startswith(("http://", "https://")):
+    if not url.startswith(("http://", "https://")) or not _is_safe_external_url(url):
         return JSONResponse({"error": "Invalid URL"}, status_code=400)
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
-            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"})
+        resp = await _fetch_url_safely(url)
         title_match = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
         title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
         # strip common suffixes like " - CaissaLive" or " | US Chess"
@@ -2387,15 +2492,39 @@ async def tournament_register_submit(
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
+
+    name = name.strip()
+    email = (email or "").strip() or None
+    phone = (phone or "").strip() or None
+    max_round = int(tournament.get("rounds") or 0)
+    requested_byes = sorted({r for r in requested_byes if isinstance(r, int) and 1 <= r <= max_round})
+
+    errors = []
+    if not name:
+        errors.append("Name is required.")
+    elif len(name) > 100:
+        errors.append("Name is too long (max 100 characters).")
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        errors.append("Please enter a valid email address.")
+    if phone and not re.match(r"^[0-9+\-() .]{7,20}$", phone):
+        errors.append("Please enter a valid phone number.")
+    if errors:
+        return templates.TemplateResponse(request=request, name="tournament_register.html", context={
+            "tournament": tournament,
+            "current_user": get_current_user(request),
+            "error": " ".join(errors),
+        }, status_code=400)
+
     entry_fee = float(tournament.get("entry_fee") or 0)
     local = lookup_uscf_member(uscf_id) if uscf_id else None
     expiry = local.get("expiry") if local else None
     player_id = register_player_public(
-        tid, name.strip(), uscf_id or None, rating or 0,
-        email or None, phone or None, fide_id or None, expiry,
+        tid, name, uscf_id or None, rating or 0,
+        email, phone, fide_id or None, expiry,
         requested_byes=requested_byes,
         payment_status="pending" if entry_fee > 0 else "waived",
     )
+    view_token = _make_view_token(player_id)
     if entry_fee > 0 and STRIPE_SECRET_KEY:
         stripe.api_key = STRIPE_SECRET_KEY
         base_url = str(request.base_url).rstrip("/")
@@ -2405,7 +2534,7 @@ async def tournament_register_submit(
                 "product_data": {"name": f"Entry fee: {tournament['name']}"},
                 "unit_amount": int(entry_fee * 100)}, "quantity": 1}],
             mode="payment",
-            success_url=f"{base_url}/tournament/{tid}/register/success?session_id={{CHECKOUT_SESSION_ID}}&player_id={player_id}",
+            success_url=f"{base_url}/tournament/{tid}/register/success?session_id={{CHECKOUT_SESSION_ID}}&player_id={player_id}&token={view_token}",
             cancel_url=f"{base_url}/tournament/{tid}/register/cancel?token={_make_cancel_token(player_id)}",
             customer_email=email or None,
             metadata={"player_id": str(player_id), "tournament_id": str(tid)},
@@ -2415,7 +2544,7 @@ async def tournament_register_submit(
         import logging
         logging.warning(f"[DEV] Stripe not configured — skipping payment for player {player_id}")
         update_player_payment(player_id, "waived")
-    return RedirectResponse(f"/tournament/{tid}/register/success?player_id={player_id}", status_code=303)
+    return RedirectResponse(f"/tournament/{tid}/register/success?player_id={player_id}&token={view_token}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -2448,8 +2577,14 @@ async def stripe_webhook(request: Request):
 
 
 @app.get("/tournament/{tid}/register/success", response_class=HTMLResponse)
-async def register_success(request: Request, tid: int, player_id: int, session_id: Optional[str] = None):
+async def register_success(request: Request, tid: int, player_id: int, token: Optional[str] = None, session_id: Optional[str] = None):
     import json as _json
+    # player_id is a sequential, guessable int — the signed token (handed out
+    # only to the person who just submitted this exact registration) is what
+    # actually authorizes viewing it, so no one can enumerate other players'
+    # names/contact info/payment status by walking player_id.
+    if not token or _verify_view_token(token) != player_id:
+        raise HTTPException(404)
     tournament = get_tournament(tid)
     player = get_player(player_id)
     if session_id and STRIPE_SECRET_KEY:
