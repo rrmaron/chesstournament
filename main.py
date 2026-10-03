@@ -62,9 +62,41 @@ from auth import get_current_user, require_login, require_td, require_admin
 from notify import send_verification_email, send_verification_sms, send_password_reset_email
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
 import pgn_harvester as ph
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if os.environ.get("FLY_APP_NAME"):
+        # Deployed on Fly.io with no SECRET_KEY set — refuse to start with a
+        # known, publicly-committed default that would let anyone forge
+        # signed session cookies (including admin sessions).
+        raise RuntimeError(
+            "SECRET_KEY environment variable must be set in production "
+            "(e.g. `fly secrets set SECRET_KEY=...`)"
+        )
+    logging.warning("SECRET_KEY not set — using insecure default for local development only")
+    SECRET_KEY = "dev-secret-key-change-in-production"
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
+    logging.error(
+        "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not — payment "
+        "confirmation relies solely on the payer's browser returning to the "
+        "success page and will be lost if it never does. Add a webhook "
+        "endpoint for /stripe/webhook in the Stripe dashboard and set "
+        "STRIPE_WEBHOOK_SECRET."
+    )
+
+_cancel_serializer = URLSafeTimedSerializer(SECRET_KEY, salt="register-cancel")
+
+def _make_cancel_token(player_id: int) -> str:
+    return _cancel_serializer.dumps(player_id)
+
+def _verify_cancel_token(token: str, max_age: int = 86400) -> Optional[int]:
+    try:
+        return int(_cancel_serializer.loads(token, max_age=max_age))
+    except (BadSignature, SignatureExpired, ValueError, TypeError):
+        return None
 
 # ---------------------------------------------------------------------------
 # Simple in-memory TTL cache for external API responses
@@ -2374,8 +2406,9 @@ async def tournament_register_submit(
                 "unit_amount": int(entry_fee * 100)}, "quantity": 1}],
             mode="payment",
             success_url=f"{base_url}/tournament/{tid}/register/success?session_id={{CHECKOUT_SESSION_ID}}&player_id={player_id}",
-            cancel_url=f"{base_url}/tournament/{tid}/register/cancel?player_id={player_id}",
+            cancel_url=f"{base_url}/tournament/{tid}/register/cancel?token={_make_cancel_token(player_id)}",
             customer_email=email or None,
+            metadata={"player_id": str(player_id), "tournament_id": str(tid)},
         )
         return RedirectResponse(session.url, status_code=303)
     elif entry_fee > 0:
@@ -2388,6 +2421,31 @@ async def tournament_register_submit(
 # ---------------------------------------------------------------------------
 # Stripe callbacks (no auth)
 # ---------------------------------------------------------------------------
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Source of truth for payment confirmation — fires server-to-server from
+    Stripe regardless of whether the payer's browser ever returns to
+    /register/success, unlike that route which only runs on a client redirect."""
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    if not STRIPE_WEBHOOK_SECRET:
+        logging.error("Received Stripe webhook but STRIPE_WEBHOOK_SECRET is not configured — rejecting")
+        raise HTTPException(status_code=500, detail="Webhook not configured")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+    except (ValueError, stripe.SignatureVerificationError):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"].to_dict()
+        if session.get("payment_status") == "paid":
+            player_id = (session.get("metadata") or {}).get("player_id")
+            if player_id:
+                update_player_payment(int(player_id), "paid", session.get("id"))
+
+    return JSONResponse({"status": "success"})
+
 
 @app.get("/tournament/{tid}/register/success", response_class=HTMLResponse)
 async def register_success(request: Request, tid: int, player_id: int, session_id: Optional[str] = None):
@@ -2413,9 +2471,15 @@ async def register_success(request: Request, tid: int, player_id: int, session_i
 
 
 @app.get("/tournament/{tid}/register/cancel")
-async def register_cancel(tid: int, player_id: Optional[int] = None):
+async def register_cancel(tid: int, token: Optional[str] = None):
+    player_id = _verify_cancel_token(token) if token else None
     if player_id:
-        delete_player(player_id)
+        player = get_player(player_id)
+        # Only delete the registration this token was actually issued for,
+        # still unpaid, and still belonging to this tournament — a valid
+        # signature alone isn't enough once the state it describes has moved on.
+        if player and player["tournament_id"] == tid and player["payment_status"] == "pending":
+            delete_player(player_id)
     return RedirectResponse(f"/tournament/{tid}/register?cancelled=1", status_code=303)
 
 
