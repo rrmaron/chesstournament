@@ -231,7 +231,7 @@ async def forbidden(request: Request, exc: HTTPException):
 # ---------------------------------------------------------------------------
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: str = "/"):
+def login_page(request: Request, next: str = "/"):
     user = get_current_user(request)
     if user:
         return RedirectResponse("/", status_code=303)
@@ -281,7 +281,7 @@ async def login_submit(
     return RedirectResponse(next if next.startswith("/") else "/", status_code=303)
 
 @app.post("/logout")
-async def logout(request: Request):
+def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
 
@@ -291,7 +291,7 @@ async def logout(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
+def register_page(request: Request):
     if get_current_user(request):
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(request=request, name="register.html", context={
@@ -378,7 +378,7 @@ async def register_submit(
     return RedirectResponse("/verify", status_code=303)
 
 @app.get("/verify", response_class=HTMLResponse)
-async def verify_page(request: Request):
+def verify_page(request: Request):
     if get_current_user(request):
         return RedirectResponse("/", status_code=303)
     if not request.session.get("pending_user_id"):
@@ -390,7 +390,7 @@ async def verify_page(request: Request):
     })
 
 @app.post("/verify", response_class=HTMLResponse)
-async def verify_submit(request: Request, code: str = Form(...)):
+def verify_submit(request: Request, code: str = Form(...)):
     uid = request.session.get("pending_user_id")
     if not uid:
         return RedirectResponse("/register", status_code=303)
@@ -447,7 +447,7 @@ async def verify_resend(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/forgot-password", response_class=HTMLResponse)
-async def forgot_password_page(request: Request):
+def forgot_password_page(request: Request):
     return templates.TemplateResponse(request=request, name="forgot_password.html", context={})
 
 @app.post("/forgot-password", response_class=HTMLResponse)
@@ -468,14 +468,14 @@ async def forgot_password_submit(request: Request, email: str = Form(...)):
                                       context={"sent": True, "message": msg})
 
 @app.get("/reset-password", response_class=HTMLResponse)
-async def reset_password_page(request: Request, token: str = ""):
+def reset_password_page(request: Request, token: str = ""):
     if not token:
         return RedirectResponse("/forgot-password", status_code=303)
     return templates.TemplateResponse(request=request, name="reset_password.html",
                                       context={"token": token})
 
 @app.post("/reset-password", response_class=HTMLResponse)
-async def reset_password_submit(
+def reset_password_submit(
     request: Request,
     token: str = Form(...),
     password: str = Form(...),
@@ -504,7 +504,7 @@ async def reset_password_submit(
 # ---------------------------------------------------------------------------
 
 @app.get("/users", response_class=HTMLResponse)
-async def users_page(request: Request, saved: Optional[str] = None, user: dict = Depends(require_admin)):
+def users_page(request: Request, saved: Optional[str] = None, user: dict = Depends(require_admin)):
     users = list_users()
     return templates.TemplateResponse(request=request, name="users.html", context={
         "users": users,
@@ -528,7 +528,7 @@ async def save_settings(
     return RedirectResponse("/users?saved=1", status_code=303)
 
 @app.post("/admin/settings/login-message")
-async def save_login_message(
+def save_login_message(
     login_message: str = Form(""),
     _user: dict = Depends(require_admin),
 ):
@@ -536,7 +536,7 @@ async def save_login_message(
     return RedirectResponse("/users?saved=1", status_code=303)
 
 @app.post("/users")
-async def create_user_route(
+def create_user_route(
     username: str = Form(...),
     password: str = Form(...),
     role: str = Form("viewer"),
@@ -549,13 +549,13 @@ async def create_user_route(
     return RedirectResponse("/users", status_code=303)
 
 @app.post("/users/{uid}/delete")
-async def delete_user_route(uid: int, current: dict = Depends(require_admin)):
+def delete_user_route(uid: int, current: dict = Depends(require_admin)):
     if uid != current["id"]:  # prevent self-deletion
         delete_user(uid)
     return RedirectResponse("/users", status_code=303)
 
 @app.post("/users/{uid}/password")
-async def change_password_route(
+def change_password_route(
     uid: int,
     new_password: str = Form(...),
     _user: dict = Depends(require_admin),
@@ -564,7 +564,7 @@ async def change_password_route(
     return RedirectResponse("/users", status_code=303)
 
 @app.post("/users/{uid}/edit")
-async def edit_user_route(
+def edit_user_route(
     uid: int,
     username: str = Form(...),
     email: Optional[str] = Form(None),
@@ -684,17 +684,17 @@ async def public_player_details(uscf_id: str = ""):
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, user: dict = Depends(require_login)):
+def home(request: Request, user: dict = Depends(require_login)):
     return RedirectResponse("/player-lookup", status_code=302)
 
 @app.get("/tournaments", response_class=HTMLResponse)
-async def tournaments_home(request: Request, user: dict = Depends(require_td)):
+def tournaments_home(request: Request, user: dict = Depends(require_td)):
     tournaments = get_tournaments()
     return templates.TemplateResponse(request=request, name="tournament_list.html",
                                       context={"tournaments": tournaments, "current_user": user})
 
 @app.post("/tournament")
-async def new_tournament(
+def new_tournament(
     name: str = Form(...),
     rounds: int = Form(5),
     system: str = Form("dutch"),
@@ -705,7 +705,7 @@ async def new_tournament(
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 @app.get("/tournament/{tid}", response_class=HTMLResponse)
-async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None,
+def tournament_detail(request: Request, tid: int, imported: Optional[int] = None,
                              unresolved: Optional[str] = None,
                              user: dict = Depends(require_login)):
     import json as _json
@@ -993,7 +993,7 @@ async def uscf_search(name: str = "", _user: dict = Depends(require_login)):
         return HTMLResponse(empty)
 
 @app.post("/tournament/{tid}/player")
-async def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
+def register_player(tid: int, name: str = Form(...), uscf_id: Optional[str] = Form(None),
                           rating: Optional[int] = Form(None), email: Optional[str] = Form(None),
                           fide_id: Optional[str] = Form(None), _user: dict = Depends(require_td)):
     add_player(tid, name, uscf_id, rating, email, fide_id or None)
@@ -1073,13 +1073,13 @@ async def import_players_csv(tid: int, file: UploadFile = File(...), _user: dict
     return RedirectResponse(url, status_code=303)
 
 @app.post("/player/{pid}/delete")
-async def remove_player(pid: int, _user: dict = Depends(require_td)):
+def remove_player(pid: int, _user: dict = Depends(require_td)):
     tid = delete_player(pid)
     return RedirectResponse(f"/tournament/{tid}" if tid else "/", status_code=303)
 
 # HTMX: Round table fragment
 @app.get("/tournament/{tid}/round/{round_num}/table", response_class=HTMLResponse)
-async def round_table_fragment(request: Request, tid: int, round_num: int,
+def round_table_fragment(request: Request, tid: int, round_num: int,
                                 user: dict = Depends(require_login)):
     tournament = get_tournament(tid)
     if not tournament:
@@ -1106,7 +1106,7 @@ async def submit_result_htmx(
     _user: dict = Depends(require_td),
 ):
     record_result(tid, round_num, white_id, black_id, result)
-    return await round_table_fragment(request, tid, round_num)
+    return round_table_fragment(request, tid, round_num)
 
 # Submit bye/forfeit
 @app.post("/tournament/{tid}/round/{round_num}/bye", response_class=HTMLResponse)
@@ -1125,7 +1125,7 @@ async def submit_bye(
         record_result(tid, round_num, player_id, opponent_id, result_str)
     else:
         record_result(tid, round_num, white_id=player_id, is_bye=True, bye_type=bye_type)
-    return await round_table_fragment(request, tid, round_num)
+    return round_table_fragment(request, tid, round_num)
 
 # Generate next round
 @app.post("/tournament/{tid}/next-round", response_class=HTMLResponse)
@@ -1184,18 +1184,18 @@ async def generate_next_round(request: Request, tid: int, _user: dict = Depends(
         Path(trf_path).unlink(missing_ok=True)
         Path(out_path).unlink(missing_ok=True)
 
-    return await round_table_fragment(request, tid, next_r)
+    return round_table_fragment(request, tid, next_r)
 
 # Download TRF-2026
 @app.get("/tournament/{tid}/trf")
-async def download_trf(tid: int, _user: dict = Depends(require_login)):
+def download_trf(tid: int, _user: dict = Depends(require_login)):
     trf_text = build_trf(tid)
     file_path = f"trf_{tid}.trf"
     Path(file_path).write_text(trf_text)
     return FileResponse(file_path, media_type="text/plain", filename=f"tournament_{tid}.trf")
 
 @app.get("/tournament/{tid}/trf-debug")
-async def trf_debug(tid: int, _user: dict = Depends(require_admin)):
+def trf_debug(tid: int, _user: dict = Depends(require_admin)):
     results = {}
     # bbpPairings version
     proc = subprocess.run([BBP_PATH, "--help"], capture_output=True, text=True, timeout=5)
@@ -1227,7 +1227,7 @@ async def trf_debug(tid: int, _user: dict = Depends(require_admin)):
 
 # Standings
 @app.get("/tournament/{tid}/standings", response_class=HTMLResponse)
-async def view_standings(request: Request, tid: int, user: dict = Depends(require_login)):
+def view_standings(request: Request, tid: int, user: dict = Depends(require_login)):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -1239,7 +1239,7 @@ async def view_standings(request: Request, tid: int, user: dict = Depends(requir
     })
 
 @app.get("/uscf-db", response_class=HTMLResponse)
-async def uscf_db_page(request: Request, imported: Optional[int] = None,
+def uscf_db_page(request: Request, imported: Optional[int] = None,
                         user: dict = Depends(require_admin)):
     count = get_uscf_db_count()
     return templates.TemplateResponse(request=request, name="uscf_db.html", context={
@@ -1257,7 +1257,7 @@ async def uscf_db_upload(file: UploadFile = File(...), _user: dict = Depends(req
     return {"imported": count}
 
 @app.get("/api/uscf-col-debug")
-async def uscf_col_debug(_user: dict = Depends(require_admin)):
+def uscf_col_debug(_user: dict = Depends(require_admin)):
     import json
     from database import DB_FILE
     debug_path = DB_FILE.replace(".db", "_col_debug.json")
@@ -1272,13 +1272,13 @@ async def uscf_col_debug(_user: dict = Depends(require_admin)):
 # ---------------------------------------------------------------------------
 
 @app.get("/admin/tournaments", response_class=HTMLResponse)
-async def admin_tournaments_page(request: Request, user: dict = Depends(require_admin)):
+def admin_tournaments_page(request: Request, user: dict = Depends(require_admin)):
     return templates.TemplateResponse(request=request, name="admin_tournaments.html",
                                       context={"tournaments": list_featured_tournaments(),
                                                "countries": list_countries()})
 
 @app.post("/admin/tournaments")
-async def admin_add_tournament(
+def admin_add_tournament(
     request: Request,
     name: str = Form(...),
     subtitle: str = Form(""),
@@ -1305,7 +1305,7 @@ async def admin_add_tournament(
     return RedirectResponse("/admin/tournaments", status_code=303)
 
 @app.post("/admin/tournaments/{fid}/toggle")
-async def admin_toggle_tournament(fid: int, _user: dict = Depends(require_admin)):
+def admin_toggle_tournament(fid: int, _user: dict = Depends(require_admin)):
     conn = __import__("sqlite3").connect(__import__("database").DB_FILE)
     row = conn.execute("SELECT active FROM featured_tournaments WHERE id=?", (fid,)).fetchone()
     conn.close()
@@ -1314,12 +1314,12 @@ async def admin_toggle_tournament(fid: int, _user: dict = Depends(require_admin)
     return RedirectResponse("/admin/tournaments", status_code=303)
 
 @app.post("/admin/tournaments/{fid}/delete")
-async def admin_delete_tournament(fid: int, _user: dict = Depends(require_admin)):
+def admin_delete_tournament(fid: int, _user: dict = Depends(require_admin)):
     delete_featured_tournament(fid)
     return RedirectResponse("/admin/tournaments", status_code=303)
 
 @app.post("/admin/tournaments/{fid}/edit")
-async def admin_edit_tournament(
+def admin_edit_tournament(
     fid: int,
     name: str = Form(...),
     subtitle: str = Form(""),
@@ -1343,11 +1343,11 @@ async def admin_edit_tournament(
     return RedirectResponse("/admin/tournaments", status_code=303)
 
 @app.get("/api/federations-by-country/{country_code}")
-async def api_federations_by_country(country_code: str):
+def api_federations_by_country(country_code: str):
     return get_federations_for_country(country_code)
 
 @app.get("/api/cities/{federation_id}")
-async def api_cities(federation_id: int):
+def api_cities(federation_id: int):
     return list_cities(federation_id)
 
 # ---------------------------------------------------------------------------
@@ -1355,7 +1355,7 @@ async def api_cities(federation_id: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/admin/federations", response_class=HTMLResponse)
-async def admin_federations_page(request: Request, q: str = "", _user: dict = Depends(require_admin)):
+def admin_federations_page(request: Request, q: str = "", _user: dict = Depends(require_admin)):
     all_feds = list_federations()
     total_count = len(all_feds)
     if q:
@@ -1371,7 +1371,7 @@ async def admin_federations_page(request: Request, q: str = "", _user: dict = De
                                                "total_count": total_count})
 
 @app.post("/admin/federations")
-async def admin_add_federation(
+def admin_add_federation(
     request: Request,
     name: str = Form(...),
     abbreviation: str = Form(""),
@@ -1389,19 +1389,19 @@ async def admin_add_federation(
     return RedirectResponse("/admin/federations", status_code=303)
 
 @app.post("/admin/federations/{fid}/toggle")
-async def admin_toggle_federation(fid: int, _user: dict = Depends(require_admin)):
+def admin_toggle_federation(fid: int, _user: dict = Depends(require_admin)):
     fed = get_federation(fid)
     if fed:
         update_federation(fid, active=0 if fed["active"] else 1)
     return RedirectResponse("/admin/federations", status_code=303)
 
 @app.post("/admin/federations/{fid}/delete")
-async def admin_delete_federation(fid: int, _user: dict = Depends(require_admin)):
+def admin_delete_federation(fid: int, _user: dict = Depends(require_admin)):
     delete_federation(fid)
     return RedirectResponse("/admin/federations", status_code=303)
 
 @app.post("/admin/federations/{fid}/edit")
-async def admin_edit_federation(
+def admin_edit_federation(
     fid: int,
     name: str = Form(...),
     abbreviation: str = Form(""),
@@ -1420,7 +1420,7 @@ async def admin_edit_federation(
     return RedirectResponse("/admin/federations", status_code=303)
 
 @app.post("/admin/federations/{fid}/add-city")
-async def admin_add_city(
+def admin_add_city(
     fid: int,
     city_name: str = Form(...),
     region: str = Form(""),
@@ -1431,7 +1431,7 @@ async def admin_add_city(
     return RedirectResponse("/admin/federations", status_code=303)
 
 @app.post("/admin/federations/cities/{cid}/delete")
-async def admin_delete_city(cid: int, _user: dict = Depends(require_admin)):
+def admin_delete_city(cid: int, _user: dict = Depends(require_admin)):
     delete_city(cid)
     return RedirectResponse("/admin/federations", status_code=303)
 
@@ -1866,7 +1866,7 @@ async def api_uscf_tournament_games(
 # ---------------------------------------------------------------------------
 
 @app.get("/player-lookup", response_class=HTMLResponse)
-async def player_lookup_page(request: Request, user: dict = Depends(require_login)):
+def player_lookup_page(request: Request, user: dict = Depends(require_login)):
     return templates.TemplateResponse(request=request, name="player_lookup.html",
                                       context={"current_user": user,
                                                **_user_tournament_context(user["id"])})
@@ -2130,7 +2130,7 @@ def _fide_k(rating: int) -> int:
 
 
 @app.get("/api/rating-impact", response_class=HTMLResponse)
-async def rating_impact_api(
+def rating_impact_api(
     request: Request,
     opp_uscf: Optional[int] = None,
     opp_uscf_quick: Optional[int] = None,
@@ -2237,7 +2237,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
 
 
 @app.post("/profile/contact")
-async def update_contact(
+def update_contact(
     email: Optional[str] = Form(None),
     phone: Optional[str] = Form(None),
     user: dict = Depends(require_login),
@@ -2249,7 +2249,7 @@ async def update_contact(
 
 
 @app.post("/profile")
-async def update_profile(
+def update_profile(
     player_name: Optional[str] = Form(None),
     uscf_id: Optional[str] = Form(None),
     fide_id: Optional[str] = Form(None),
@@ -2273,7 +2273,7 @@ async def update_profile(
 
 
 @app.post("/profile/populate", response_class=HTMLResponse)
-async def profile_populate(
+def profile_populate(
     player_name: Optional[str] = Form(None),
     uscf_id: Optional[str] = Form(None),
     fide_id: Optional[str] = Form(None),
@@ -2305,7 +2305,7 @@ async def profile_populate(
 # ---------------------------------------------------------------------------
 
 @app.get("/uscf-calculator", response_class=HTMLResponse)
-async def uscf_calculator_page(request: Request, user: dict = Depends(require_login)):
+def uscf_calculator_page(request: Request, user: dict = Depends(require_login)):
     profile = get_user_profile(user["id"])
     saved = list_user_tournaments(user["id"])
     return templates.TemplateResponse(request=request, name="uscf_calculator.html",
@@ -2350,7 +2350,7 @@ async def api_update_tournament(tid: int, request: Request, user: dict = Depends
     return {"updated": tid}
 
 @app.delete("/api/uscf-tournaments/{tid}")
-async def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
+def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
     ok = delete_user_tournament(tid, user["id"])
     if not ok:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -2358,12 +2358,12 @@ async def api_delete_tournament(tid: int, user: dict = Depends(require_login)):
 
 
 @app.get("/api/uscf-tournaments/deleted")
-async def api_list_deleted_tournaments(user: dict = Depends(require_login)):
+def api_list_deleted_tournaments(user: dict = Depends(require_login)):
     return list_deleted_user_tournaments(user["id"])
 
 
 @app.post("/api/uscf-tournaments/{tid}/undelete")
-async def api_undelete_tournament(tid: int, user: dict = Depends(require_login)):
+def api_undelete_tournament(tid: int, user: dict = Depends(require_login)):
     ok = undelete_user_tournament(tid, user["id"])
     if not ok:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -2402,7 +2402,7 @@ async def upload_pgn_file(file: UploadFile = File(...), user: dict = Depends(req
 
 
 @app.get("/api/pgn/presign")
-async def pgn_presign(ext: str = ".jpg", user: dict = Depends(require_login)):
+def pgn_presign(ext: str = ".jpg", user: dict = Depends(require_login)):
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
 
@@ -2437,7 +2437,7 @@ async def pgn_presign(ext: str = ".jpg", user: dict = Depends(require_login)):
 # ---------------------------------------------------------------------------
 
 @app.get("/fide-calculator", response_class=HTMLResponse)
-async def fide_calculator_page(request: Request, user: dict = Depends(require_login)):
+def fide_calculator_page(request: Request, user: dict = Depends(require_login)):
     return templates.TemplateResponse(request=request, name="fide_calculator.html",
                                       context={"current_user": user})
 
@@ -2448,7 +2448,7 @@ async def fide_calculate(request: Request, _user: dict = Depends(require_login))
     return result or {"error": "Need 5+ valid games against FIDE-rated opponents"}
 
 @app.post("/fide-calculator/pdf")
-async def fide_pdf(
+def fide_pdf(
     request: Request,
     name: str = Form(""),
     opponents: str = Form(""),
@@ -2477,7 +2477,7 @@ async def fide_pdf(
 # ---------------------------------------------------------------------------
 
 @app.post("/tournament/{tid}/settings")
-async def tournament_settings(
+def tournament_settings(
     tid: int,
     entry_fee: float = Form(0),
     registration_open: str = Form(None),
@@ -2492,7 +2492,7 @@ async def tournament_settings(
 # ---------------------------------------------------------------------------
 
 @app.get("/tournament/{tid}/entries", response_class=HTMLResponse)
-async def entry_list_page(request: Request, tid: int):
+def entry_list_page(request: Request, tid: int):
     import json as _json
     tournament = get_tournament(tid)
     if not tournament:
@@ -2515,7 +2515,7 @@ async def entry_list_page(request: Request, tid: int):
 # ---------------------------------------------------------------------------
 
 @app.get("/tournament/{tid}/register", response_class=HTMLResponse)
-async def tournament_register_page(request: Request, tid: int, cancelled: Optional[str] = None):
+def tournament_register_page(request: Request, tid: int, cancelled: Optional[str] = None):
     tournament = get_tournament(tid)
     if not tournament:
         raise HTTPException(404)
@@ -2528,7 +2528,7 @@ async def tournament_register_page(request: Request, tid: int, cancelled: Option
 
 
 @app.post("/tournament/{tid}/register")
-async def tournament_register_submit(
+def tournament_register_submit(
     request: Request,
     tid: int,
     name: str = Form(...),
@@ -2628,7 +2628,7 @@ async def stripe_webhook(request: Request):
 
 
 @app.get("/tournament/{tid}/register/success", response_class=HTMLResponse)
-async def register_success(request: Request, tid: int, player_id: int, token: Optional[str] = None, session_id: Optional[str] = None):
+def register_success(request: Request, tid: int, player_id: int, token: Optional[str] = None, session_id: Optional[str] = None):
     import json as _json
     # player_id is a sequential, guessable int — the signed token (handed out
     # only to the person who just submitted this exact registration) is what
@@ -2657,7 +2657,7 @@ async def register_success(request: Request, tid: int, player_id: int, token: Op
 
 
 @app.get("/tournament/{tid}/register/cancel")
-async def register_cancel(tid: int, token: Optional[str] = None):
+def register_cancel(tid: int, token: Optional[str] = None):
     player_id = _verify_cancel_token(token) if token else None
     if player_id:
         player = get_player(player_id)
@@ -2674,13 +2674,13 @@ async def register_cancel(tid: int, token: Optional[str] = None):
 # ---------------------------------------------------------------------------
 
 @app.post("/player/{pid}/withdraw")
-async def withdraw_player(pid: int, _user: dict = Depends(require_td)):
+def withdraw_player(pid: int, _user: dict = Depends(require_td)):
     tid = set_player_status(pid, "withdrawn")
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
 
 @app.post("/player/{pid}/restore")
-async def restore_player(pid: int, _user: dict = Depends(require_td)):
+def restore_player(pid: int, _user: dict = Depends(require_td)):
     tid = set_player_status(pid, "active")
     return RedirectResponse(f"/tournament/{tid}", status_code=303)
 
@@ -2690,7 +2690,7 @@ async def restore_player(pid: int, _user: dict = Depends(require_td)):
 # ---------------------------------------------------------------------------
 
 @app.post("/player/{pid}/bye-request")
-async def update_bye_request(
+def update_bye_request(
     pid: int,
     round_num: int = Form(...),
     action: str = Form(...),
@@ -2701,7 +2701,7 @@ async def update_bye_request(
 
 
 @app.get("/privacy", response_class=HTMLResponse)
-async def privacy(request: Request):
+def privacy(request: Request):
     return templates.TemplateResponse(request=request, name="privacy.html")
 
 
@@ -2901,7 +2901,7 @@ async def _scrape_chess_results(url: str):
 
 
 @app.get("/research-players", response_class=HTMLResponse)
-async def research_players_page(
+def research_players_page(
     request: Request,
     q: str = '',
     user: dict = Depends(require_login),
@@ -2936,13 +2936,13 @@ async def research_import(
 
 
 @app.post("/research-players/delete/{rid}")
-async def research_delete(rid: int, user: dict = Depends(require_login)):
+def research_delete(rid: int, user: dict = Depends(require_login)):
     delete_research_player(rid)
     return RedirectResponse("/research-players", status_code=303)
 
 
 @app.post("/research-players/delete-source")
-async def research_delete_source(
+def research_delete_source(
     tournament_source: str = Form(...),
     user: dict = Depends(require_login),
 ):
@@ -3201,7 +3201,7 @@ async def research_refresh_round(
 
 
 @app.get("/research-players/simulate", response_class=HTMLResponse)
-async def research_simulate(
+def research_simulate(
     request: Request,
     tournament_source: str = '',
     my_rank: int = 0,
@@ -3618,7 +3618,7 @@ async def research_player_info(
 # ---------------------------------------------------------------------------
 
 @app.get("/pgn-database", response_class=HTMLResponse)
-async def pgn_database_page(
+def pgn_database_page(
     request: Request,
     search: str = '',
     event: str = '',
@@ -3646,7 +3646,7 @@ async def pgn_database_page(
 
 
 @app.post("/pgn-database/add-organizer")
-async def pgn_add_organizer(
+def pgn_add_organizer(
     request: Request,
     name: str = Form(...),
     lichess_id: str = Form(''),
@@ -3660,7 +3660,7 @@ async def pgn_add_organizer(
 
 
 @app.post("/pgn-database/delete-organizer/{oid}")
-async def pgn_delete_organizer(oid: int, user: dict = Depends(require_login)):
+def pgn_delete_organizer(oid: int, user: dict = Depends(require_login)):
     delete_pgn_organizer(oid)
     return RedirectResponse("/pgn-database", status_code=303)
 
@@ -3866,13 +3866,13 @@ async def pgn_refresh_source(sid: int, user: dict = Depends(require_login)):
 
 
 @app.post("/pgn-database/delete-source/{sid}")
-async def pgn_delete_source(sid: int, user: dict = Depends(require_login)):
+def pgn_delete_source(sid: int, user: dict = Depends(require_login)):
     delete_pgn_source(sid)
     return RedirectResponse("/pgn-database", status_code=303)
 
 
 @app.get("/pgn-database/download")
-async def pgn_download(
+def pgn_download(
     search: str = '',
     event: str = '',
     research_only: int = 0,
@@ -3930,7 +3930,7 @@ async def pgn_harvest_organizer(oid: int, user: dict = Depends(require_login)):
 
 
 @app.get("/pgn-database/game/{gid}")
-async def pgn_game_raw(gid: int, user: dict = Depends(require_login)):
+def pgn_game_raw(gid: int, user: dict = Depends(require_login)):
     raw = get_pgn_game_raw(gid)
     if raw is None:
         raise HTTPException(404, "Game not found")
