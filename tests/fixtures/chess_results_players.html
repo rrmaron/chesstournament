@@ -1,0 +1,51 @@
+<!--
+Synthetic fixture reconstructing the chess-results.com "starting rank" print
+view (?art=0&prt=1) that main.py's _scrape_chess_results() parses: a
+<table class="CRs1"> whose header row contains "FideID", with fixed columns
+0=No, 1=flag, 2=Title, 3=Name, 4=FideID, 5=FED, 6=Rtg. This is NOT a captured
+live page (no network access when this was written) -- it's built to match
+the exact structure the parser's own docstring and column-index comments
+describe, plus a few deliberately awkward rows (blank name, blank FideID,
+too few cells, a FideID with stray non-digit characters, a non-numeric
+rating) to exercise the parser's filtering logic. If chess-results.com's
+real markup ever drifts from this shape, update this fixture to match it.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<title>Chess-Results Server Spring Open 2026 - Chess-Results.com</title>
+</head>
+<body>
+<table class="CRs1">
+  <tr>
+    <th>No</th><th>&nbsp;</th><th>Title</th><th>Name</th><th>FideID</th><th>FED</th><th>Rtg</th>
+  </tr>
+  <tr>
+    <td>1</td><td><img src="nor.gif"></td><td>GM</td><td>Carlsen, Magnus</td><td>1503014</td><td>NOR</td><td>2830</td>
+  </tr>
+  <tr>
+    <td>2</td><td><img src="usa.gif"></td><td></td><td>Doe, Jane</td><td>1234567</td><td>USA</td><td>1800</td>
+  </tr>
+  <tr>
+    <!-- blank name: must be skipped -->
+    <td>3</td><td><img src="usa.gif"></td><td></td><td></td><td>7654321</td><td>USA</td><td>1500</td>
+  </tr>
+  <tr>
+    <!-- blank FideID: must be skipped -->
+    <td>4</td><td><img src="usa.gif"></td><td></td><td>No FideID Player</td><td></td><td>USA</td><td>1600</td>
+  </tr>
+  <tr>
+    <!-- too few cells (3): must be skipped -->
+    <td>5</td><td>x</td><td>y</td>
+  </tr>
+  <tr>
+    <!-- FideID cell has stray non-digit text: digits must still be extracted -->
+    <td>6</td><td><img src="usa.gif"></td><td></td><td>Nondigit Fide</td><td>ID:9999999</td><td>USA</td><td>1700</td>
+  </tr>
+  <tr>
+    <!-- non-numeric rating: must come through as 0, not crash -->
+    <td>7</td><td><img src="usa.gif"></td><td></td><td>No Rating Player</td><td>5555555</td><td>USA</td><td>unrated</td>
+  </tr>
+</table>
+</body>
+</html>
