@@ -241,7 +241,10 @@ def verify_password(plain: str, stored: str) -> bool:
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    
+    # WAL lets readers and writers proceed concurrently instead of locking the
+    # whole file on every write (e.g. two TDs recording results at once).
+    c.execute("PRAGMA journal_mode=WAL")
+
     c.execute('''CREATE TABLE IF NOT EXISTS tournaments (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -1758,7 +1761,7 @@ def _fetch_thin3(uscf_id: str) -> dict:
     try:
         import httpx, re
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
-        r = httpx.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id.strip()}",
+        r = httpx.get(f"https://www.uschess.org/msa/thin3.php?{uscf_id.strip()}",
                       timeout=8, follow_redirects=True, headers=headers)
         if r.status_code == 200:
             m = re.search(r"name=rating1[^>]+value='([^']+)'", r.text)

@@ -176,6 +176,30 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["from_json"] = __import__("json").loads
 
+# ---------------------------------------------------------------------------
+# CSRF defense-in-depth: reject state-changing requests whose Origin/Referer
+# names a different site. SameSite=Lax session cookies (Starlette's default)
+# already block most cross-site POSTs, but this doesn't depend on that
+# default staying in place. Browsers send Origin on virtually all POSTs, so
+# this only trips on an actual cross-site request — plain non-browser clients
+# that omit both headers entirely are left alone.
+# ---------------------------------------------------------------------------
+_CSRF_SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+_CSRF_EXEMPT_PATHS = {"/stripe/webhook"}  # authenticated by Stripe signature instead
+
+
+@app.middleware("http")
+async def csrf_origin_check(request: Request, call_next):
+    if request.method not in _CSRF_SAFE_METHODS and request.url.path not in _CSRF_EXEMPT_PATHS:
+        from urllib.parse import urlparse
+        source = request.headers.get("origin") or request.headers.get("referer")
+        host_header = (request.headers.get("host") or "").split(":")[0].lower()
+        if source and host_header:
+            source_host = (urlparse(source).hostname or "").lower()
+            if source_host and source_host != host_header:
+                return JSONResponse({"error": "Cross-site request blocked"}, status_code=403)
+    return await call_next(request)
+
 BBP_PATH = "./bbpPairings"
 if os.name == "nt":
     BBP_PATH += ".exe"
@@ -682,6 +706,7 @@ async def new_tournament(
 
 @app.get("/tournament/{tid}", response_class=HTMLResponse)
 async def tournament_detail(request: Request, tid: int, imported: Optional[int] = None,
+                             unresolved: Optional[str] = None,
                              user: dict = Depends(require_login)):
     import json as _json
     tournament = get_tournament(tid)
@@ -702,6 +727,7 @@ async def tournament_detail(request: Request, tid: int, imported: Optional[int] 
         "players": players,
         "current_round": current_round,
         "imported": imported,
+        "unresolved": unresolved,
         "current_user": user,
     })
 
@@ -712,7 +738,7 @@ async def _uscf_live_search(q: str) -> list:
         parts = q.split()
         data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]) if len(parts) > 1 else "", "mode": "Search"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+            r = await client.post("https://www.uschess.org/msa/thin2.php", data=data, headers=headers)
         rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
         results = []
         for uid, raw_name, info in rows[:12]:
@@ -810,7 +836,7 @@ async def uscf_lookup(uscf_id: str = "", _user: dict = Depends(require_login)):
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+            r = await client.get(f"https://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
         if r.status_code != 200 or "memname" not in r.text:
             return HTMLResponse('<div id="uscf-preview"><span class="text-warning small">USCF ID not found</span></div>')
         data = _parse_uscf_thin3(r.text)
@@ -952,7 +978,7 @@ async def uscf_search(name: str = "", _user: dict = Depends(require_login)):
         parts = q.split()
         data = {"memln": parts[-1], "memfn": " ".join(parts[:-1]), "mode": "Search"}
         async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-            r = await client.post("http://www.uschess.org/msa/thin2.php", data=data, headers=headers)
+            r = await client.post("https://www.uschess.org/msa/thin2.php", data=data, headers=headers)
         rows = re.findall(r'<td>(\d{5,8})</td>\s*<td>([^<]+)</td>\s*<td>([^<]+)</td>', r.text)
         results = []
         for uid, raw_name, info in rows[:12]:
@@ -978,6 +1004,7 @@ async def import_players_csv(tid: int, file: UploadFile = File(...), _user: dict
     content = await file.read()
     text = content.decode("utf-8-sig", errors="replace")
     added = 0
+    unresolved = []  # names added without a USCF match, needing manual TD review
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -1006,7 +1033,7 @@ async def import_players_csv(tid: int, file: UploadFile = File(...), _user: dict
                 try:
                     headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
                     async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
-                        r = await client.get(f"http://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
+                        r = await client.get(f"https://www.uschess.org/msa/thin3.php?{uscf_id}", headers=headers)
                     if r.status_code == 200 and "memname" in r.text:
                         data = _parse_uscf_thin3(r.text)
                         name = data["name"] or name
@@ -1016,20 +1043,34 @@ async def import_players_csv(tid: int, file: UploadFile = File(...), _user: dict
             if not name:
                 continue
         elif name:
-            results = search_uscf_members(name, limit=1)
-            if results:
-                top = results[0]
+            # Rows with only a name (no USCF ID) are ambiguous: search_uscf_members
+            # ranks by rating, so a common surname like "Smith" would otherwise
+            # silently bind to the highest-rated Smith in the whole USCF database.
+            # Only auto-bind when exactly one candidate's formatted name matches
+            # the CSV name exactly; otherwise add the player unrated/unlinked and
+            # flag the row for the TD to resolve by hand.
+            candidates = search_uscf_members(name, limit=5)
+            exact = [c for c in candidates
+                     if _format_uscf_name(c["name"]).strip().lower() == name.strip().lower()]
+            if len(exact) == 1:
+                top = exact[0]
                 uscf_id = top["uscf_id"]
                 name = _format_uscf_name(top["name"])
                 rating = top["rating"]
                 fide_id = top.get("fide_id")
+            else:
+                unresolved.append(name)
         else:
             continue
 
         add_player(tid, name, uscf_id, rating, fide_id=fide_id)
         added += 1
 
-    return RedirectResponse(f"/tournament/{tid}?imported={added}", status_code=303)
+    url = f"/tournament/{tid}?imported={added}"
+    if unresolved:
+        from urllib.parse import quote
+        url += f"&unresolved={quote(', '.join(unresolved))}"
+    return RedirectResponse(url, status_code=303)
 
 @app.post("/player/{pid}/delete")
 async def remove_player(pid: int, _user: dict = Depends(require_td)):
@@ -1093,6 +1134,11 @@ async def generate_next_round(request: Request, tid: int, _user: dict = Depends(
     if not tournament:
         raise HTTPException(404)
     current = tournament.get("current_round", 0)
+    total_rounds = tournament.get("rounds", 0)
+    if current >= total_rounds:
+        return HTMLResponse(
+            f'<div class="alert alert-warning">This tournament is already at its final round ({total_rounds}).</div>'
+        )
     next_r = current + 1
 
     # Build TRF with only the completed rounds (before advancing current_round)
@@ -1108,7 +1154,12 @@ async def generate_next_round(request: Request, tid: int, _user: dict = Depends(
         with os.fdopen(trf_fd, "w") as f:
             f.write(trf_text)
 
-        proc = subprocess.run(
+        # Run off the event loop thread: bbpPairings can take several seconds
+        # on a large field, and this route is the single worst blocking call
+        # in the app (see mychesspairings-859) — a plain subprocess.run here
+        # would stall every other concurrent request on the single uvicorn worker.
+        proc = await asyncio.to_thread(
+            subprocess.run,
             [BBP_PATH, "--dutch", trf_path, "-p", out_path],
             capture_output=True, text=True, timeout=30
         )
