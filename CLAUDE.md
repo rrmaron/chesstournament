@@ -59,6 +59,12 @@ python -m pytest tests/ -v
 
 Tests run against a throwaway temp-file SQLite DB (see `tests/conftest.py`) — they never touch the real app data or make real Stripe/network calls.
 
+Mobile app (`mobile/`) has its own Jest suite:
+
+```bash
+cd mobile && npm install && npm test
+```
+
 ## Architecture Overview
 
 _Add a brief overview of your project architecture_

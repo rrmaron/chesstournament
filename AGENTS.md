@@ -45,6 +45,12 @@ python -m pytest tests/ -v
 
 Tests run against a throwaway temp-file SQLite DB (see `tests/conftest.py`) — they never touch the real app data or make real Stripe/network calls.
 
+Mobile app (`mobile/`) has its own Jest suite:
+
+```bash
+cd mobile && npm install && npm test
+```
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
