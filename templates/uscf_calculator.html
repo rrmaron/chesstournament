@@ -1717,9 +1717,11 @@ async function toggleHistGames(i) {
   const myR    = t.pre_rating || 0;
   const uscfK  = myR < 2100 ? 32 : myR < 2400 ? 24 : 16;
 
+  // g.result is the '1'/'0.5'/'0' score-string convention used throughout
+  // this page (see the manual game rows' Win/Draw/Loss <select> below).
   const resultBadge = r => {
-    if (r === 'W') return '<span class="badge bg-success">W</span>';
-    if (r === 'L') return '<span class="badge bg-danger">L</span>';
+    if (r === '1') return '<span class="badge bg-success">W</span>';
+    if (r === '0') return '<span class="badge bg-danger">L</span>';
     return '<span class="badge bg-secondary">D</span>';
   };
 
@@ -1729,7 +1731,7 @@ async function toggleHistGames(i) {
     const oppR = g.rating;
     if (!myR || !oppR) return { exp: null, rawGap: null, impact: null };
     const exp    = We(myR, oppR);
-    const score  = g.result === 'W' ? 1 : g.result === 'D' ? 0.5 : 0;
+    const score  = parseFloat(g.result);
     return { exp, rawGap: score - exp, impact: null };
   });
 

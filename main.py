@@ -1801,12 +1801,19 @@ async def _fetch_games_from_ratings_api(
     result = []
     for ro in round_outcomes:
         outcome = ro.get("outcome", "")
+        # Score-string convention ('1'/'0.5'/'0'), matching _parse_uscf_crosstable
+        # and every consumer of this endpoint's games in uscf_calculator.html
+        # (the result <select> options, parseFloat(g.result) score sums, bye
+        # detection). Returning literal 'W'/'L'/'D' here (as this fallback used
+        # to) made imported games silently fail to populate their W/D/L
+        # dropdown whenever the primary crosstable scrape failed and this
+        # ratings-api fallback ran instead.
         if outcome == "Win":
-            game_result = "W"
+            game_result = "1"
         elif outcome == "Loss":
-            game_result = "L"
+            game_result = "0"
         else:
-            game_result = "D"
+            game_result = "0.5"
         opp_id = str(ro.get("opponentMemberId", ""))
         opp_name = (
             name_map.get(opp_id)
