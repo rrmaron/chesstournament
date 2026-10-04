@@ -31,8 +31,15 @@ def parse_pgn_headers(pgn: str) -> dict:
     return {m.group(1): m.group(2) for m in re.finditer(r'\[(\w+)\s+"([^"]*)"\]', pgn)}
 
 def make_game_hash(h: dict) -> str:
+    # Site is included because sources like Lichess embed a per-game URL/ID
+    # there (e.g. "https://lichess.org/<id>") that's fixed for the life of
+    # the game and distinct per game — unlike Event/Round/Date/White/Black,
+    # which a same-day tiebreak replay between the same two players would
+    # otherwise share, causing the real replay to be dropped as a duplicate.
+    # Sources with a generic/shared Site value get no benefit here, same as
+    # before this change — this isn't a universal fix for every PGN source.
     key = '|'.join([h.get('Event',''), h.get('Round',''), h.get('Date',''),
-                    h.get('White',''), h.get('Black','')])
+                    h.get('White',''), h.get('Black',''), h.get('Site','')])
     return hashlib.md5(key.encode()).hexdigest()
 
 def _int_or_none(v: str) -> Optional[int]:
@@ -395,12 +402,28 @@ async def chesscom_event_pgns(
                 await asyncio.sleep(0.2)
         return results
 
-    # No clono.no — fall back to header-only PGN from API game objects
+    # No clono.no — fall back to header-only PGN from API game objects. Split
+    # per round (instead of lumping every round into one "All rounds" blob)
+    # so rounds stay distinguishable in the PGN database, same as the
+    # clono.no path above. These games have no move text available from this
+    # API (results/headers only), which the round label says explicitly so
+    # that isn't mistaken for a complete game later.
     if api_games:
         log.info("chesscom_event_pgns: no sourceUrl for room %s, using API fallback", room_id)
-        pgn_text = chesscom_api_games_to_pgn(api_games, rounds, event_name)
-        if pgn_text:
-            return [("All rounds", pgn_text)]
+        games_by_round_id = {}
+        for g in api_games:
+            games_by_round_id.setdefault(g.get('roundId', 0), []).append(g)
+        results = []
+        for rnd in sorted(rounds, key=lambda r: r.get('slug', '0')):
+            round_games = games_by_round_id.get(rnd.get('id'), [])
+            if not round_games:
+                continue
+            pgn_text = chesscom_api_games_to_pgn(round_games, rounds, event_name)
+            if pgn_text:
+                round_slug = rnd.get('slug', '?')
+                results.append((f"Round {round_slug} (no moves — chess.com API fallback)", pgn_text))
+        if results:
+            return results
 
     log.warning("chesscom_event_pgns: no data available for room %s", room_id)
     return []

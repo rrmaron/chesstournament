@@ -6,6 +6,13 @@ DB_FILE = os.environ.get("DB_FILE", "/data/mychessrating.db" if os.path.isdir("/
 
 def build_trf(tid: int, rounds_to_include: Optional[int] = None) -> str:
     conn = sqlite3.connect(DB_FILE)
+    try:
+        return _build_trf(conn, tid, rounds_to_include)
+    finally:
+        conn.close()
+
+
+def _build_trf(conn: sqlite3.Connection, tid: int, rounds_to_include: Optional[int]) -> str:
     c = conn.cursor()
     c.execute("SELECT name, rounds, current_round FROM tournaments WHERE id=?", (tid,))
     tour = c.fetchone()
@@ -82,6 +89,5 @@ def build_trf(tid: int, rounds_to_include: Optional[int] = None) -> str:
                 block = "   0 - -  "  # 10 chars: unplayed
             player_line += block
         lines.append(player_line)
-    
-    conn.close()
+
     return "\n".join(lines) + "\n"
