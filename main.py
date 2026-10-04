@@ -3939,6 +3939,58 @@ def pgn_game_raw(gid: int, user: dict = Depends(require_login)):
 
 # Background harvest task
 
+async def _refresh_live_sources():
+    """One pass over every live PGN source, re-fetching its latest games.
+    Extracted out of _harvest_loop so it can be exercised directly in tests
+    without the loop's sleep/counter wrapper. Each source's failure is caught
+    and logged individually so one bad source can't stop the rest."""
+    for src in list_live_pgn_sources():
+        try:
+            if src['source_type'] == 'lichess' and src.get('lichess_round_id'):
+                await ph.import_lichess_round(
+                    src['lichess_round_id'], src['id'], insert_pgn_games,
+                    src.get('source_url', '')
+                )
+                update_pgn_source_fetched(src['id'], count_pgn_games_for_source(src['id']))
+        except Exception as e:
+            logging.warning("harvest live source %s: %s", src['id'], e)
+
+
+async def _discover_new_broadcasts():
+    """One pass over every tracked organizer, registering and importing any
+    Lichess broadcast round not already known. Extracted out of
+    _harvest_loop for the same testability reason as _refresh_live_sources."""
+    for org in list_pgn_organizers():
+        if not org.get('lichess_id'):
+            continue
+        try:
+            tour_listings = await ph.lichess_organizer_broadcasts(org['lichess_id'])
+            for bc in tour_listings:
+                tour = bc.get('tour', {})
+                tour_id = tour.get('id', '')
+                if not tour_id:
+                    continue
+                binfo = await ph.lichess_broadcast_info(tour_id)
+                tour_name = binfo.get('name') or tour.get('name', '')
+                for rd in binfo.get('rounds', []):
+                    rid = rd.get('id', '')
+                    if not rid or lichess_round_already_known(rid):
+                        continue
+                    rname   = rd.get('name', '')
+                    rd_live = not rd.get('finished', True)
+                    rnum_m  = re.search(r'(\d+)', rname)
+                    rnum    = int(rnum_m.group(1)) if rnum_m else 0
+                    rd_url  = rd.get('url', f"https://lichess.org/broadcast/{tour_id}/{rid}")
+                    sid = upsert_pgn_source(
+                        'lichess', rd_url, tour_name, rnum,
+                        rname, tour_id, rid, rd_live, org['id'], auto_discovered=True
+                    )
+                    await ph.import_lichess_round(rid, sid, insert_pgn_games, rd_url)
+                    update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
+        except Exception as e:
+            logging.warning("harvest organizer %s: %s", org['lichess_id'], e)
+
+
 async def _harvest_loop():
     """Refresh live sources every 60 s; discover new organizer broadcasts every 10 min."""
     counter = 0
@@ -3946,49 +3998,9 @@ async def _harvest_loop():
         await asyncio.sleep(60)
         counter += 1
         try:
-            # Refresh all live sources
-            for src in list_live_pgn_sources():
-                try:
-                    if src['source_type'] == 'lichess' and src.get('lichess_round_id'):
-                        await ph.import_lichess_round(
-                            src['lichess_round_id'], src['id'], insert_pgn_games,
-                            src.get('source_url', '')
-                        )
-                        update_pgn_source_fetched(src['id'], count_pgn_games_for_source(src['id']))
-                except Exception as e:
-                    logging.warning("harvest live source %s: %s", src['id'], e)
-
-            # Every 10 minutes check organizers for new broadcasts
+            await _refresh_live_sources()
             if counter % 10 == 0:
-                for org in list_pgn_organizers():
-                    if not org.get('lichess_id'):
-                        continue
-                    try:
-                        tour_listings = await ph.lichess_organizer_broadcasts(org['lichess_id'])
-                        for bc in tour_listings:
-                            tour = bc.get('tour', {})
-                            tour_id = tour.get('id', '')
-                            if not tour_id:
-                                continue
-                            binfo = await ph.lichess_broadcast_info(tour_id)
-                            tour_name = binfo.get('name') or tour.get('name', '')
-                            for rd in binfo.get('rounds', []):
-                                rid = rd.get('id', '')
-                                if not rid or lichess_round_already_known(rid):
-                                    continue
-                                rname   = rd.get('name', '')
-                                rd_live = not rd.get('finished', True)
-                                rnum_m  = re.search(r'(\d+)', rname)
-                                rnum    = int(rnum_m.group(1)) if rnum_m else 0
-                                rd_url  = rd.get('url', f"https://lichess.org/broadcast/{tour_id}/{rid}")
-                                sid = upsert_pgn_source(
-                                    'lichess', rd_url, tour_name, rnum,
-                                    rname, tour_id, rid, rd_live, org['id'], auto_discovered=True
-                                )
-                                await ph.import_lichess_round(rid, sid, insert_pgn_games, rd_url)
-                                update_pgn_source_fetched(sid, count_pgn_games_for_source(sid))
-                    except Exception as e:
-                        logging.warning("harvest organizer %s: %s", org['lichess_id'], e)
+                await _discover_new_broadcasts()
         except Exception as e:
             logging.warning("harvest loop: %s", e)
 
