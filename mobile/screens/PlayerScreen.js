@@ -12,7 +12,7 @@ const API_BASE = 'https://mychessrating.fly.dev';
 // ---------------------------------------------------------------------------
 // Rating impact helpers
 // ---------------------------------------------------------------------------
-function eloImpact(myRating, oppRating, k) {
+export function eloImpact(myRating, oppRating, k) {
   const expected = 1 / (1 + Math.pow(10, (oppRating - myRating) / 400));
   const r1 = (v) => Math.round(v * 10) / 10;
   return {
@@ -22,8 +22,8 @@ function eloImpact(myRating, oppRating, k) {
     pct:  r1(expected * 100),
   };
 }
-const uscfK = (r) => r < 2100 ? 32 : r < 2400 ? 24 : 16;
-const fideK = (r) => r < 1600 ? 40 : r < 2400 ? 20 : 10;
+export const uscfK = (r) => r < 2100 ? 32 : r < 2400 ? 24 : 16;
+export const fideK = (r) => r < 1600 ? 40 : r < 2400 ? 20 : 10;
 
 // ---------------------------------------------------------------------------
 // Impact table component
