@@ -39,7 +39,7 @@
           <td>
             <div class="d-flex gap-1 flex-nowrap">
               <button class="btn btn-outline-secondary btn-sm py-0"
-                      onclick="openEdit({{ t | tojson }})">Edit</button>
+                      onclick='openEdit({{ t | tojson }})'>Edit</button>
               <form method="post" action="/admin/tournaments/{{ t.id }}/toggle">
                 <button class="btn btn-outline-{% if t.active %}warning{% else %}success{% endif %} btn-sm py-0">
                   {% if t.active %}Hide{% else %}Show{% endif %}
