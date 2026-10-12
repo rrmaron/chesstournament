@@ -312,6 +312,21 @@ def init_db():
         updated_at TEXT
     )''')
 
+    # Crowdsourced lichess/chess.com usernames for a USCF player, used by the
+    # player-research feature. Anyone logged in can report one; status starts
+    # 'reported' and an admin/TD can mark it 'confirmed'.
+    c.execute('''CREATE TABLE IF NOT EXISTS reported_online_ids (
+        id INTEGER PRIMARY KEY,
+        uscf_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        username TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'reported',
+        reported_by INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(uscf_id, platform, username)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_reported_online_ids_uscf ON reported_online_ids(uscf_id)')
+
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
@@ -1533,6 +1548,28 @@ def get_pgn_game_raw(gid: int) -> Optional[str]:
     conn.close()
     return row[0] if row else None
 
+def get_pgn_games_by_fide_id(fide_id: str, limit: int = 100) -> List[Dict]:
+    """Games already harvested from Lichess/chess.com broadcasts for a player
+    identified by FIDE ID (via the player_research scouting table) -- used by
+    the player-research report so a broadcasted-tournament player's games
+    already in the DB are included alongside anything fetched live.
+
+    subject_color says which side of each game belongs to this fide_id, so
+    the caller never has to re-derive it by fuzzy-matching names."""
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT g.result, g.eco, g.opening, g.date,
+                  CASE WHEN g.research_white_id = pr.id THEN 'white' ELSE 'black' END
+           FROM pgn_games g
+           JOIN player_research pr ON pr.id IN (g.research_white_id, g.research_black_id)
+           WHERE pr.fide_id = ?
+           ORDER BY g.date DESC LIMIT ?""",
+        (fide_id.strip(), limit)
+    ).fetchall()
+    conn.close()
+    cols = ['result', 'eco', 'opening', 'date', 'color']
+    return [dict(zip(cols, r)) for r in rows]
+
 def download_pgn_games(search: str = '', event: str = '',
                         research_only: bool = False) -> str:
     """Return all matching games concatenated as a single PGN string."""
@@ -1727,6 +1764,63 @@ def get_uscf_rating_snapshot(uscf_id: str) -> Optional[Dict]:
     if row:
         return {"uscf_id": row[0], "monthly_rating": row[1], "live_rating": row[2], "updated_at": row[3]}
     return None
+
+
+_VALID_ONLINE_PLATFORMS = ("lichess", "chesscom")
+
+
+def report_online_id(uscf_id: str, platform: str, username: str, reported_by: Optional[int]) -> Optional[int]:
+    """Record someone's claim that a USCF player plays online under `username`
+    on `platform`. Starts at status 'reported'; a duplicate (same uscf_id,
+    platform, username) is a no-op rather than a second row."""
+    uscf_id, platform, username = uscf_id.strip(), platform.strip().lower(), username.strip()
+    if not uscf_id or platform not in _VALID_ONLINE_PLATFORMS or not username:
+        return None
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        """INSERT INTO reported_online_ids (uscf_id, platform, username, reported_by)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(uscf_id, platform, username) DO NOTHING""",
+        (uscf_id, platform, username, reported_by),
+    )
+    conn.commit()
+    rid = cur.lastrowid if cur.rowcount else None
+    conn.close()
+    return rid
+
+
+def list_online_ids(uscf_id: str) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT r.id, r.platform, r.username, r.status, r.created_at, u.username
+           FROM reported_online_ids r LEFT JOIN users u ON u.id = r.reported_by
+           WHERE r.uscf_id = ?
+           ORDER BY (r.status = 'confirmed') DESC, r.platform, r.created_at""",
+        (uscf_id.strip(),),
+    ).fetchall()
+    conn.close()
+    cols = ["id", "platform", "username", "status", "created_at", "reported_by_username"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def set_online_id_status(oid: int, status: str) -> None:
+    if status not in ("reported", "confirmed"):
+        raise ValueError(f"invalid status: {status!r}")
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE reported_online_ids SET status=? WHERE id=?", (status, oid))
+    conn.commit()
+    conn.close()
+
+
+def get_confirmed_online_id(uscf_id: str, platform: str) -> Optional[str]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT username FROM reported_online_ids WHERE uscf_id=? AND platform=? AND status='confirmed' "
+        "ORDER BY created_at LIMIT 1",
+        (uscf_id.strip(), platform.strip().lower()),
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def get_uscf_db_count() -> int:

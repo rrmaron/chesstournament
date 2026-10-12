@@ -64,6 +64,39 @@
         </button>
       </div>
     </div>
+    {% if uscf_id %}
+    <div class="px-3 py-2 border-top">
+      <a class="text-decoration-none small" data-bs-toggle="collapse" href="#research-{{ uscf_id }}" role="button"
+         aria-expanded="false" aria-controls="research-{{ uscf_id }}">
+        <span class="badge bg-warning text-dark">Premium preview</span>
+        <strong>Research this player</strong> — opening tendencies &amp; previous games
+      </a>
+      <div class="collapse mt-2" id="research-{{ uscf_id }}">
+        <p class="small text-muted mb-2">
+          Pulls public games from Lichess and/or Chess.com (if you know their username there) to
+          summarize what they tend to play as White and as Black.
+        </p>
+        <div id="online-ids-{{ uscf_id }}" hx-get="/api/player-online-ids?uscf_id={{ uscf_id }}"
+             hx-trigger="load" hx-swap="outerHTML"></div>
+        <div class="d-flex gap-2 align-items-end flex-wrap mt-2">
+          <div>
+            <label class="form-label small mb-0">Lichess username</label>
+            <input type="text" id="research-lichess-{{ uscf_id }}" class="form-control form-control-sm" style="width:160px">
+          </div>
+          <div>
+            <label class="form-label small mb-0">Chess.com username</label>
+            <input type="text" id="research-chesscom-{{ uscf_id }}" class="form-control form-control-sm" style="width:160px">
+          </div>
+          <button type="button" class="btn btn-outline-primary btn-sm"
+                  onclick="runPlayerResearch('{{ uscf_id }}', '{{ fide_id or '' }}', '{{ name }}')">
+            Research
+            <span id="research-spin-{{ uscf_id }}" class="htmx-indicator spinner-border spinner-border-sm ms-1" role="status"></span>
+          </button>
+        </div>
+        <div id="research-results-{{ uscf_id }}" class="mt-2"></div>
+      </div>
+    </div>
+    {% endif %}
   </div>
   <div class="card-footer bg-white d-flex flex-column gap-2">
     <div class="d-flex align-items-center gap-2">

@@ -63,6 +63,19 @@ function selectPlayer(name, uscfId) {
   });
 }
 
+function runPlayerResearch(uscfId, fideId, name) {
+  var lichess = document.getElementById("research-lichess-" + uscfId).value.trim();
+  var chesscom = document.getElementById("research-chesscom-" + uscfId).value.trim();
+  var params = new URLSearchParams({name: name, uscf_id: uscfId});
+  if (fideId) params.set("fide_id", fideId);
+  if (lichess) params.set("lichess_username", lichess);
+  if (chesscom) params.set("chesscom_username", chesscom);
+  htmx.ajax("GET", "/api/player-research?" + params.toString(), {
+    target: "#research-results-" + uscfId,
+    indicator: "#research-spin-" + uscfId
+  });
+}
+
 function loadRatingImpact(btn) {
   var card = btn.closest("[data-opp-name]");
   var oppName      = card.dataset.oppName;

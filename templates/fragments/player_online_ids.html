@@ -1,0 +1,53 @@
+<div id="online-ids-{{ uscf_id }}">
+  {% if entries %}
+  <ul class="list-unstyled small mb-2">
+    {% for e in entries %}
+    <li class="d-flex align-items-center gap-2 mb-1">
+      <span class="badge {% if e.status == 'confirmed' %}bg-success{% else %}bg-secondary{% endif %}" style="min-width:4.5rem">
+        {{ 'Confirmed' if e.status == 'confirmed' else 'Reported' }}
+      </span>
+      <span class="text-capitalize text-muted" style="width:5rem">{{ e.platform }}</span>
+      <strong>{{ e.username }}</strong>
+      <button type="button" class="btn btn-link btn-sm p-0" title="Use this username for research"
+              onclick="document.getElementById('research-{{ e.platform }}-{{ uscf_id }}').value='{{ e.username }}'">
+        Use
+      </button>
+      {% if is_admin %}
+        {% if e.status == 'confirmed' %}
+        <form method="post" action="/api/player-online-ids/{{ e.id }}/unconfirm"
+              hx-post="/api/player-online-ids/{{ e.id }}/unconfirm" hx-target="#online-ids-{{ uscf_id }}" hx-swap="outerHTML">
+          <input type="hidden" name="uscf_id" value="{{ uscf_id }}">
+          <button type="submit" class="btn btn-outline-secondary btn-sm py-0">Unconfirm</button>
+        </form>
+        {% else %}
+        <form method="post" action="/api/player-online-ids/{{ e.id }}/confirm"
+              hx-post="/api/player-online-ids/{{ e.id }}/confirm" hx-target="#online-ids-{{ uscf_id }}" hx-swap="outerHTML">
+          <input type="hidden" name="uscf_id" value="{{ uscf_id }}">
+          <button type="submit" class="btn btn-outline-success btn-sm py-0">Confirm</button>
+        </form>
+        {% endif %}
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="small text-muted mb-2">No online usernames reported for this player yet.</p>
+  {% endif %}
+
+  <form class="d-flex gap-2 align-items-end flex-wrap"
+        hx-post="/api/player-online-ids" hx-target="#online-ids-{{ uscf_id }}" hx-swap="outerHTML">
+    <input type="hidden" name="uscf_id" value="{{ uscf_id }}">
+    <div>
+      <label class="form-label small mb-0">Platform</label>
+      <select name="platform" class="form-select form-select-sm">
+        <option value="lichess">Lichess</option>
+        <option value="chesscom">Chess.com</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label small mb-0">Know their username?</label>
+      <input type="text" name="username" class="form-control form-control-sm" placeholder="username" required style="width:160px">
+    </div>
+    <button type="submit" class="btn btn-outline-secondary btn-sm">Report it</button>
+  </form>
+</div>

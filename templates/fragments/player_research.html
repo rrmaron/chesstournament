@@ -1,0 +1,49 @@
+<div class="border rounded p-3 bg-light-subtle">
+  <div class="small text-muted mb-2">
+    Sources used:
+    {% if used_lichess %}<span class="badge bg-secondary">Lichess ({{ lichess_username }})</span>{% endif %}
+    {% if used_chesscom %}<span class="badge bg-secondary">Chess.com ({{ chesscom_username }})</span>{% endif %}
+    {% if used_db %}<span class="badge bg-secondary">Broadcast archive</span>{% endif %}
+    {% if not used_lichess and not used_chesscom and not used_db %}<span class="text-muted">none</span>{% endif %}
+  </div>
+
+  {% if report.total_games == 0 %}
+  <p class="mb-0 small text-muted">No games found for {{ display_name }} from the sources above.</p>
+  {% else %}
+  <p class="small text-muted">{{ report.total_games }} game(s) found.</p>
+
+  <div class="row g-3">
+    <div class="col-sm-6">
+      <h6 class="mb-1">As White ({{ report.white.total }} game{{ 's' if report.white.total != 1 else '' }}{% if report.white.score_pct is not none %}, scores {{ report.white.score_pct }}%{% endif %})</h6>
+      {% if report.white.openings %}
+      <ul class="small mb-0">
+        {% for o in report.white.openings %}
+        <li>{{ o.name }} — {{ o.count }} game{{ 's' if o.count != 1 else '' }}, scores {{ o.score_pct }}%</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="small text-muted mb-0">No games as White found.</p>
+      {% endif %}
+    </div>
+    <div class="col-sm-6">
+      <h6 class="mb-1">As Black ({{ report.black.total }} game{{ 's' if report.black.total != 1 else '' }}{% if report.black.score_pct is not none %}, scores {{ report.black.score_pct }}%{% endif %})</h6>
+      {% if report.black.openings %}
+      <ul class="small mb-0">
+        {% for o in report.black.openings %}
+        <li>{{ o.name }} — {{ o.count }} game{{ 's' if o.count != 1 else '' }}, scores {{ o.score_pct }}%</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="small text-muted mb-0">No games as Black found.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <h6 class="mt-3 mb-1">How to approach them</h6>
+  <ul class="small mb-0">
+    {% for tip in report.tips %}
+    <li>{{ tip }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>

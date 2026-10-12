@@ -59,6 +59,8 @@ from database import (
     list_live_pgn_sources, delete_pgn_source,
     insert_pgn_games, list_pgn_games, count_pgn_games, get_pgn_game_raw, download_pgn_games,
     list_pgn_events, count_pgn_games_for_source, lichess_round_already_known,
+    get_pgn_games_by_fide_id,
+    report_online_id, list_online_ids, set_online_id_status, get_confirmed_online_id,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin
@@ -2181,6 +2183,269 @@ async def player_quick_blitz(
         "live_quick": live_quick, "live_blitz": live_blitz,
         "live_online_quick": live_online_quick, "live_online_blitz": live_online_blitz,
         "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Player research (preview feature -- not yet billed; see mychesspairings
+# issue for wiring up a per-lookup Stripe charge once this report is
+# validated with real users)
+# ---------------------------------------------------------------------------
+
+async def _fetch_lichess_games_pgn(username: str, max_games: int = 40) -> list:
+    """Recent public games for a Lichess username, each tagged with which
+    color `username` played so the caller never has to re-derive it."""
+    username = username.strip()
+    if not username:
+        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+        "Accept": "application/x-chess-pgn",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(
+                f"https://lichess.org/api/games/user/{username}",
+                params={"max": max_games, "opening": "true"},
+                headers=headers,
+            )
+        if r.status_code != 200:
+            return []
+        games = []
+        for pgn in ph.split_pgn(r.text):
+            h = ph.parse_pgn_headers(pgn)
+            white, black = h.get("White", ""), h.get("Black", "")
+            if white.lower() == username.lower():
+                color = "white"
+            elif black.lower() == username.lower():
+                color = "black"
+            else:
+                continue
+            games.append({
+                "color": color, "result": h.get("Result", ""),
+                "eco": h.get("ECO", ""), "opening": h.get("Opening", ""),
+                "date": h.get("UTCDate") or h.get("Date", ""),
+            })
+        return games
+    except Exception:
+        return []
+
+
+async def _fetch_chesscom_games_pgn(username: str, months: int = 2, max_games: int = 40) -> list:
+    """Recent public games for a Chess.com username (last `months` monthly
+    archives), each tagged with which color `username` played."""
+    username = username.strip()
+    if not username:
+        return []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)"}
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(f"https://api.chess.com/pub/player/{username}/games/archives", headers=headers)
+            if r.status_code != 200:
+                return []
+            archives = r.json().get("archives", [])[-months:]
+            responses = await asyncio.gather(*(client.get(u, headers=headers) for u in archives))
+        games = []
+        for resp in responses:
+            if resp.status_code != 200:
+                continue
+            for g in resp.json().get("games", []):
+                pgn = g.get("pgn", "")
+                if not pgn:
+                    continue
+                h = ph.parse_pgn_headers(pgn)
+                white, black = h.get("White", ""), h.get("Black", "")
+                if white.lower() == username.lower():
+                    color = "white"
+                elif black.lower() == username.lower():
+                    color = "black"
+                else:
+                    continue
+                opening = h.get("Opening", "")
+                if not opening and h.get("ECOUrl"):
+                    opening = h["ECOUrl"].rstrip("/").rsplit("/", 1)[-1].replace("-", " ")
+                games.append({
+                    "color": color, "result": h.get("Result", ""),
+                    "eco": h.get("ECO", ""), "opening": opening,
+                    "date": h.get("UTCDate") or h.get("Date", ""),
+                })
+        games.sort(key=lambda g: g.get("date", ""), reverse=True)
+        return games[:max_games]
+    except Exception:
+        return []
+
+
+def _summarize_research_side(entries: list) -> dict:
+    total = len(entries)
+    if not total:
+        return {"total": 0, "score_pct": None, "openings": []}
+    score_sum = sum(e["score"] for e in entries)
+    by_opening = {}
+    for e in entries:
+        d = by_opening.setdefault(e["opening"], {"count": 0, "score": 0.0})
+        d["count"] += 1
+        d["score"] += e["score"]
+    openings = sorted(
+        ({"name": name, "count": d["count"], "score_pct": round(100 * d["score"] / d["count"])}
+         for name, d in by_opening.items()),
+        key=lambda o: (-o["count"], o["name"])
+    )[:5]
+    return {"total": total, "score_pct": round(100 * score_sum / total), "openings": openings}
+
+
+def _aggregate_player_research(display_name: str, games: list) -> dict:
+    """Build a scouting report from pre-colored games (each already tagged
+    'color': 'white'/'black' for the player being researched)."""
+    sides = {"white": [], "black": []}
+    for g in games:
+        color = g.get("color")
+        if color not in ("white", "black"):
+            continue
+        result = g.get("result", "")
+        if result == "1-0":
+            score = 1.0 if color == "white" else 0.0
+        elif result == "0-1":
+            score = 0.0 if color == "white" else 1.0
+        elif result in ("1/2-1/2", "0.5-0.5"):
+            score = 0.5
+        else:
+            continue
+        opening = (g.get("opening") or "").strip() or (f"ECO {g['eco']}" if g.get("eco") else "Unspecified opening")
+        sides[color].append({"opening": opening, "score": score})
+
+    white = _summarize_research_side(sides["white"])
+    black = _summarize_research_side(sides["black"])
+
+    tips = []
+    if white["openings"]:
+        top = white["openings"][0]
+        tips.append(
+            f"As White, {display_name} plays {top['name']} most often "
+            f"({top['count']} game{'s' if top['count'] != 1 else ''} seen, scoring {top['score_pct']}%) "
+            f"— prepare a concrete response to this before the game."
+        )
+        if len(white["openings"]) > 1:
+            weak = min(white["openings"], key=lambda o: o["score_pct"])
+            if weak["name"] != top["name"] and weak["score_pct"] < 50:
+                tips.append(
+                    f"They've scored only {weak['score_pct']}% with {weak['name']} as White — "
+                    f"steering into that line may favor you if you get the choice."
+                )
+    if black["openings"]:
+        top = black["openings"][0]
+        tips.append(
+            f"As Black, {display_name} most often answers with {top['name']} "
+            f"({top['count']} game{'s' if top['count'] != 1 else ''} seen, scoring {top['score_pct']}%)."
+        )
+        if len(black["openings"]) > 1:
+            weak = min(black["openings"], key=lambda o: o["score_pct"])
+            if weak["name"] != top["name"] and weak["score_pct"] < 50:
+                tips.append(
+                    f"They've scored only {weak['score_pct']}% against {weak['name']} as Black — "
+                    f"that's a reasonable opening to head for if you're playing White against them."
+                )
+    if not tips:
+        tips.append("Not enough game data was found to spot a pattern yet.")
+
+    return {"white": white, "black": black, "tips": tips, "total_games": white["total"] + black["total"]}
+
+
+@app.get("/api/player-research", response_class=HTMLResponse)
+async def player_research(
+    request: Request,
+    name: str = "",
+    uscf_id: str = "",
+    fide_id: str = "",
+    lichess_username: str = "",
+    chesscom_username: str = "",
+    _user: dict = Depends(require_login),
+):
+    display_name = name.strip() or "This player"
+    uscf_id = uscf_id.strip()
+    lichess_username = lichess_username.strip()
+    chesscom_username = chesscom_username.strip()
+    fide_id = fide_id.strip()
+
+    # No explicit username typed in -- fall back to a crowd-confirmed one, if any.
+    if uscf_id:
+        if not lichess_username:
+            confirmed = await asyncio.get_event_loop().run_in_executor(
+                None, get_confirmed_online_id, uscf_id, "lichess")
+            lichess_username = confirmed or ""
+        if not chesscom_username:
+            confirmed = await asyncio.get_event_loop().run_in_executor(
+                None, get_confirmed_online_id, uscf_id, "chesscom")
+            chesscom_username = confirmed or ""
+
+    if not lichess_username and not chesscom_username and not fide_id:
+        return HTMLResponse(
+            '<div class="alert alert-secondary small mb-0">'
+            'No confirmed Lichess/Chess.com username yet for this player. '
+            'Report one below, or enter a username above and click Research.</div>'
+        )
+
+    lichess_games, chesscom_games, db_games = await asyncio.gather(
+        _fetch_lichess_games_pgn(lichess_username),
+        _fetch_chesscom_games_pgn(chesscom_username),
+        asyncio.get_event_loop().run_in_executor(None, get_pgn_games_by_fide_id, fide_id) if fide_id else _immediate([]),
+    )
+
+    report = _aggregate_player_research(display_name, lichess_games + chesscom_games + db_games)
+
+    return templates.TemplateResponse(request=request, name="fragments/player_research.html", context={
+        "display_name": display_name,
+        "report": report,
+        "used_lichess": bool(lichess_username),
+        "used_chesscom": bool(chesscom_username),
+        "used_db": bool(fide_id and db_games),
+        "lichess_username": lichess_username,
+        "chesscom_username": chesscom_username,
+    })
+
+
+async def _immediate(value):
+    return value
+
+
+@app.get("/api/player-online-ids", response_class=HTMLResponse)
+def player_online_ids(request: Request, uscf_id: str = "", user: dict = Depends(require_login)):
+    uscf_id = uscf_id.strip()
+    entries = list_online_ids(uscf_id) if uscf_id else []
+    return templates.TemplateResponse(request=request, name="fragments/player_online_ids.html", context={
+        "uscf_id": uscf_id, "entries": entries, "is_admin": user.get("role") == "admin",
+    })
+
+
+@app.post("/api/player-online-ids", response_class=HTMLResponse)
+def report_player_online_id(
+    request: Request,
+    uscf_id: str = Form(...),
+    platform: str = Form(...),
+    username: str = Form(...),
+    user: dict = Depends(require_login),
+):
+    report_online_id(uscf_id, platform, username, user["id"])
+    entries = list_online_ids(uscf_id)
+    return templates.TemplateResponse(request=request, name="fragments/player_online_ids.html", context={
+        "uscf_id": uscf_id, "entries": entries, "is_admin": user.get("role") == "admin",
+    })
+
+
+@app.post("/api/player-online-ids/{oid}/confirm", response_class=HTMLResponse)
+def confirm_player_online_id(request: Request, oid: int, uscf_id: str = Form(...), user: dict = Depends(require_admin)):
+    set_online_id_status(oid, "confirmed")
+    entries = list_online_ids(uscf_id)
+    return templates.TemplateResponse(request=request, name="fragments/player_online_ids.html", context={
+        "uscf_id": uscf_id, "entries": entries, "is_admin": True,
+    })
+
+
+@app.post("/api/player-online-ids/{oid}/unconfirm", response_class=HTMLResponse)
+def unconfirm_player_online_id(request: Request, oid: int, uscf_id: str = Form(...), user: dict = Depends(require_admin)):
+    set_online_id_status(oid, "reported")
+    entries = list_online_ids(uscf_id)
+    return templates.TemplateResponse(request=request, name="fragments/player_online_ids.html", context={
+        "uscf_id": uscf_id, "entries": entries, "is_admin": True,
     })
 
 
