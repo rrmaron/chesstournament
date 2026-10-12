@@ -2079,6 +2079,7 @@ async def player_quick_blitz(
 
     # USCF quick/blitz + FIDE rapid/blitz — reuse cached API data, fetch in parallel
     monthly_quick = monthly_blitz = live_quick = live_blitz = 0
+    monthly_online_quick = monthly_online_blitz = live_online_quick = live_online_blitz = 0
     fide_rapid = fide_blitz = 0
 
     api_headers = {
@@ -2143,6 +2144,10 @@ async def player_quick_blitz(
             monthly_quick = val
         elif rs == "B" and val:
             monthly_blitz = val
+        elif rs == "OQ" and val:
+            monthly_online_quick = val
+        elif rs == "OB" and val:
+            monthly_online_blitz = val
     for section in sections_data.get("items", []):
         for record in section.get("ratingRecords", []):
             src, val = record.get("ratingSource"), record.get("postRating", 0)
@@ -2150,10 +2155,18 @@ async def player_quick_blitz(
                 live_quick = val
             elif src == "B" and not live_blitz:
                 live_blitz = val
+            elif src == "OQ" and not live_online_quick:
+                live_online_quick = val
+            elif src == "OB" and not live_online_blitz:
+                live_online_blitz = val
     if not live_quick:
         live_quick = monthly_quick
     if not live_blitz:
         live_blitz = monthly_blitz
+    if not live_online_quick:
+        live_online_quick = monthly_online_quick
+    if not live_online_blitz:
+        live_online_blitz = monthly_online_blitz
 
     if fide_page:
         ms = re.findall(r'class="profile-standart[^"]*"[^>]*>.*?<p>(\d+)</p>', fide_page, re.DOTALL)
@@ -2166,6 +2179,7 @@ async def player_quick_blitz(
         "uscf_id": uscf_id, "fide_id": fide_id,
         "monthly_quick": monthly_quick, "monthly_blitz": monthly_blitz,
         "live_quick": live_quick, "live_blitz": live_blitz,
+        "live_online_quick": live_online_quick, "live_online_blitz": live_online_blitz,
         "fide_rapid": fide_rapid, "fide_blitz": fide_blitz,
     })
 

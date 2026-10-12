@@ -10,12 +10,20 @@
         <td>{{ live_quick if live_quick else '<span class="text-muted">—</span>' | safe }}</td>
       </tr>
       <tr>
+        <th class="ps-3">USCF Online Quick (live)</th>
+        <td>{{ live_online_quick if live_online_quick else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
         <th class="ps-3">USCF Blitz (monthly)</th>
         <td>{{ monthly_blitz if monthly_blitz else '<span class="text-muted">—</span>' | safe }}</td>
       </tr>
       <tr>
         <th class="ps-3">USCF Blitz (live)</th>
         <td>{{ live_blitz if live_blitz else '<span class="text-muted">—</span>' | safe }}</td>
+      </tr>
+      <tr>
+        <th class="ps-3">USCF Online Blitz (live)</th>
+        <td>{{ live_online_blitz if live_online_blitz else '<span class="text-muted">—</span>' | safe }}</td>
       </tr>
       {% if fide_id %}
       <tr>
