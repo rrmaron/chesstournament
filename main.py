@@ -2479,6 +2479,9 @@ def rating_impact_api(
     opp_uscf: Optional[int] = None,
     opp_uscf_quick: Optional[int] = None,
     opp_uscf_blitz: Optional[int] = None,
+    opp_uscf_online: Optional[int] = None,
+    opp_uscf_online_quick: Optional[int] = None,
+    opp_uscf_online_blitz: Optional[int] = None,
     opp_fide: Optional[int] = None,
     opp_fide_rapid: Optional[int] = None,
     opp_fide_blitz: Optional[int] = None,
@@ -2486,21 +2489,30 @@ def rating_impact_api(
 ):
     user = get_current_user(request)
     profile = get_user_profile(user["id"]) if user else None
-    my_uscf       = profile.get("uscf_rating")       if profile else None
-    my_uscf_quick = profile.get("uscf_quick_rating") if profile else None
-    my_uscf_blitz = profile.get("uscf_blitz_rating") if profile else None
+    my_uscf              = profile.get("uscf_rating")              if profile else None
+    my_uscf_quick        = profile.get("uscf_quick_rating")        if profile else None
+    my_uscf_blitz        = profile.get("uscf_blitz_rating")        if profile else None
+    my_uscf_online       = profile.get("uscf_online_rating")       if profile else None
+    my_uscf_online_quick = profile.get("uscf_online_quick_rating") if profile else None
+    my_uscf_online_blitz = profile.get("uscf_online_blitz_rating") if profile else None
     my_fide       = profile.get("fide_rating")       if profile else None
     my_fide_rapid = profile.get("fide_rapid_rating") if profile else None
     my_fide_blitz = profile.get("fide_blitz_rating") if profile else None
 
-    uscf_impact       = _elo_impact(my_uscf,       opp_uscf,       _uscf_k(my_uscf))       if my_uscf and opp_uscf             else None
-    uscf_quick_impact = _elo_impact(my_uscf_quick, opp_uscf_quick, _uscf_k(my_uscf_quick)) if my_uscf_quick and opp_uscf_quick else None
-    uscf_blitz_impact = _elo_impact(my_uscf_blitz, opp_uscf_blitz, _uscf_k(my_uscf_blitz)) if my_uscf_blitz and opp_uscf_blitz else None
+    uscf_impact              = _elo_impact(my_uscf,              opp_uscf,              _uscf_k(my_uscf))              if my_uscf and opp_uscf                           else None
+    uscf_quick_impact        = _elo_impact(my_uscf_quick,        opp_uscf_quick,        _uscf_k(my_uscf_quick))        if my_uscf_quick and opp_uscf_quick               else None
+    uscf_blitz_impact        = _elo_impact(my_uscf_blitz,        opp_uscf_blitz,        _uscf_k(my_uscf_blitz))        if my_uscf_blitz and opp_uscf_blitz               else None
+    uscf_online_impact       = _elo_impact(my_uscf_online,       opp_uscf_online,       _uscf_k(my_uscf_online))       if my_uscf_online and opp_uscf_online             else None
+    uscf_online_quick_impact = _elo_impact(my_uscf_online_quick, opp_uscf_online_quick, _uscf_k(my_uscf_online_quick)) if my_uscf_online_quick and opp_uscf_online_quick else None
+    uscf_online_blitz_impact = _elo_impact(my_uscf_online_blitz, opp_uscf_online_blitz, _uscf_k(my_uscf_online_blitz)) if my_uscf_online_blitz and opp_uscf_online_blitz else None
     fide_impact       = _elo_impact(my_fide,       opp_fide,       _fide_k(my_fide))       if my_fide and opp_fide             else None
     fide_rapid_impact = _elo_impact(my_fide_rapid, opp_fide_rapid, _fide_k(my_fide_rapid)) if my_fide_rapid and opp_fide_rapid else None
     fide_blitz_impact = _elo_impact(my_fide_blitz, opp_fide_blitz, _fide_k(my_fide_blitz)) if my_fide_blitz and opp_fide_blitz else None
 
-    has_any = bool(profile and any([my_uscf, my_uscf_quick, my_uscf_blitz, my_fide, my_fide_rapid, my_fide_blitz]))
+    has_any = bool(profile and any([
+        my_uscf, my_uscf_quick, my_uscf_blitz, my_uscf_online, my_uscf_online_quick, my_uscf_online_blitz,
+        my_fide, my_fide_rapid, my_fide_blitz,
+    ]))
     my_name = (profile.get("player_name") or profile.get("username") or "You") if profile else "You"
 
     return templates.TemplateResponse(
@@ -2509,10 +2521,13 @@ def rating_impact_api(
         context={
             "my_name": my_name, "opp_name": opp_name,
             "my_uscf": my_uscf, "my_uscf_quick": my_uscf_quick, "my_uscf_blitz": my_uscf_blitz,
+            "my_uscf_online": my_uscf_online, "my_uscf_online_quick": my_uscf_online_quick, "my_uscf_online_blitz": my_uscf_online_blitz,
             "my_fide": my_fide, "my_fide_rapid": my_fide_rapid, "my_fide_blitz": my_fide_blitz,
             "opp_uscf": opp_uscf, "opp_uscf_quick": opp_uscf_quick, "opp_uscf_blitz": opp_uscf_blitz,
+            "opp_uscf_online": opp_uscf_online, "opp_uscf_online_quick": opp_uscf_online_quick, "opp_uscf_online_blitz": opp_uscf_online_blitz,
             "opp_fide": opp_fide, "opp_fide_rapid": opp_fide_rapid, "opp_fide_blitz": opp_fide_blitz,
             "uscf_impact": uscf_impact, "uscf_quick_impact": uscf_quick_impact, "uscf_blitz_impact": uscf_blitz_impact,
+            "uscf_online_impact": uscf_online_impact, "uscf_online_quick_impact": uscf_online_quick_impact, "uscf_online_blitz_impact": uscf_online_blitz_impact,
             "fide_impact": fide_impact, "fide_rapid_impact": fide_rapid_impact, "fide_blitz_impact": fide_blitz_impact,
             "has_profile": has_any,
             "logged_in": bool(user),
@@ -2539,6 +2554,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                 )
             live_regular = monthly_quick = monthly_blitz = live_quick = live_blitz = 0
             monthly_online_regular = live_online_regular = 0
+            monthly_online_quick = monthly_online_blitz = live_online_quick = live_online_blitz = 0
             if member_r.status_code == 200:
                 for entry in member_r.json().get("ratings", []):
                     rs = entry.get("ratingSystem")
@@ -2549,6 +2565,10 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                         monthly_blitz = val
                     elif rs == "OR" and val:
                         monthly_online_regular = val
+                    elif rs == "OQ" and val:
+                        monthly_online_quick = val
+                    elif rs == "OB" and val:
+                        monthly_online_blitz = val
             if sections_r.status_code == 200:
                 for section in sections_r.json().get("items", []):
                     for record in section.get("ratingRecords", []):
@@ -2562,11 +2582,17 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                             live_blitz = val
                         elif src == "OR" and not live_online_regular:
                             live_online_regular = val
+                        elif src == "OQ" and not live_online_quick:
+                            live_online_quick = val
+                        elif src == "OB" and not live_online_blitz:
+                            live_online_blitz = val
             new_uscf = live_regular or profile.get("uscf_rating")
             new_quick = (live_quick or monthly_quick) or profile.get("uscf_quick_rating")
             new_blitz = (live_blitz or monthly_blitz) or profile.get("uscf_blitz_rating")
             new_online = (live_online_regular or monthly_online_regular) or profile.get("uscf_online_rating")
-            if any([new_uscf, new_quick, new_blitz, new_online]):
+            new_online_quick = (live_online_quick or monthly_online_quick) or profile.get("uscf_online_quick_rating")
+            new_online_blitz = (live_online_blitz or monthly_online_blitz) or profile.get("uscf_online_blitz_rating")
+            if any([new_uscf, new_quick, new_blitz, new_online, new_online_quick, new_online_blitz]):
                 update_user_profile(
                     user["id"],
                     profile.get("uscf_id"), profile.get("fide_id"),
@@ -2574,7 +2600,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                     new_quick, new_blitz,
                     profile.get("fide_rapid_rating"), profile.get("fide_blitz_rating"),
                     profile.get("player_name"),
-                    new_online,
+                    new_online, new_online_quick, new_online_blitz,
                 )
                 profile = get_user_profile(user["id"])
                 uscf_refreshed = True
@@ -2611,6 +2637,8 @@ def update_profile(
     fide_rapid_rating: Optional[int] = Form(None),
     fide_blitz_rating: Optional[int] = Form(None),
     uscf_online_rating: Optional[int] = Form(None),
+    uscf_online_quick_rating: Optional[int] = Form(None),
+    uscf_online_blitz_rating: Optional[int] = Form(None),
     user: dict = Depends(require_login),
 ):
     update_user_profile(
@@ -2620,7 +2648,7 @@ def update_profile(
         uscf_rating, fide_rating,
         uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating,
         player_name.strip() if player_name else None,
-        uscf_online_rating,
+        uscf_online_rating, uscf_online_quick_rating, uscf_online_blitz_rating,
     )
     return RedirectResponse("/profile?saved=1", status_code=303)
 
@@ -2636,6 +2664,9 @@ def profile_populate(
     uscf_blitz_rating: Optional[str] = Form(None),
     fide_rapid_rating: Optional[str] = Form(None),
     fide_blitz_rating: Optional[str] = Form(None),
+    uscf_online_rating: Optional[str] = Form(None),
+    uscf_online_quick_rating: Optional[str] = Form(None),
+    uscf_online_blitz_rating: Optional[str] = Form(None),
     user: dict = Depends(require_login),
 ):
     def _int(v):
@@ -2649,6 +2680,7 @@ def profile_populate(
         _int(uscf_quick_rating), _int(uscf_blitz_rating),
         _int(fide_rapid_rating), _int(fide_blitz_rating),
         player_name.strip() if player_name else None,
+        _int(uscf_online_rating), _int(uscf_online_quick_rating), _int(uscf_online_blitz_rating),
     )
     return HTMLResponse('<span class="text-success fw-semibold">&#10003; Profile updated</span>')
 

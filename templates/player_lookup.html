@@ -78,18 +78,24 @@ function runPlayerResearch(uscfId, fideId, name) {
 
 function loadRatingImpact(btn) {
   var card = btn.closest("[data-opp-name]");
-  var oppName      = card.dataset.oppName;
-  var oppUscf      = card.dataset.oppUscf;
-  var oppUscfQuick = card.dataset.oppUscfQuick;
-  var oppUscfBlitz = card.dataset.oppUscfBlitz;
+  var oppName            = card.dataset.oppName;
+  var oppUscf            = card.dataset.oppUscf;
+  var oppUscfQuick       = card.dataset.oppUscfQuick;
+  var oppUscfBlitz       = card.dataset.oppUscfBlitz;
+  var oppUscfOnline      = card.dataset.oppUscfOnline;
+  var oppUscfOnlineQuick = card.dataset.oppUscfOnlineQuick;
+  var oppUscfOnlineBlitz = card.dataset.oppUscfOnlineBlitz;
   var oppFide      = card.dataset.oppFide;
   var oppFideRapid = card.dataset.oppFideRapid;
   var oppFideBlitz = card.dataset.oppFideBlitz;
   var params = new URLSearchParams();
-  if (oppName)      params.set("opp_name", oppName);
-  if (oppUscf)      params.set("opp_uscf", oppUscf);
-  if (oppUscfQuick) params.set("opp_uscf_quick", oppUscfQuick);
-  if (oppUscfBlitz) params.set("opp_uscf_blitz", oppUscfBlitz);
+  if (oppName)            params.set("opp_name", oppName);
+  if (oppUscf)            params.set("opp_uscf", oppUscf);
+  if (oppUscfQuick)       params.set("opp_uscf_quick", oppUscfQuick);
+  if (oppUscfBlitz)       params.set("opp_uscf_blitz", oppUscfBlitz);
+  if (oppUscfOnline)      params.set("opp_uscf_online", oppUscfOnline);
+  if (oppUscfOnlineQuick) params.set("opp_uscf_online_quick", oppUscfOnlineQuick);
+  if (oppUscfOnlineBlitz) params.set("opp_uscf_online_blitz", oppUscfOnlineBlitz);
   if (oppFide)      params.set("opp_fide", oppFide);
   if (oppFideRapid) params.set("opp_fide_rapid", oppFideRapid);
   if (oppFideBlitz) params.set("opp_fide_blitz", oppFideBlitz);
@@ -112,15 +118,18 @@ async function saveAsMyProfile(btn) {
   var card = btn.closest('[data-opp-name]');
   var feedback = document.getElementById('profile-set-feedback');
   var body = new URLSearchParams({
-    player_name:       card.dataset.oppName      || '',
-    uscf_id:           card.dataset.uscfId        || '',
-    fide_id:           card.dataset.fideId        || '',
-    uscf_rating:       card.dataset.oppUscf       || '',
-    uscf_quick_rating: card.dataset.oppUscfQuick  || '',
-    uscf_blitz_rating: card.dataset.oppUscfBlitz  || '',
-    fide_rating:       card.dataset.oppFide       || '',
-    fide_rapid_rating: card.dataset.oppFideRapid  || '',
-    fide_blitz_rating: card.dataset.oppFideBlitz  || '',
+    player_name:              card.dataset.oppName            || '',
+    uscf_id:                  card.dataset.uscfId              || '',
+    fide_id:                  card.dataset.fideId              || '',
+    uscf_rating:               card.dataset.oppUscf             || '',
+    uscf_quick_rating:         card.dataset.oppUscfQuick        || '',
+    uscf_blitz_rating:         card.dataset.oppUscfBlitz        || '',
+    uscf_online_rating:        card.dataset.oppUscfOnline       || '',
+    uscf_online_quick_rating:  card.dataset.oppUscfOnlineQuick  || '',
+    uscf_online_blitz_rating:  card.dataset.oppUscfOnlineBlitz  || '',
+    fide_rating:               card.dataset.oppFide             || '',
+    fide_rapid_rating:         card.dataset.oppFideRapid        || '',
+    fide_blitz_rating:         card.dataset.oppFideBlitz        || '',
   });
   btn.disabled = true;
   try {

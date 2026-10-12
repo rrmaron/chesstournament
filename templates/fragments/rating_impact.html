@@ -12,7 +12,7 @@
         Set your ratings in your <a href="/profile">player profile</a> to see how a game would affect your ratings.
       </div>
     {% else %}
-      {% set any_impact = uscf_impact or uscf_quick_impact or uscf_blitz_impact or fide_impact or fide_rapid_impact or fide_blitz_impact %}
+      {% set any_impact = uscf_impact or uscf_quick_impact or uscf_blitz_impact or uscf_online_impact or uscf_online_quick_impact or uscf_online_blitz_impact or fide_impact or fide_rapid_impact or fide_blitz_impact %}
       {% if not any_impact %}
         <div class="alert alert-warning mb-0">
           No matching ratings to compare — make sure your profile has ratings and the opponent has ratings.
@@ -26,6 +26,9 @@
               {% if uscf_impact %}<th>USCF Regular<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf }} / {{ opp_name }}: {{ opp_uscf }}</small></th>{% endif %}
               {% if uscf_quick_impact %}<th>USCF Quick<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_quick }} / {{ opp_name }}: {{ opp_uscf_quick }}</small></th>{% endif %}
               {% if uscf_blitz_impact %}<th>USCF Blitz<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_blitz }} / {{ opp_name }}: {{ opp_uscf_blitz }}</small></th>{% endif %}
+              {% if uscf_online_impact %}<th>USCF Online Regular<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_online }} / {{ opp_name }}: {{ opp_uscf_online }}</small></th>{% endif %}
+              {% if uscf_online_quick_impact %}<th>USCF Online Quick<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_online_quick }} / {{ opp_name }}: {{ opp_uscf_online_quick }}</small></th>{% endif %}
+              {% if uscf_online_blitz_impact %}<th>USCF Online Blitz<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_uscf_online_blitz }} / {{ opp_name }}: {{ opp_uscf_online_blitz }}</small></th>{% endif %}
               {% if fide_impact %}<th>FIDE Standard<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide }} / {{ opp_name }}: {{ opp_fide }}</small></th>{% endif %}
               {% if fide_rapid_impact %}<th>FIDE Rapid<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide_rapid }} / {{ opp_name }}: {{ opp_fide_rapid }}</small></th>{% endif %}
               {% if fide_blitz_impact %}<th>FIDE Blitz<br><small class="text-muted fw-normal">{{ my_name }}: {{ my_fide_blitz }} / {{ opp_name }}: {{ opp_fide_blitz }}</small></th>{% endif %}
@@ -37,6 +40,9 @@
               {% if uscf_impact %}<td class="text-success fw-bold">+{{ uscf_impact.win }}</td>{% endif %}
               {% if uscf_quick_impact %}<td class="text-success fw-bold">+{{ uscf_quick_impact.win }}</td>{% endif %}
               {% if uscf_blitz_impact %}<td class="text-success fw-bold">+{{ uscf_blitz_impact.win }}</td>{% endif %}
+              {% if uscf_online_impact %}<td class="text-success fw-bold">+{{ uscf_online_impact.win }}</td>{% endif %}
+              {% if uscf_online_quick_impact %}<td class="text-success fw-bold">+{{ uscf_online_quick_impact.win }}</td>{% endif %}
+              {% if uscf_online_blitz_impact %}<td class="text-success fw-bold">+{{ uscf_online_blitz_impact.win }}</td>{% endif %}
               {% if fide_impact %}<td class="text-success fw-bold">+{{ fide_impact.win }}</td>{% endif %}
               {% if fide_rapid_impact %}<td class="text-success fw-bold">+{{ fide_rapid_impact.win }}</td>{% endif %}
               {% if fide_blitz_impact %}<td class="text-success fw-bold">+{{ fide_blitz_impact.win }}</td>{% endif %}
@@ -46,6 +52,9 @@
               {% if uscf_impact %}<td class="fw-bold {% if uscf_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_impact.draw >= 0 %}+{% endif %}{{ uscf_impact.draw }}</td>{% endif %}
               {% if uscf_quick_impact %}<td class="fw-bold {% if uscf_quick_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_quick_impact.draw >= 0 %}+{% endif %}{{ uscf_quick_impact.draw }}</td>{% endif %}
               {% if uscf_blitz_impact %}<td class="fw-bold {% if uscf_blitz_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_blitz_impact.draw >= 0 %}+{% endif %}{{ uscf_blitz_impact.draw }}</td>{% endif %}
+              {% if uscf_online_impact %}<td class="fw-bold {% if uscf_online_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_online_impact.draw >= 0 %}+{% endif %}{{ uscf_online_impact.draw }}</td>{% endif %}
+              {% if uscf_online_quick_impact %}<td class="fw-bold {% if uscf_online_quick_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_online_quick_impact.draw >= 0 %}+{% endif %}{{ uscf_online_quick_impact.draw }}</td>{% endif %}
+              {% if uscf_online_blitz_impact %}<td class="fw-bold {% if uscf_online_blitz_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if uscf_online_blitz_impact.draw >= 0 %}+{% endif %}{{ uscf_online_blitz_impact.draw }}</td>{% endif %}
               {% if fide_impact %}<td class="fw-bold {% if fide_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if fide_impact.draw >= 0 %}+{% endif %}{{ fide_impact.draw }}</td>{% endif %}
               {% if fide_rapid_impact %}<td class="fw-bold {% if fide_rapid_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if fide_rapid_impact.draw >= 0 %}+{% endif %}{{ fide_rapid_impact.draw }}</td>{% endif %}
               {% if fide_blitz_impact %}<td class="fw-bold {% if fide_blitz_impact.draw >= 0 %}text-success{% else %}text-danger{% endif %}">{% if fide_blitz_impact.draw >= 0 %}+{% endif %}{{ fide_blitz_impact.draw }}</td>{% endif %}
@@ -55,6 +64,9 @@
               {% if uscf_impact %}<td class="text-danger fw-bold">{{ uscf_impact.loss }}</td>{% endif %}
               {% if uscf_quick_impact %}<td class="text-danger fw-bold">{{ uscf_quick_impact.loss }}</td>{% endif %}
               {% if uscf_blitz_impact %}<td class="text-danger fw-bold">{{ uscf_blitz_impact.loss }}</td>{% endif %}
+              {% if uscf_online_impact %}<td class="text-danger fw-bold">{{ uscf_online_impact.loss }}</td>{% endif %}
+              {% if uscf_online_quick_impact %}<td class="text-danger fw-bold">{{ uscf_online_quick_impact.loss }}</td>{% endif %}
+              {% if uscf_online_blitz_impact %}<td class="text-danger fw-bold">{{ uscf_online_blitz_impact.loss }}</td>{% endif %}
               {% if fide_impact %}<td class="text-danger fw-bold">{{ fide_impact.loss }}</td>{% endif %}
               {% if fide_rapid_impact %}<td class="text-danger fw-bold">{{ fide_rapid_impact.loss }}</td>{% endif %}
               {% if fide_blitz_impact %}<td class="text-danger fw-bold">{{ fide_blitz_impact.loss }}</td>{% endif %}
@@ -64,6 +76,9 @@
               {% if uscf_impact %}<td class="text-muted small">{{ uscf_impact.expected_pct }}%</td>{% endif %}
               {% if uscf_quick_impact %}<td class="text-muted small">{{ uscf_quick_impact.expected_pct }}%</td>{% endif %}
               {% if uscf_blitz_impact %}<td class="text-muted small">{{ uscf_blitz_impact.expected_pct }}%</td>{% endif %}
+              {% if uscf_online_impact %}<td class="text-muted small">{{ uscf_online_impact.expected_pct }}%</td>{% endif %}
+              {% if uscf_online_quick_impact %}<td class="text-muted small">{{ uscf_online_quick_impact.expected_pct }}%</td>{% endif %}
+              {% if uscf_online_blitz_impact %}<td class="text-muted small">{{ uscf_online_blitz_impact.expected_pct }}%</td>{% endif %}
               {% if fide_impact %}<td class="text-muted small">{{ fide_impact.expected_pct }}%</td>{% endif %}
               {% if fide_rapid_impact %}<td class="text-muted small">{{ fide_rapid_impact.expected_pct }}%</td>{% endif %}
               {% if fide_blitz_impact %}<td class="text-muted small">{{ fide_blitz_impact.expected_pct }}%</td>{% endif %}

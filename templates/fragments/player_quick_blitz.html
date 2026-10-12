@@ -45,6 +45,8 @@
       if (!card) return;
       {% if live_quick or monthly_quick %}card.dataset.oppUscfQuick = '{{ live_quick or monthly_quick }}';{% endif %}
       {% if live_blitz or monthly_blitz %}card.dataset.oppUscfBlitz = '{{ live_blitz or monthly_blitz }}';{% endif %}
+      {% if live_online_quick %}card.dataset.oppUscfOnlineQuick = '{{ live_online_quick }}';{% endif %}
+      {% if live_online_blitz %}card.dataset.oppUscfOnlineBlitz = '{{ live_online_blitz }}';{% endif %}
       {% if fide_rapid %}card.dataset.oppFideRapid = '{{ fide_rapid }}';{% endif %}
       {% if fide_blitz %}card.dataset.oppFideBlitz = '{{ fide_blitz }}';{% endif %}
     })();

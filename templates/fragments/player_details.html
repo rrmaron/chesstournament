@@ -5,6 +5,9 @@
      data-opp-uscf="{{ live_rating or rating or '' }}"
      data-opp-uscf-quick=""
      data-opp-uscf-blitz=""
+     data-opp-uscf-online="{{ online_rating or '' }}"
+     data-opp-uscf-online-quick=""
+     data-opp-uscf-online-blitz=""
      data-opp-fide="{{ fide_rating or '' }}"
      data-opp-fide-rapid=""
      data-opp-fide-blitz="">
@@ -29,7 +32,7 @@
           <td>{{ live_rating if live_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
         </tr>
         <tr>
-          <th class="ps-3">USCF Online Regular</th>
+          <th class="ps-3">Live USCF Online Regular</th>
           <td>{{ online_rating if online_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
         </tr>
         <tr>
