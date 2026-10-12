@@ -2235,6 +2235,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                     client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=api_headers),
                 )
             live_regular = monthly_quick = monthly_blitz = live_quick = live_blitz = 0
+            monthly_online_regular = live_online_regular = 0
             if member_r.status_code == 200:
                 for entry in member_r.json().get("ratings", []):
                     rs = entry.get("ratingSystem")
@@ -2243,6 +2244,8 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                         monthly_quick = val
                     elif rs == "B" and val:
                         monthly_blitz = val
+                    elif rs == "OR" and val:
+                        monthly_online_regular = val
             if sections_r.status_code == 200:
                 for section in sections_r.json().get("items", []):
                     for record in section.get("ratingRecords", []):
@@ -2254,10 +2257,13 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                             live_quick = val
                         elif src == "B" and not live_blitz:
                             live_blitz = val
+                        elif src == "OR" and not live_online_regular:
+                            live_online_regular = val
             new_uscf = live_regular or profile.get("uscf_rating")
             new_quick = (live_quick or monthly_quick) or profile.get("uscf_quick_rating")
             new_blitz = (live_blitz or monthly_blitz) or profile.get("uscf_blitz_rating")
-            if any([new_uscf, new_quick, new_blitz]):
+            new_online = (live_online_regular or monthly_online_regular) or profile.get("uscf_online_rating")
+            if any([new_uscf, new_quick, new_blitz, new_online]):
                 update_user_profile(
                     user["id"],
                     profile.get("uscf_id"), profile.get("fide_id"),
@@ -2265,6 +2271,7 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                     new_quick, new_blitz,
                     profile.get("fide_rapid_rating"), profile.get("fide_blitz_rating"),
                     profile.get("player_name"),
+                    new_online,
                 )
                 profile = get_user_profile(user["id"])
                 uscf_refreshed = True
@@ -2300,6 +2307,7 @@ def update_profile(
     uscf_blitz_rating: Optional[int] = Form(None),
     fide_rapid_rating: Optional[int] = Form(None),
     fide_blitz_rating: Optional[int] = Form(None),
+    uscf_online_rating: Optional[int] = Form(None),
     user: dict = Depends(require_login),
 ):
     update_user_profile(
@@ -2309,6 +2317,7 @@ def update_profile(
         uscf_rating, fide_rating,
         uscf_quick_rating, uscf_blitz_rating, fide_rapid_rating, fide_blitz_rating,
         player_name.strip() if player_name else None,
+        uscf_online_rating,
     )
     return RedirectResponse("/profile?saved=1", status_code=303)
 

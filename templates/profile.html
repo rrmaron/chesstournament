@@ -90,6 +90,11 @@
                  value="{{ profile.uscf_blitz_rating or '' }}" placeholder="e.g. 1550" min="100" max="3000">
         </div>
         <div class="col-sm-6">
+          <label class="form-label">USCF Online Regular (Live)</label>
+          <input type="number" name="uscf_online_rating" class="form-control"
+                 value="{{ profile.uscf_online_rating or '' }}" placeholder="e.g. 1650" min="100" max="3000">
+        </div>
+        <div class="col-sm-6">
           <label class="form-label">FIDE Standard</label>
           <input type="number" name="fide_rating" class="form-control"
                  value="{{ profile.fide_rating or '' }}" placeholder="e.g. 1600" min="100" max="3000">
