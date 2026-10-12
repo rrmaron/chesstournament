@@ -24,16 +24,6 @@
     <div id="lookup-suggestions"></div>
   </div>
 
-  {% include "_featured_card.html" %}
-
-  <h2 class="mb-3">Player Rating Lookup</h2>
-
-  <div class="alert alert-info py-3 px-3 mb-4" style="font-size:0.93rem;line-height:1.55">
-    <p class="mb-2"><strong>Step 1 — Find your profile.</strong> Type the name of the player this account is for in the search box below. Once your profile appears, click <strong>"Use as My Profile"</strong> to save it to your account.</p>
-    <p class="mb-2"><strong>Step 2 — Calculate rating impacts.</strong> Then go to <strong>USCF Calculator</strong> in the menu. There you can add tournaments, add opponents and games within each tournament, and see instant W/L/D rating impacts after every game — progressively as you enter results.</p>
-    <p class="mb-0"><strong>Step 3 — Attach your scoresheets.</strong> Next to each game you'll see a 📎 paperclip icon. Click it to attach your notation — either by taking a photo of your scoresheet with your phone camera, or by uploading a PGN file directly.</p>
-  </div>
-
   <div id="details-loading" class="htmx-indicator text-center py-4">
     <div class="spinner-border text-primary" role="status"></div>
     <p class="mt-2 text-muted">Fetching ratings — this may take a few seconds…</p>
@@ -42,6 +32,22 @@
   <div id="player-details"></div>
 
   <div id="rating-impact" class="mt-3"></div>
+
+  <p class="mb-4">
+    <a class="text-decoration-none" data-bs-toggle="collapse" href="#lookup-instructions" role="button"
+       aria-expanded="false" aria-controls="lookup-instructions">
+      <strong>Player Rating Lookup</strong> — how this page works <span class="small text-muted">(click to expand)</span>
+    </a>
+  </p>
+  <div class="collapse" id="lookup-instructions">
+    <div class="alert alert-info py-3 px-3 mb-4" style="font-size:0.93rem;line-height:1.55">
+      <p class="mb-2"><strong>Step 1 — Find your profile.</strong> Type the name of the player this account is for in the search box above. Once your profile appears, click <strong>"Use as My Profile"</strong> to save it to your account.</p>
+      <p class="mb-2"><strong>Step 2 — Calculate rating impacts.</strong> Then go to <strong>USCF Calculator</strong> in the menu. There you can add tournaments, add opponents and games within each tournament, and see instant W/L/D rating impacts after every game — progressively as you enter results.</p>
+      <p class="mb-0"><strong>Step 3 — Attach your scoresheets.</strong> Next to each game you'll see a 📎 paperclip icon. Click it to attach your notation — either by taking a photo of your scoresheet with your phone camera, or by uploading a PGN file directly.</p>
+    </div>
+  </div>
+
+  {% include "_featured_card.html" %}
 
 </div>
 </div>

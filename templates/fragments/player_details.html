@@ -29,6 +29,10 @@
           <td>{{ live_rating if live_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
         </tr>
         <tr>
+          <th class="ps-3">USCF Online Regular</th>
+          <td>{{ online_rating if online_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
+        </tr>
+        <tr>
           <th class="ps-3">FIDE ID</th>
           <td>
             {% if fide_id %}

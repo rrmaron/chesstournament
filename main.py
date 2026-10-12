@@ -1879,8 +1879,7 @@ def player_lookup_page(request: Request, user: dict = Depends(require_login)):
                                       context={"current_user": user,
                                                **_user_tournament_context(user["id"])})
 
-async def _live_regular_rating(uscf_id: str) -> int:
-    """Latest online (post-tournament) regular rating from the USCF ratings API; 0 if unavailable."""
+async def _fetch_uscf_sections(uscf_id: str) -> dict:
     key = f"uscf_sections_{uscf_id}"
     data = _cache_get(key)
     if data is None:
@@ -1896,9 +1895,25 @@ async def _live_regular_rating(uscf_id: str) -> int:
         except Exception:
             data = {}
         _cache_set(key, data, ttl=240)
+    return data
+
+
+async def _live_regular_rating(uscf_id: str) -> int:
+    """Latest post-tournament over-the-board Regular rating; 0 if unavailable."""
+    data = await _fetch_uscf_sections(uscf_id)
     for section in data.get("items", []):
         for record in section.get("ratingRecords", []):
             if record.get("ratingSource") == "R" and record.get("postRating"):
+                return record["postRating"]
+    return 0
+
+
+async def _live_online_regular_rating(uscf_id: str) -> int:
+    """Latest post-event USCF Online Regular rating (ratingSource 'OR'); 0 if unavailable."""
+    data = await _fetch_uscf_sections(uscf_id)
+    for section in data.get("items", []):
+        for record in section.get("ratingRecords", []):
+            if record.get("ratingSource") == "OR" and record.get("postRating"):
                 return record["postRating"]
     return 0
 
@@ -1921,20 +1936,25 @@ async def player_lookup_search(name: str = "", _user: dict = Depends(require_log
         return HTMLResponse('<div id="lookup-suggestions"><p class="text-muted small mt-1">No results found.</p></div>')
 
     local = local[:12]
-    live_ratings = await asyncio.gather(*(_live_regular_rating(r["uscf_id"]) for r in local))
+    live_ratings, online_ratings = await asyncio.gather(
+        asyncio.gather(*(_live_regular_rating(r["uscf_id"]) for r in local)),
+        asyncio.gather(*(_live_online_regular_rating(r["uscf_id"]) for r in local)),
+    )
 
     save_uscf_ratings((r["uscf_id"], r.get("rating"), lr) for r, lr in zip(local, live_ratings))
 
     items = ""
-    for r, live_rating in zip(local, live_ratings):
+    for r, live_rating, online_rating in zip(local, live_ratings, online_ratings):
         display = html.escape(_format_uscf_name(r["name"]))
         rating_str = f' — {r["rating"]}' if r.get("rating") else ""
         live_str = (f' <span class="badge text-bg-success">Live {live_rating}</span>'
                     if live_rating else "")
+        online_str = (f' <span class="badge text-bg-info">Online {online_rating}</span>'
+                      if online_rating else "")
         items += (
             f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
             f' onclick="selectPlayer(\'{html.escape(display)}\', \'{r["uscf_id"]}\')">'
-            f'{display} <span class="text-muted">{r["uscf_id"]}</span>{html.escape(rating_str)}{live_str}'
+            f'{display} <span class="text-muted">{r["uscf_id"]}</span>{html.escape(rating_str)}{live_str}{online_str}'
             f'</button>'
         )
     return HTMLResponse(
@@ -2012,30 +2032,34 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
     )
 
     live_rating = 0
+    monthly_online_rating = 0
     if member_data:
         if not name:
             name = f"{member_data.get('firstName', '')} {member_data.get('lastName', '')}".strip().title()
         for entry in member_data.get("ratings", []):
             if entry.get("ratingSystem") == "R" and entry.get("rating"):
                 rating = entry["rating"]
-                break
+            elif entry.get("ratingSystem") == "OR" and entry.get("rating"):
+                monthly_online_rating = entry["rating"]
+    live_online_rating = 0
     for section in sections_data.get("items", []):
         for record in section.get("ratingRecords", []):
-            if record.get("ratingSource") == "R":
+            if record.get("ratingSource") == "R" and not live_rating:
                 live_rating = record.get("postRating", 0)
-                break
-        if live_rating:
-            break
+            elif record.get("ratingSource") == "OR" and not live_online_rating:
+                live_online_rating = record.get("postRating", 0)
 
     if not name:
         return HTMLResponse('<div class="alert alert-warning">Player not found.</div>')
 
+    online_rating = live_online_rating or monthly_online_rating
     save_uscf_ratings([(uscf_id, rating, live_rating)])
 
     return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
         "name": name, "uscf_id": uscf_id, "rating": rating,
         "fide_id": fide_id, "expiry": expiry,
         "live_rating": live_rating, "fide_rating": fide_rating,
+        "online_rating": online_rating,
     })
 
 

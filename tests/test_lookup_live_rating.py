@@ -12,12 +12,16 @@ def _setup(client, app_module, monkeypatch, live):
     async def fake_live_rating(uscf_id):
         return live.get(uscf_id, 0)
 
+    async def fake_zero(uscf_id):
+        return 0
+
     monkeypatch.setattr(app_module, "search_uscf_members", lambda q: [
         {"uscf_id": "111", "name": "DOE, JANE", "rating": 1500, "fide_id": None},
         {"uscf_id": "222", "name": "ROE, RICK", "rating": 1700, "fide_id": None},
     ])
     monkeypatch.setattr(app_module, "_uscf_live_search", fake_live_search)
     monkeypatch.setattr(app_module, "_live_regular_rating", fake_live_rating)
+    monkeypatch.setattr(app_module, "_live_online_regular_rating", fake_zero)
 
 
 def test_lookup_suggestions_include_live_rating(client, app_module, monkeypatch):
