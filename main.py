@@ -25,6 +25,7 @@ from database import (
     record_result, get_pairings_for_round, get_standings,
     update_current_round, store_pairing, get_player_rank_map,
     import_uscf_members, search_uscf_members, lookup_uscf_member, get_uscf_db_count,
+    save_uscf_ratings, get_uscf_rating_snapshot,
     get_user_by_username, get_user_by_email, get_user_by_phone,
     verify_password, create_user, create_pending_user, list_users,
     delete_user, update_user_password, update_user_info,
@@ -1878,6 +1879,30 @@ def player_lookup_page(request: Request, user: dict = Depends(require_login)):
                                       context={"current_user": user,
                                                **_user_tournament_context(user["id"])})
 
+async def _live_regular_rating(uscf_id: str) -> int:
+    """Latest online (post-tournament) regular rating from the USCF ratings API; 0 if unavailable."""
+    key = f"uscf_sections_{uscf_id}"
+    data = _cache_get(key)
+    if data is None:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0)",
+            "Accept": "application/json",
+            "Origin": "https://ratings.uschess.org",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=6, follow_redirects=True) as client:
+                r = await client.get(f"https://ratings-api.uschess.org/api/v1/members/{uscf_id}/sections", headers=headers)
+            data = r.json() if r.status_code == 200 else {}
+        except Exception:
+            data = {}
+        _cache_set(key, data, ttl=240)
+    for section in data.get("items", []):
+        for record in section.get("ratingRecords", []):
+            if record.get("ratingSource") == "R" and record.get("postRating"):
+                return record["postRating"]
+    return 0
+
+
 @app.get("/api/player-lookup-search", response_class=HTMLResponse)
 async def player_lookup_search(name: str = "", _user: dict = Depends(require_login)):
     q = name.strip()
@@ -1895,14 +1920,21 @@ async def player_lookup_search(name: str = "", _user: dict = Depends(require_log
     if not local:
         return HTMLResponse('<div id="lookup-suggestions"><p class="text-muted small mt-1">No results found.</p></div>')
 
+    local = local[:12]
+    live_ratings = await asyncio.gather(*(_live_regular_rating(r["uscf_id"]) for r in local))
+
+    save_uscf_ratings((r["uscf_id"], r.get("rating"), lr) for r, lr in zip(local, live_ratings))
+
     items = ""
-    for r in local:
+    for r, live_rating in zip(local, live_ratings):
         display = html.escape(_format_uscf_name(r["name"]))
         rating_str = f' — {r["rating"]}' if r.get("rating") else ""
+        live_str = (f' <span class="badge text-bg-success">Live {live_rating}</span>'
+                    if live_rating else "")
         items += (
             f'<button type="button" class="list-group-item list-group-item-action py-1 small"'
             f' onclick="selectPlayer(\'{html.escape(display)}\', \'{r["uscf_id"]}\')">'
-            f'{display} <span class="text-muted">{r["uscf_id"]}</span>{html.escape(rating_str)}'
+            f'{display} <span class="text-muted">{r["uscf_id"]}</span>{html.escape(rating_str)}{live_str}'
             f'</button>'
         )
     return HTMLResponse(
@@ -1997,6 +2029,8 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
 
     if not name:
         return HTMLResponse('<div class="alert alert-warning">Player not found.</div>')
+
+    save_uscf_ratings([(uscf_id, rating, live_rating)])
 
     return templates.TemplateResponse(request=request, name="fragments/player_details.html", context={
         "name": name, "uscf_id": uscf_id, "rating": rating,
