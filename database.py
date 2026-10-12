@@ -304,6 +304,14 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_uscf_members_name ON uscf_members(name)')
 
+    # Separate from uscf_members so a monthly-list re-import (which wipes that table) keeps these.
+    c.execute('''CREATE TABLE IF NOT EXISTS uscf_rating_snapshots (
+        uscf_id TEXT PRIMARY KEY,
+        monthly_rating INTEGER DEFAULT 0,
+        live_rating INTEGER DEFAULT 0,
+        updated_at TEXT
+    )''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
@@ -1681,6 +1689,38 @@ def lookup_uscf_member(uscf_id: str) -> Optional[Dict]:
     conn.close()
     if row:
         return {"uscf_id": row[0], "name": row[1], "rating": row[2], "state": row[3], "fide_id": row[4], "expiry": row[5]}
+    return None
+
+
+def save_uscf_ratings(rows) -> None:
+    """Upsert (uscf_id, monthly_rating, live_rating) snapshots from online lookups.
+    A zero/missing value never overwrites a previously stored non-zero one."""
+    rows = [(str(u).strip(), m or 0, l or 0) for u, m, l in rows if u]
+    if not rows:
+        return
+    conn = sqlite3.connect(DB_FILE)
+    conn.executemany(
+        """INSERT INTO uscf_rating_snapshots (uscf_id, monthly_rating, live_rating, updated_at)
+           VALUES (?, ?, ?, datetime('now'))
+           ON CONFLICT(uscf_id) DO UPDATE SET
+             monthly_rating = CASE WHEN excluded.monthly_rating > 0 THEN excluded.monthly_rating ELSE monthly_rating END,
+             live_rating    = CASE WHEN excluded.live_rating > 0 THEN excluded.live_rating ELSE live_rating END,
+             updated_at     = excluded.updated_at""",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_uscf_rating_snapshot(uscf_id: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT uscf_id, monthly_rating, live_rating, updated_at FROM uscf_rating_snapshots WHERE uscf_id=?",
+        (uscf_id.strip(),),
+    ).fetchone()
+    conn.close()
+    if row:
+        return {"uscf_id": row[0], "monthly_rating": row[1], "live_rating": row[2], "updated_at": row[3]}
     return None
 
 
