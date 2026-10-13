@@ -16,6 +16,7 @@ import tempfile
 import html
 import re
 import httpx
+import anthropic
 from typing import Optional, List
 import stripe
 
@@ -95,9 +96,26 @@ if not SECRET_KEY:
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Optional: required when ANTHROPIC_API_KEY is an organization-level key that is
-# not scoped to a workspace (the API then demands an anthropic-workspace-id header).
+# Workspace to bill Claude usage to. With a static key that is not workspace-scoped
+# it is sent as the anthropic-workspace-id header; with federation it scopes the
+# minted token (may be the literal "default").
 ANTHROPIC_WORKSPACE_ID = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
+# Workload Identity Federation: no static key. The Fly machine mints an OIDC JWT
+# (POST /v1/tokens/oidc on the local Fly API socket) and the SDK exchanges it for a
+# short-lived Anthropic token acting as the rule's service account. Configure the
+# issuer https://oidc.fly.io/<org-slug> and a rule matching subject prefix
+# <org-slug>:<app-name>: in the Claude Console (Settings -> Workload identity).
+ANTHROPIC_FEDERATION_RULE_ID = os.environ.get("ANTHROPIC_FEDERATION_RULE_ID", "")
+ANTHROPIC_ORGANIZATION_ID = os.environ.get("ANTHROPIC_ORGANIZATION_ID", "")
+ANTHROPIC_SERVICE_ACCOUNT_ID = os.environ.get("ANTHROPIC_SERVICE_ACCOUNT_ID", "")
+# Alternative token source for non-Fly hosts (Kubernetes projected token etc.).
+ANTHROPIC_IDENTITY_TOKEN_FILE = os.environ.get("ANTHROPIC_IDENTITY_TOKEN_FILE", "")
+# Optional "aud" claim to request from Fly, if the federation rule matches on audience.
+ANTHROPIC_IDENTITY_TOKEN_AUDIENCE = os.environ.get("ANTHROPIC_IDENTITY_TOKEN_AUDIENCE", "")
+FLY_API_SOCKET = os.environ.get("FLY_API_SOCKET", "/.fly/api")
+if ANTHROPIC_API_KEY and ANTHROPIC_FEDERATION_RULE_ID:
+    logging.warning("Both ANTHROPIC_API_KEY and ANTHROPIC_FEDERATION_RULE_ID are set; "
+                    "the static key takes precedence, so federation is not in use")
 if STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
     logging.error(
         "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not — payment "
@@ -4931,12 +4949,76 @@ def _valid_fen_placement(placement: str) -> bool:
     return kings["K"] == 1 and kings["k"] == 1
 
 
-def _anthropic_client():
-    """Claude API client; sends the workspace header when the key is not workspace-scoped."""
-    import anthropic
+def _claude_auth_mode() -> str:
+    """'api_key', 'federation', or '' when Claude is not configured.
 
-    headers = {"anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID} if ANTHROPIC_WORKSPACE_ID else None
-    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, default_headers=headers)
+    A static key wins over federation, matching the SDK's own credential precedence.
+    """
+    if ANTHROPIC_API_KEY:
+        return "api_key"
+    if ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID:
+        return "federation"
+    return ""
+
+
+def _fly_transport() -> httpx.BaseTransport:
+    return httpx.HTTPTransport(uds=FLY_API_SOCKET)
+
+
+def _fly_identity_token() -> str:
+    """Mint a fresh OIDC JWT for this Fly machine.
+
+    Minted on every call rather than cached: Anthropic rejects a JWT whose jti was
+    already exchanged, and the SDK calls this only when it needs a new access token.
+    """
+    body = {"aud": ANTHROPIC_IDENTITY_TOKEN_AUDIENCE} if ANTHROPIC_IDENTITY_TOKEN_AUDIENCE else {}
+    with httpx.Client(transport=_fly_transport(), timeout=10) as client:
+        resp = client.post("http://localhost/v1/tokens/oidc", json=body)
+        resp.raise_for_status()
+    token = resp.text.strip()
+    if token.startswith("{"):
+        payload = resp.json()
+        token = next((payload[k] for k in ("token", "jwt", "id_token", "access_token")
+                      if isinstance(payload.get(k), str)), "")
+    if token.count(".") != 2:
+        raise RuntimeError("Fly OIDC endpoint did not return a JWT")
+    return token
+
+
+def _identity_token_provider():
+    if ANTHROPIC_IDENTITY_TOKEN_FILE:
+        return anthropic.IdentityTokenFile(ANTHROPIC_IDENTITY_TOKEN_FILE)
+    return _fly_identity_token
+
+
+def _federation_credentials() -> "anthropic.WorkloadIdentityCredentials":
+    return anthropic.WorkloadIdentityCredentials(
+        identity_token_provider=_identity_token_provider(),
+        federation_rule_id=ANTHROPIC_FEDERATION_RULE_ID,
+        organization_id=ANTHROPIC_ORGANIZATION_ID,
+        service_account_id=ANTHROPIC_SERVICE_ACCOUNT_ID or None,
+        workspace_id=ANTHROPIC_WORKSPACE_ID or None,
+    )
+
+
+_claude_client = None
+_claude_client_config = None
+
+
+def _anthropic_client():
+    """Claude API client, cached so a federated access token is reused until it expires."""
+    global _claude_client, _claude_client_config
+    config = (ANTHROPIC_API_KEY, ANTHROPIC_WORKSPACE_ID, ANTHROPIC_FEDERATION_RULE_ID, ANTHROPIC_ORGANIZATION_ID,
+              ANTHROPIC_SERVICE_ACCOUNT_ID, ANTHROPIC_IDENTITY_TOKEN_FILE)
+    if _claude_client is not None and _claude_client_config == config:
+        return _claude_client
+    if _claude_auth_mode() == "federation":
+        client = anthropic.Anthropic(credentials=_federation_credentials())
+    else:
+        headers = {"anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID} if ANTHROPIC_WORKSPACE_ID else None
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, default_headers=headers)
+    _claude_client, _claude_client_config = client, config
+    return client
 
 
 def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
@@ -4965,7 +5047,7 @@ def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
 
 @app.post("/api/coaching/board-from-image")
 async def coaching_board_from_image(image: UploadFile = File(...), user: dict = Depends(require_coach)):
-    if not ANTHROPIC_API_KEY:
+    if not _claude_auth_mode():
         raise HTTPException(status_code=503, detail="Reading positions from images is not configured on this server")
     media_type = (image.content_type or "").lower()
     if media_type == "image/jpg":
