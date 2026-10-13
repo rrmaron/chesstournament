@@ -8,3 +8,4 @@ reportlab
 stripe
 boto3
 beautifulsoup4
+anthropic

@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Coaching{% endblock %}
 {% block content %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="/static/coach_board.js"></script>
 {% macro student_picker() %}
   {% if students %}
     <div class="d-flex flex-wrap gap-3">
@@ -19,6 +24,9 @@
   'student': ('success', 'Student added.'),
   'nouser': ('warning', 'No user with that username.'),
   'self': ('warning', "You can't add yourself as a student."),
+  'invited': ('success', 'Student account created.'),
+  'invite_exists': ('warning', 'That username or email is already registered — search for them above and click Add.'),
+  'invite_invalid': ('warning', 'A username and a valid email are required to invite a student.'),
   'session': ('success', 'Session scheduled.'),
   'session_invalid': ('warning', 'A session needs a title and a date/time.'),
   'homework_invalid': ('warning', 'Homework needs a title.'),
@@ -85,10 +93,21 @@
     <div class="card mb-4">
       <div class="card-header fw-semibold">Students</div>
       <div class="card-body">
-        <form method="post" action="/coaching/students" class="d-flex gap-2 mb-3">
-          <input type="text" name="username" class="form-control form-control-sm" placeholder="Student's username" required>
-          <button class="btn btn-primary btn-sm text-nowrap">Add student</button>
-        </form>
+        {% if invite %}
+        <div class="alert alert-success small">
+          Account <strong>{{ invite.username }}</strong> created and added to your students.
+          {% if invite.sent %}A sign-in link was emailed to {{ invite.email }}.{% else %}<span class="text-danger">The email could not be sent</span> — share this link yourself:{% endif %}
+          <div class="input-group input-group-sm mt-2">
+            <input class="form-control font-monospace" readonly value="{{ invite.link }}" onclick="this.select()">
+            <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(this.previousElementSibling.value)">Copy</button>
+          </div>
+          <div class="text-muted mt-1">Valid for 72 hours — it lets them choose a password and sign in.</div>
+        </div>
+        {% endif %}
+        <label class="form-label small mb-1">Find a student by username, name or email</label>
+        <input type="text" name="q" class="form-control form-control-sm mb-2" placeholder="Start typing…" autocomplete="off"
+               hx-get="/api/coaching/student-search" hx-trigger="keyup changed delay:300ms" hx-target="#student-search-results">
+        <div id="student-search-results" class="mb-3"></div>
         {% if students %}
         <table class="table table-sm align-middle mb-0">
           <thead><tr><th>Username</th><th>USCF</th><th></th></tr></thead>
@@ -160,11 +179,48 @@
             </select>
           </div>
           <div class="col-12"><textarea name="instructions" class="form-control form-control-sm" rows="3" placeholder="Instructions for the student"></textarea></div>
-          <div class="col-12"><input type="text" name="fen" class="form-control form-control-sm font-monospace" placeholder="Starting position (FEN) — optional for study, required for puzzle"></div>
+          <div class="col-12">
+            <label class="form-label small mb-1">Set up the position <span class="text-muted">— drag pieces from the side; drag off the board to remove</span></label>
+            <div class="row g-3">
+              <div class="col-md-7">
+                <div id="hw-editor" style="max-width:360px"></div>
+                <div class="d-flex flex-wrap gap-1 mt-2 align-items-center">
+                  <button type="button" class="btn btn-outline-secondary btn-sm" data-board-nav="hw-editor" data-action="start">Start position</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" data-board-nav="hw-editor" data-action="clear">Clear</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" data-board-nav="hw-editor" data-action="flip">Flip</button>
+                  <select id="hw-side" class="form-select form-select-sm w-auto">
+                    <option value="w">White to move</option>
+                    <option value="b">Black to move</option>
+                  </select>
+                </div>
+              </div>
+              <div class="col-md-5">
+                <div id="hw-image-drop" class="border rounded p-3 text-center small text-muted" style="border-style:dashed!important">
+                  <strong>From a screenshot or photo</strong><br>
+                  Paste an image (Ctrl+V), drop it here, or
+                  <label class="text-primary mb-0" style="cursor:pointer">choose a file<input type="file" id="hw-image" accept="image/*" class="d-none"></label>.
+                  <div class="mt-1">The position is read by AI — always check it.</div>
+                </div>
+                <div id="hw-editor-status" class="small mt-2"></div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="input-group input-group-sm">
+              <span class="input-group-text">FEN</span>
+              <input type="text" name="fen" id="hw-fen" class="form-control font-monospace" placeholder="Set up the board above, or paste a FEN here">
+              <button type="button" class="btn btn-outline-secondary" data-board-nav="hw-editor" data-action="load">Load onto board</button>
+            </div>
+          </div>
           <div class="col-12"><textarea name="pgn" class="form-control form-control-sm font-monospace" rows="3" placeholder="PGN to play through on the board (optional)"></textarea></div>
           <div class="col-12" id="solution-row" style="display:none">
-            <input type="text" name="solution" class="form-control form-control-sm font-monospace" placeholder="Solution line in SAN, e.g. 1. Qh5 Kf8 2. Qf7#">
-            <div class="form-text">Student moves are checked one at a time; the opponent's replies are played automatically.</div>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text">Solution</span>
+              <input type="text" name="solution" id="hw-solution" class="form-control font-monospace" placeholder="e.g. Qh5 Kf8 Qf7# — or record it on the board">
+              <button type="button" class="btn btn-outline-primary" id="hw-record-btn" data-board-nav="hw-editor" data-action="record">Record on board</button>
+              <button type="button" class="btn btn-outline-secondary" data-board-nav="hw-editor" data-action="undo">Undo</button>
+            </div>
+            <div class="form-text">Set up the position, then "Record on board" and play the solution for both sides. Student moves are checked one at a time; the opponent's replies are played automatically.</div>
           </div>
           <div class="col-sm-5"><label class="form-label small mb-0">Due date</label><input type="date" name="due_date" class="form-control form-control-sm"></div>
           <div class="col-12">{{ student_picker() }}</div>
@@ -218,4 +274,10 @@
     </div>
   </div>
 </div>
+<script>
+  CoachBoard.editor({
+    boardId: "hw-editor", fenInputId: "hw-fen", sideId: "hw-side", solutionInputId: "hw-solution",
+    recordBtnId: "hw-record-btn", statusId: "hw-editor-status", imageInputId: "hw-image", dropId: "hw-image-drop"
+  });
+</script>
 {% endblock %}

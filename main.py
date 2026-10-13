@@ -68,10 +68,11 @@ from database import (
     get_assignment, list_homework_assignments, submit_assignment, grade_assignment, mark_puzzle_solved,
     create_course, set_course_active, get_course, list_courses, list_coach_courses,
     create_enrollment, get_enrollment, get_user_enrollment, mark_enrollment_paid, list_user_enrollments,
+    search_users,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin, require_coach
-from notify import send_verification_email, send_verification_sms, send_password_reset_email
+from notify import send_verification_email, send_verification_sms, send_password_reset_email, send_student_invite_email
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
 import pgn_harvester as ph
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -90,6 +91,7 @@ if not SECRET_KEY:
     SECRET_KEY = "dev-secret-key-change-in-production"
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 if STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
     logging.error(
         "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not — payment "
@@ -4465,6 +4467,86 @@ def _norm_san(s: str) -> str:
     return re.sub(r"[+#!?\s]", "", s or "")
 
 
+_FEN_IMAGE_PROMPT = (
+    "This image is a photo or screenshot of a chess position: a physical board, a printed diagram, "
+    "or a chess app/website. Read the position and output ONLY the piece-placement field of the FEN "
+    "(ranks 8 to 1 separated by '/', uppercase letters for White, lowercase for Black, digits for "
+    "consecutive empty squares). Orient the board with White at the bottom: use any coordinates or "
+    "labels visible in the image; otherwise assume the side nearest the bottom of the image is White. "
+    "If no chessboard is visible, output exactly NONE. Output nothing else."
+)
+_BOARD_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+_MAX_BOARD_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def _valid_fen_placement(placement: str) -> bool:
+    ranks = placement.split("/")
+    if len(ranks) != 8:
+        return False
+    kings = {"K": 0, "k": 0}
+    for rank in ranks:
+        total = 0
+        for ch in rank:
+            if ch in "12345678":
+                total += int(ch)
+            elif ch in "pnbrqkPNBRQK":
+                total += 1
+                if ch in kings:
+                    kings[ch] += 1
+            else:
+                return False
+        if total != 8:
+            return False
+    return kings["K"] == 1 and kings["k"] == 1
+
+
+def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
+    """Ask Claude to read a board image; returns the FEN placement, or None if no board was found."""
+    import base64
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    response = client.beta.messages.create(
+        model="claude-opus-5-5",
+        max_tokens=8000,
+        betas=["server-side-fallback-2026-07-01"],
+        fallbacks="default",
+        output_config={"effort": "high"},
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type,
+                                         "data": base64.standard_b64encode(data).decode("ascii")}},
+            {"type": "text", "text": _FEN_IMAGE_PROMPT},
+        ]}],
+    )
+    if response.stop_reason == "refusal":
+        return None
+    text = "".join(block.text for block in response.content if block.type == "text")
+    match = re.search(r"[pnbrqkPNBRQK1-8]+(?:/[pnbrqkPNBRQK1-8]+){7}", text)
+    return match.group(0) if match else None
+
+
+@app.post("/api/coaching/board-from-image")
+async def coaching_board_from_image(image: UploadFile = File(...), user: dict = Depends(require_coach)):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="Reading positions from images is not configured on this server")
+    media_type = (image.content_type or "").lower()
+    if media_type == "image/jpg":
+        media_type = "image/jpeg"
+    if media_type not in _BOARD_IMAGE_MEDIA_TYPES:
+        raise HTTPException(status_code=415, detail="Please use a PNG, JPEG, WebP or GIF image")
+    data = await image.read()
+    if not data or len(data) > _MAX_BOARD_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image must be between 1 byte and 10 MB")
+    try:
+        placement = await asyncio.get_event_loop().run_in_executor(None, _fen_from_image, data, media_type)
+    except Exception as e:
+        logging.warning("board-from-image for user %s: %s", user["id"], e)
+        raise HTTPException(status_code=502, detail="Could not read the image right now - please try again")
+    if not placement or not _valid_fen_placement(placement):
+        raise HTTPException(status_code=422, detail="Couldn't find a readable chessboard in that image")
+    return {"fen": f"{placement} w - - 0 1"}
+
+
 def _owns_homework(hw: dict, user: dict) -> bool:
     return hw["coach_id"] == user["id"] or user.get("role") == "admin"
 
@@ -4481,6 +4563,7 @@ def coaching_page(request: Request, msg: Optional[str] = None, user: dict = Depe
             "courses": list_coach_courses(uid),
             "stripe_configured": bool(STRIPE_SECRET_KEY),
             "platform_fee": _platform_fee_percent(),
+            "invite": request.session.pop("coach_invite", None),
             "msg": msg,
         })
     return templates.TemplateResponse(request=request, name="coaching_student.html", context={
@@ -4507,6 +4590,44 @@ def coaching_add_student(username: str = Form(...), user: dict = Depends(require
         return RedirectResponse("/coaching?msg=self", status_code=303)
     add_coach_student(user["id"], target["id"])
     return RedirectResponse("/coaching?msg=student", status_code=303)
+
+
+@app.get("/api/coaching/student-search", response_class=HTMLResponse)
+def coaching_student_search(request: Request, q: str = "", user: dict = Depends(require_coach)):
+    q = q.strip()
+    if len(q) < 2:
+        return HTMLResponse("")
+    existing = {s["id"] for s in list_coach_students(user["id"])}
+    matches = [dict(u, already=u["id"] in existing) for u in search_users(q) if u["id"] != user["id"]]
+    is_email = "@" in q
+    return templates.TemplateResponse(request=request, name="fragments/student_search.html", context={
+        "q": q, "matches": matches,
+        "suggest_username": "" if is_email else q,
+        "suggest_email": q if is_email else "",
+    })
+
+
+@app.post("/coaching/students/invite")
+async def coaching_invite_student(request: Request, username: str = Form(...), email: str = Form(...),
+                                  user: dict = Depends(require_coach)):
+    username, email = username.strip(), email.strip().lower()
+    if not username or "@" not in email:
+        return RedirectResponse("/coaching?msg=invite_invalid", status_code=303)
+    if get_user_by_username(username) or get_user_by_email(email):
+        return RedirectResponse("/coaching?msg=invite_exists", status_code=303)
+    uid = create_user(username, uuid.uuid4().hex, role="viewer", status="active")
+    update_user_contact(uid, email, None)
+    add_coach_student(user["id"], uid)
+    token = create_password_reset_token(uid, hours=72)
+    link = f"{str(request.base_url).rstrip('/')}/reset-password?token={token}"
+    sent = True
+    try:
+        await send_student_invite_email(email, user["username"], username, link)
+    except Exception as e:
+        logging.warning("student invite email to %s: %s", email, e)
+        sent = False
+    request.session["coach_invite"] = {"username": username, "email": email, "link": link, "sent": sent}
+    return RedirectResponse("/coaching?msg=invited", status_code=303)
 
 
 @app.post("/coaching/students/{sid}/remove")

@@ -34,6 +34,39 @@ async def send_verification_email(to: str, code: str):
         raise RuntimeError("Email could not be sent. Please try again.")
 
 
+async def send_student_invite_email(to: str, coach_name: str, username: str, link: str):
+    import html as _html
+    if not RESEND_API_KEY:
+        logging.warning(f"[DEV] Student invite for {to}: {link}  (set RESEND_API_KEY to send real emails)")
+        return
+    html = f"""
+    <div style="font-family:sans-serif;max-width:440px">
+      <h2>♟️ MyChessRating</h2>
+      <p>Your coach <strong>{_html.escape(coach_name)}</strong> created a MyChessRating account for you.</p>
+      <p>Your username is <strong>{_html.escape(username)}</strong>. Click below to choose a password and sign in —
+         you'll find your lessons, homework and session links on the Coaching page.</p>
+      <p style="margin:24px 0">
+        <a href="{link}"
+           style="background:#003087;color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:bold">
+          Set my password &amp; sign in
+        </a>
+      </p>
+      <p style="color:#888;font-size:0.9em">This link expires in 72 hours.</p>
+      <p style="color:#aaa;font-size:0.85em;word-break:break-all">{link}</p>
+    </div>
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={"from": RESEND_FROM, "to": [to],
+                  "subject": f"{coach_name} invited you to MyChessRating", "html": html},
+        )
+    if r.status_code not in (200, 201):
+        logging.error(f"Resend error {r.status_code}: {r.text}")
+        raise RuntimeError("Email could not be sent.")
+
+
 async def send_password_reset_email(to: str, reset_url: str):
     if not RESEND_API_KEY:
         logging.warning(f"[DEV] Password reset link for {to}: {reset_url}  (set RESEND_API_KEY to send real emails)")

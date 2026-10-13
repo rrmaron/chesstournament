@@ -766,10 +766,21 @@ def update_user_info(uid: int, username: str, email: Optional[str], phone: Optio
     conn.commit()
     conn.close()
 
-def create_password_reset_token(user_id: int) -> str:
+def search_users(q: str, limit: int = 10) -> List[Dict]:
+    like = f"%{q.strip()}%"
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT id, username, email, player_name, role FROM users
+           WHERE status='active' AND (username LIKE ? OR email LIKE ? OR player_name LIKE ?)
+           ORDER BY username LIMIT ?""", (like, like, like, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(zip(["id", "username", "email", "player_name", "role"], r)) for r in rows]
+
+def create_password_reset_token(user_id: int, hours: int = 1) -> str:
     from datetime import timedelta
     token = secrets.token_urlsafe(32)
-    expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+    expires = (datetime.utcnow() + timedelta(hours=hours)).isoformat()
     conn = sqlite3.connect(DB_FILE)
     conn.execute("DELETE FROM password_reset_tokens WHERE user_id=?", (user_id,))
     conn.execute("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",

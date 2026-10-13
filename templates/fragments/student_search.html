@@ -1,0 +1,31 @@
+{% if matches %}
+<div class="list-group mb-2">
+  {% for m in matches %}
+  <div class="list-group-item d-flex justify-content-between align-items-center py-2">
+    <div>
+      <strong>{{ m.username }}</strong>
+      {% if m.player_name %}<span class="text-muted small ms-1">{{ m.player_name }}</span>{% endif %}
+      {% if m.email %}<div class="small text-muted">{{ m.email }}</div>{% endif %}
+    </div>
+    {% if m.already %}
+      <span class="badge bg-success">Already your student</span>
+    {% else %}
+      <form method="post" action="/coaching/students">
+        <input type="hidden" name="username" value="{{ m.username }}">
+        <button class="btn btn-primary btn-sm">Add</button>
+      </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="small text-muted mb-2">No registered player matches "{{ q }}".</p>
+{% endif %}
+<details class="small" {% if not matches %}open{% endif %}>
+  <summary class="text-primary" style="cursor:pointer">Create an account for a new student and email them a sign-in link</summary>
+  <form method="post" action="/coaching/students/invite" class="row g-2 mt-1">
+    <div class="col-sm-5"><input type="text" name="username" class="form-control form-control-sm" placeholder="Username" value="{{ suggest_username }}" required></div>
+    <div class="col-sm-5"><input type="email" name="email" class="form-control form-control-sm" placeholder="Student's email" value="{{ suggest_email }}" required></div>
+    <div class="col-sm-2"><button class="btn btn-outline-primary btn-sm w-100">Invite</button></div>
+  </form>
+</details>
