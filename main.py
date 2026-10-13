@@ -95,6 +95,9 @@ if not SECRET_KEY:
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+# Optional: required when ANTHROPIC_API_KEY is an organization-level key that is
+# not scoped to a workspace (the API then demands an anthropic-workspace-id header).
+ANTHROPIC_WORKSPACE_ID = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
 if STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET:
     logging.error(
         "STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not — payment "
@@ -4928,12 +4931,19 @@ def _valid_fen_placement(placement: str) -> bool:
     return kings["K"] == 1 and kings["k"] == 1
 
 
+def _anthropic_client():
+    """Claude API client; sends the workspace header when the key is not workspace-scoped."""
+    import anthropic
+
+    headers = {"anthropic-workspace-id": ANTHROPIC_WORKSPACE_ID} if ANTHROPIC_WORKSPACE_ID else None
+    return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, default_headers=headers)
+
+
 def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
     """Ask Claude to read a board image; returns the FEN placement, or None if no board was found."""
     import base64
-    import anthropic
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic_client()
     response = client.beta.messages.create(
         model="claude-opus-5-5",
         max_tokens=8000,

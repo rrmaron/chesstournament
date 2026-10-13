@@ -94,3 +94,18 @@ def test_valid_fen_placement(app_module):
     assert not ok("rnbqkbnr/ppppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")  # 9 squares on a rank
     assert not ok("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNK")   # two white kings
     assert not ok("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQXBNR")   # bad char
+
+
+def test_anthropic_client_sends_workspace_header_only_when_configured(app_module, monkeypatch):
+    """Org-level keys that aren't scoped to a workspace are rejected by the API
+    unless every request carries anthropic-workspace-id; the app passes it from
+    the ANTHROPIC_WORKSPACE_ID secret."""
+    monkeypatch.setattr(app_module, "ANTHROPIC_API_KEY", "sk-ant-test")
+
+    monkeypatch.setattr(app_module, "ANTHROPIC_WORKSPACE_ID", "")
+    assert "anthropic-workspace-id" not in app_module._anthropic_client().default_headers
+
+    monkeypatch.setattr(app_module, "ANTHROPIC_WORKSPACE_ID", "wrkspc_01ABC")
+    client = app_module._anthropic_client()
+    assert client.default_headers["anthropic-workspace-id"] == "wrkspc_01ABC"
+    assert client.api_key == "sk-ant-test"
