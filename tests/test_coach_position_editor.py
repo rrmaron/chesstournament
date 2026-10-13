@@ -67,7 +67,8 @@ def test_board_from_image_returns_fen_from_recognized_placement(client, app_modu
 
     assert resp.status_code == 200
     assert resp.json() == {"fen": "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w - - 0 1"}
-    assert seen == {"data": PNG, "media_type": "image/jpeg"}
+    assert seen["media_type"] == "image/jpeg"
+    assert seen["data"][:3] == b"\xff\xd8\xff"  # normalized to JPEG before reaching Claude
 
 
 def test_board_from_image_rejects_unreadable_or_bad_results(client, app_module, monkeypatch):
