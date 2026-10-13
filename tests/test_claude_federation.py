@@ -114,3 +114,21 @@ def test_board_from_image_works_with_federation_and_no_api_key(client, app_modul
     resp = client.post("/api/coaching/board-from-image", files={"image": ("b.png", PNG, "image/png")})
     assert resp.status_code == 200
     assert resp.json()["fen"].startswith("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w")
+
+
+def test_fly_identity_token_logs_claims_for_diagnosis(app_module, monkeypatch, caplog):
+    import base64
+    claims = {"iss": "https://oidc.fly.io/personal", "sub": "personal:mychessrating:m1",
+              "aud": "https://api.anthropic.com", "app_name": "mychessrating", "jti": "secret-ish"}
+    payload = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    token = f"eyJhbGciOiJSUzI1NiJ9.{payload}.c2ln"
+    monkeypatch.setattr(app_module, "_fly_transport",
+                        lambda: httpx.MockTransport(lambda r: httpx.Response(200, text=token)))
+
+    with caplog.at_level("INFO"):
+        assert app_module._fly_identity_token() == token
+
+    line = next(r.message for r in caplog.records if "Fly identity token minted" in r.message)
+    assert "personal:mychessrating:m1" in line and "https://api.anthropic.com" in line
+    assert "secret-ish" not in line and "c2ln" not in line
+    assert app_module._jwt_claims_summary("garbage") == "<undecodable>"

@@ -17,6 +17,7 @@ import html
 import re
 import httpx
 import anthropic
+import json
 from typing import Optional, List
 import stripe
 
@@ -4982,7 +4983,19 @@ def _fly_identity_token() -> str:
                       if isinstance(payload.get(k), str)), "")
     if token.count(".") != 2:
         raise RuntimeError("Fly OIDC endpoint did not return a JWT")
+    logging.info("Fly identity token minted: %s", _jwt_claims_summary(token))
     return token
+
+
+def _jwt_claims_summary(token: str) -> str:
+    """iss/sub/aud/app_name of a JWT (unverified, no signature) for diagnosing federation rule mismatches."""
+    import base64
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        return json.dumps({k: claims.get(k) for k in ("iss", "sub", "aud", "app_name", "exp")})
+    except Exception:
+        return "<undecodable>"
 
 
 def _identity_token_provider():
