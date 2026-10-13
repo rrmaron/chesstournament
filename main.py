@@ -2062,6 +2062,7 @@ async def player_details(request: Request, uscf_id: str = "", _user: dict = Depe
         "fide_id": fide_id, "expiry": expiry,
         "live_rating": live_rating, "fide_rating": fide_rating,
         "online_rating": online_rating,
+        "monthly_online_rating": monthly_online_rating,
     })
 
 

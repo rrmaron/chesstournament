@@ -85,3 +85,32 @@ def test_player_details_card_shows_online_rating(client, app_module, monkeypatch
     assert resp.status_code == 200
     assert "USCF Online Regular" in resp.text
     assert "1680" in resp.text
+
+
+def test_player_details_card_shows_monthly_online_rating_and_renamed_otb_label(client, app_module, monkeypatch):
+    make_admin(app_module, "carol", "correct-horse")
+    login(client, "carol", "correct-horse")
+
+    monkeypatch.setattr(app_module, "lookup_uscf_member", lambda uscf_id: {
+        "name": "ROE, RICK", "fide_id": None, "expiry": "2099-12-31",
+    })
+    monkeypatch.setattr(
+        app_module.httpx, "AsyncClient",
+        lambda *a, **k: _FakeAsyncClient(
+            member_data={"ratings": [
+                {"ratingSystem": "R", "rating": 1700},
+                {"ratingSystem": "OR", "rating": 1650},
+            ]},
+            sections_data={"items": [{"ratingRecords": [
+                {"ratingSource": "R", "postRating": 1710},
+                {"ratingSource": "OR", "postRating": 1680},
+            ]}]},
+        ),
+    )
+
+    resp = client.get("/api/player-details", params={"uscf_id": "333"})
+
+    assert resp.status_code == 200
+    assert "OTB USCF Monthly Regular" in resp.text
+    assert "Monthly USCF Online Regular" in resp.text
+    assert "1650" in resp.text

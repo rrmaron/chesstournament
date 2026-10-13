@@ -76,8 +76,21 @@ function runPlayerResearch(uscfId, fideId, name) {
   });
 }
 
-function loadRatingImpact(btn) {
+async function loadRatingImpact(btn) {
   var card = btn.closest("[data-opp-name]");
+
+  // Quick/Blitz, Online Quick/Blitz, and FIDE Rapid/Blitz are only filled into
+  // the card's dataset once the "Load Quick & Blitz ratings" panel has run --
+  // load it now if it hasn't been, so this always shows the full picture.
+  var uscfId = card.dataset.uscfId;
+  var qbDiv = uscfId ? document.getElementById("qb-" + uscfId) : null;
+  if (qbDiv && qbDiv.querySelector("button")) {
+    await htmx.ajax("GET", "/api/player-quick-blitz?uscf_id=" + uscfId + "&fide_id=" + (card.dataset.fideId || ""), {
+      target: "#qb-" + uscfId,
+      swap: "outerHTML"
+    });
+  }
+
   var oppName            = card.dataset.oppName;
   var oppUscf            = card.dataset.oppUscf;
   var oppUscfQuick       = card.dataset.oppUscfQuick;

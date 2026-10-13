@@ -24,12 +24,16 @@
           </td>
         </tr>
         <tr>
-          <th class="ps-3">USCF Regular</th>
+          <th class="ps-3">OTB USCF Monthly Regular</th>
           <td>{{ rating if rating else '—' }}</td>
         </tr>
         <tr>
           <th class="ps-3">Live USCF Regular</th>
           <td>{{ live_rating if live_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
+        </tr>
+        <tr>
+          <th class="ps-3">Monthly USCF Online Regular</th>
+          <td>{{ monthly_online_rating if monthly_online_rating else '<span class="text-muted">Not available</span>' | safe }}</td>
         </tr>
         <tr>
           <th class="ps-3">Live USCF Online Regular</th>
