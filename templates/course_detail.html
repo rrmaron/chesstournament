@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title }}{% endblock %}
+{% block content %}
+<a href="/courses" class="text-decoration-none small">&larr; All courses</a>
+<div class="row g-4 mt-1">
+  <div class="col-lg-8">
+    <h2>{{ course.title }}{% if not course.active %} <span class="badge bg-secondary">hidden</span>{% endif %}</h2>
+    <div class="text-muted mb-3">Coach {{ course.coach }}</div>
+    {% if cancelled %}<div class="alert alert-warning">Payment cancelled — you have not been charged.</div>{% endif %}
+    {% if error == 'payments' %}<div class="alert alert-warning">This coach hasn't finished setting up payments yet. Please check back soon.</div>
+    {% elif error == 'own' %}<div class="alert alert-info">This is your own course.</div>{% endif %}
+    {% if course.description %}<div style="white-space:pre-wrap">{{ course.description }}</div>{% endif %}
+    {% if course.coach_bio %}
+      <h6 class="mt-4">About the coach</h6>
+      <div class="small text-muted" style="white-space:pre-wrap">{{ course.coach_bio }}</div>
+    {% endif %}
+  </div>
+  <div class="col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-body text-center">
+        <div class="fs-3 fw-semibold mb-3">{% if course.price_cents %}${{ '%.2f' % (course.price_cents / 100) }}{% else %}Free{% endif %}</div>
+        {% if enrollment %}
+          <span class="badge bg-success mb-2">You're enrolled</span>
+          <a href="/coaching" class="btn btn-outline-primary btn-sm w-100">Go to my coaching</a>
+        {% elif is_owner %}
+          <span class="text-muted small">This is your course.</span>
+        {% elif not user %}
+          <a href="/login?next=/courses/{{ course.id }}" class="btn btn-primary w-100">Log in to enroll</a>
+          <div class="small text-muted mt-2">No account? <a href="/register">Sign up</a></div>
+        {% elif not payments_ready %}
+          <button class="btn btn-secondary w-100" disabled>Payments not set up yet</button>
+        {% else %}
+          <form method="post" action="/courses/{{ course.id }}/enroll">
+            <button class="btn btn-primary w-100">{% if course.price_cents %}Buy &amp; enroll{% else %}Enroll for free{% endif %}</button>
+          </form>
+          {% if course.price_cents %}<div class="small text-muted mt-2">Secure card payment via Stripe.</div>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -327,6 +327,79 @@ def init_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_reported_online_ids_uscf ON reported_online_ids(uscf_id)')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS coach_students (
+        id INTEGER PRIMARY KEY,
+        coach_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(coach_id, student_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS coach_sessions (
+        id INTEGER PRIMARY KEY,
+        coach_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        starts_at TEXT NOT NULL,
+        link TEXT,
+        notes TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS coach_session_students (
+        session_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        UNIQUE(session_id, student_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS homework (
+        id INTEGER PRIMARY KEY,
+        coach_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        instructions TEXT,
+        kind TEXT NOT NULL DEFAULT 'study',
+        fen TEXT,
+        pgn TEXT,
+        solution TEXT,
+        due_date TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS homework_assignments (
+        id INTEGER PRIMARY KEY,
+        homework_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'assigned',
+        puzzle_solved INTEGER NOT NULL DEFAULT 0,
+        submission_note TEXT,
+        submission_pgn TEXT,
+        submitted_at TEXT,
+        grade TEXT,
+        feedback TEXT,
+        graded_at TEXT,
+        UNIQUE(homework_id, student_id)
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS courses (
+        id INTEGER PRIMARY KEY,
+        coach_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        price_cents INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS course_enrollments (
+        id INTEGER PRIMARY KEY,
+        course_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        stripe_session_id TEXT,
+        amount_cents INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_course_enrollments_course ON course_enrollments(course_id)')
+
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY,
         username TEXT UNIQUE NOT NULL,
@@ -562,6 +635,10 @@ def init_db():
         "ALTER TABLE users ADD COLUMN uscf_online_rating INTEGER",
         "ALTER TABLE users ADD COLUMN uscf_online_quick_rating INTEGER",
         "ALTER TABLE users ADD COLUMN uscf_online_blitz_rating INTEGER",
+        "ALTER TABLE users ADD COLUMN coach_default_link TEXT",
+        "ALTER TABLE users ADD COLUMN coach_bio TEXT",
+        "ALTER TABLE users ADD COLUMN stripe_account_id TEXT",
+        "ALTER TABLE users ADD COLUMN stripe_charges_enabled INTEGER DEFAULT 0",
     ]:
         try:
             c.execute(sql)
@@ -2332,3 +2409,359 @@ def update_user_location(user_id: int, country_code: str, city: str, federation_
                  (country_code, city, federation_id, user_id))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Coaching: coach profile, students, sessions
+# ---------------------------------------------------------------------------
+
+def get_coach_profile(uid: int) -> Dict:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        "SELECT id, username, email, coach_default_link, coach_bio, stripe_account_id, stripe_charges_enabled "
+        "FROM users WHERE id=?", (uid,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return {}
+    cols = ["id", "username", "email", "coach_default_link", "coach_bio", "stripe_account_id", "stripe_charges_enabled"]
+    return dict(zip(cols, row))
+
+def update_coach_profile(uid: int, default_link: Optional[str], bio: Optional[str]):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET coach_default_link=?, coach_bio=? WHERE id=?",
+                 ((default_link or "").strip() or None, (bio or "").strip() or None, uid))
+    conn.commit()
+    conn.close()
+
+def set_coach_stripe_account(uid: int, account_id: Optional[str], charges_enabled: bool):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET stripe_account_id=?, stripe_charges_enabled=? WHERE id=?",
+                 (account_id, 1 if charges_enabled else 0, uid))
+    conn.commit()
+    conn.close()
+
+def add_coach_student(coach_id: int, student_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO coach_students (coach_id, student_id) VALUES (?, ?) ON CONFLICT(coach_id, student_id) DO NOTHING",
+        (coach_id, student_id)
+    )
+    conn.commit()
+    added = cur.rowcount > 0
+    conn.close()
+    return added
+
+def remove_coach_student(coach_id: int, student_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM coach_students WHERE coach_id=? AND student_id=?", (coach_id, student_id))
+    conn.commit()
+    conn.close()
+
+def is_coach_student(coach_id: int, student_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT 1 FROM coach_students WHERE coach_id=? AND student_id=?",
+                       (coach_id, student_id)).fetchone()
+    conn.close()
+    return row is not None
+
+def list_coach_students(coach_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT u.id, u.username, u.email, u.uscf_rating, cs.created_at
+           FROM coach_students cs JOIN users u ON u.id = cs.student_id
+           WHERE cs.coach_id=? ORDER BY u.username""", (coach_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "username", "email", "uscf_rating", "since"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def list_coaches_for_student(student_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT u.id, u.username, u.email, u.coach_default_link, u.coach_bio
+           FROM coach_students cs JOIN users u ON u.id = cs.coach_id
+           WHERE cs.student_id=? ORDER BY u.username""", (student_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "username", "email", "default_link", "bio"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def create_coach_session(coach_id: int, title: str, starts_at: str, link: Optional[str],
+                         notes: Optional[str], student_ids: List[int]) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO coach_sessions (coach_id, title, starts_at, link, notes) VALUES (?, ?, ?, ?, ?)",
+        (coach_id, title.strip(), starts_at.strip(), (link or "").strip() or None, (notes or "").strip() or None)
+    )
+    sid = cur.lastrowid
+    conn.executemany(
+        "INSERT OR IGNORE INTO coach_session_students (session_id, student_id) VALUES (?, ?)",
+        [(sid, s) for s in student_ids]
+    )
+    conn.commit()
+    conn.close()
+    return sid
+
+def delete_coach_session(sid: int, coach_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM coach_sessions WHERE id=? AND coach_id=?", (sid, coach_id))
+    if cur.rowcount:
+        conn.execute("DELETE FROM coach_session_students WHERE session_id=?", (sid,))
+    conn.commit()
+    conn.close()
+
+def list_coach_sessions(coach_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT s.id, s.title, s.starts_at, s.link, s.notes,
+                  (SELECT GROUP_CONCAT(u.username, ', ') FROM coach_session_students css
+                     JOIN users u ON u.id = css.student_id WHERE css.session_id = s.id)
+           FROM coach_sessions s WHERE s.coach_id=? ORDER BY s.starts_at""", (coach_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "title", "starts_at", "link", "notes", "students"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def list_student_sessions(student_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT s.id, s.title, s.starts_at, s.link, s.notes, u.username
+           FROM coach_sessions s
+           JOIN coach_session_students css ON css.session_id = s.id
+           JOIN users u ON u.id = s.coach_id
+           WHERE css.student_id=? ORDER BY s.starts_at""", (student_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "title", "starts_at", "link", "notes", "coach"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Coaching: homework and assignments
+# ---------------------------------------------------------------------------
+
+_HOMEWORK_COLS = ["id", "coach_id", "title", "instructions", "kind", "fen", "pgn", "solution", "due_date", "created_at"]
+
+def create_homework(coach_id: int, title: str, instructions: Optional[str], kind: str,
+                    fen: Optional[str], pgn: Optional[str], solution: Optional[str],
+                    due_date: Optional[str], student_ids: List[int]) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        """INSERT INTO homework (coach_id, title, instructions, kind, fen, pgn, solution, due_date)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (coach_id, title.strip(), (instructions or "").strip() or None, kind,
+         (fen or "").strip() or None, (pgn or "").strip() or None,
+         (solution or "").strip() or None, (due_date or "").strip() or None)
+    )
+    hid = cur.lastrowid
+    conn.executemany(
+        "INSERT OR IGNORE INTO homework_assignments (homework_id, student_id) VALUES (?, ?)",
+        [(hid, s) for s in student_ids]
+    )
+    conn.commit()
+    conn.close()
+    return hid
+
+def get_homework(hid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(f"SELECT {', '.join(_HOMEWORK_COLS)} FROM homework WHERE id=?", (hid,)).fetchone()
+    conn.close()
+    return dict(zip(_HOMEWORK_COLS, row)) if row else None
+
+def delete_homework(hid: int, coach_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM homework WHERE id=? AND coach_id=?", (hid, coach_id))
+    if cur.rowcount:
+        conn.execute("DELETE FROM homework_assignments WHERE homework_id=?", (hid,))
+    conn.commit()
+    conn.close()
+
+def list_coach_homework(coach_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT h.id, h.title, h.kind, h.due_date, h.created_at,
+                  COUNT(a.id),
+                  SUM(CASE WHEN a.status IN ('submitted', 'graded') THEN 1 ELSE 0 END),
+                  SUM(CASE WHEN a.status = 'graded' THEN 1 ELSE 0 END)
+           FROM homework h LEFT JOIN homework_assignments a ON a.homework_id = h.id
+           WHERE h.coach_id=? GROUP BY h.id ORDER BY h.created_at DESC""", (coach_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "title", "kind", "due_date", "created_at", "assigned", "submitted", "graded"]
+    return [dict(zip(cols, r)) for r in rows]
+
+def list_student_homework(student_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT h.id, h.title, h.kind, h.due_date, u.username,
+                  a.status, a.grade, a.puzzle_solved
+           FROM homework_assignments a
+           JOIN homework h ON h.id = a.homework_id
+           JOIN users u ON u.id = h.coach_id
+           WHERE a.student_id=? ORDER BY a.status = 'graded', h.due_date IS NULL, h.due_date, h.created_at DESC""",
+        (student_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["id", "title", "kind", "due_date", "coach", "status", "grade", "puzzle_solved"]
+    return [dict(zip(cols, r)) for r in rows]
+
+_ASSIGNMENT_COLS = ["id", "homework_id", "student_id", "status", "puzzle_solved", "submission_note",
+                    "submission_pgn", "submitted_at", "grade", "feedback", "graded_at"]
+
+def get_assignment(hid: int, student_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        f"SELECT {', '.join(_ASSIGNMENT_COLS)} FROM homework_assignments WHERE homework_id=? AND student_id=?",
+        (hid, student_id)
+    ).fetchone()
+    conn.close()
+    return dict(zip(_ASSIGNMENT_COLS, row)) if row else None
+
+def list_homework_assignments(hid: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        f"""SELECT {', '.join('a.' + c for c in _ASSIGNMENT_COLS)}, u.username
+            FROM homework_assignments a JOIN users u ON u.id = a.student_id
+            WHERE a.homework_id=? ORDER BY u.username""", (hid,)
+    ).fetchall()
+    conn.close()
+    return [dict(zip(_ASSIGNMENT_COLS + ["username"], r)) for r in rows]
+
+def submit_assignment(hid: int, student_id: int, note: Optional[str], pgn: Optional[str]) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        """UPDATE homework_assignments
+           SET status='submitted', submission_note=?, submission_pgn=?, submitted_at=CURRENT_TIMESTAMP
+           WHERE homework_id=? AND student_id=?""",
+        ((note or "").strip() or None, (pgn or "").strip() or None, hid, student_id)
+    )
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+def grade_assignment(aid: int, coach_id: int, grade: Optional[str], feedback: Optional[str]) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        """UPDATE homework_assignments
+           SET status='graded', grade=?, feedback=?, graded_at=CURRENT_TIMESTAMP
+           WHERE id=? AND homework_id IN (SELECT id FROM homework WHERE coach_id=?)""",
+        ((grade or "").strip() or None, (feedback or "").strip() or None, aid, coach_id)
+    )
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+def mark_puzzle_solved(hid: int, student_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE homework_assignments SET puzzle_solved=1 WHERE homework_id=? AND student_id=?",
+                 (hid, student_id))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Coaching: courses and enrollments
+# ---------------------------------------------------------------------------
+
+_COURSE_COLS = ["id", "coach_id", "title", "description", "price_cents", "active", "created_at"]
+
+def create_course(coach_id: int, title: str, description: Optional[str], price_cents: int) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO courses (coach_id, title, description, price_cents) VALUES (?, ?, ?, ?)",
+        (coach_id, title.strip(), (description or "").strip() or None, max(0, int(price_cents)))
+    )
+    cid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return cid
+
+def set_course_active(cid: int, coach_id: int, active: bool):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE courses SET active=? WHERE id=? AND coach_id=?", (1 if active else 0, cid, coach_id))
+    conn.commit()
+    conn.close()
+
+def get_course(cid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        f"""SELECT {', '.join('c.' + col for col in _COURSE_COLS)}, u.username, u.coach_bio,
+                   u.stripe_account_id, u.stripe_charges_enabled
+            FROM courses c JOIN users u ON u.id = c.coach_id WHERE c.id=?""", (cid,)
+    ).fetchone()
+    conn.close()
+    cols = _COURSE_COLS + ["coach", "coach_bio", "stripe_account_id", "stripe_charges_enabled"]
+    return dict(zip(cols, row)) if row else None
+
+def list_courses(active_only: bool = True) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    where = "WHERE c.active=1" if active_only else ""
+    rows = conn.execute(
+        f"""SELECT {', '.join('c.' + col for col in _COURSE_COLS)}, u.username,
+                   (SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id = c.id AND e.status IN ('paid', 'free'))
+            FROM courses c JOIN users u ON u.id = c.coach_id {where}
+            ORDER BY c.created_at DESC"""
+    ).fetchall()
+    conn.close()
+    return [dict(zip(_COURSE_COLS + ["coach", "enrolled"], r)) for r in rows]
+
+def list_coach_courses(coach_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        f"""SELECT {', '.join(_COURSE_COLS)},
+                   (SELECT COUNT(*) FROM course_enrollments e WHERE e.course_id = courses.id AND e.status IN ('paid', 'free')),
+                   (SELECT COALESCE(SUM(amount_cents), 0) FROM course_enrollments e WHERE e.course_id = courses.id AND e.status = 'paid')
+            FROM courses WHERE coach_id=? ORDER BY created_at DESC""", (coach_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(zip(_COURSE_COLS + ["enrolled", "revenue_cents"], r)) for r in rows]
+
+_ENROLLMENT_COLS = ["id", "course_id", "user_id", "status", "stripe_session_id", "amount_cents", "created_at"]
+
+def create_enrollment(course_id: int, user_id: int, status: str, amount_cents: int) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT INTO course_enrollments (course_id, user_id, status, amount_cents) VALUES (?, ?, ?, ?)",
+        (course_id, user_id, status, amount_cents)
+    )
+    eid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return eid
+
+def get_enrollment(eid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(f"SELECT {', '.join(_ENROLLMENT_COLS)} FROM course_enrollments WHERE id=?", (eid,)).fetchone()
+    conn.close()
+    return dict(zip(_ENROLLMENT_COLS, row)) if row else None
+
+def get_user_enrollment(course_id: int, user_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(
+        f"""SELECT {', '.join(_ENROLLMENT_COLS)} FROM course_enrollments
+            WHERE course_id=? AND user_id=? AND status IN ('paid', 'free')
+            ORDER BY id DESC LIMIT 1""", (course_id, user_id)
+    ).fetchone()
+    conn.close()
+    return dict(zip(_ENROLLMENT_COLS, row)) if row else None
+
+def mark_enrollment_paid(eid: int, stripe_session_id: Optional[str]):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE course_enrollments SET status='paid', stripe_session_id=? WHERE id=?",
+                 (stripe_session_id, eid))
+    conn.commit()
+    conn.close()
+
+def list_user_enrollments(user_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT c.id, c.title, u.username, e.status, e.amount_cents, e.created_at
+           FROM course_enrollments e JOIN courses c ON c.id = e.course_id JOIN users u ON u.id = c.coach_id
+           WHERE e.user_id=? AND e.status IN ('paid', 'free') ORDER BY e.created_at DESC""", (user_id,)
+    ).fetchall()
+    conn.close()
+    cols = ["course_id", "title", "coach", "status", "amount_cents", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]

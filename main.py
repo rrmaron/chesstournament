@@ -61,9 +61,16 @@ from database import (
     list_pgn_events, count_pgn_games_for_source, lichess_round_already_known,
     get_pgn_games_by_fide_id,
     report_online_id, list_online_ids, set_online_id_status, get_confirmed_online_id,
+    get_coach_profile, update_coach_profile, set_coach_stripe_account,
+    add_coach_student, remove_coach_student, is_coach_student, list_coach_students, list_coaches_for_student,
+    create_coach_session, delete_coach_session, list_coach_sessions, list_student_sessions,
+    create_homework, get_homework, delete_homework, list_coach_homework, list_student_homework,
+    get_assignment, list_homework_assignments, submit_assignment, grade_assignment, mark_puzzle_solved,
+    create_course, set_course_active, get_course, list_courses, list_coach_courses,
+    create_enrollment, get_enrollment, get_user_enrollment, mark_enrollment_paid, list_user_enrollments,
 )
 from trf_builder import build_trf
-from auth import get_current_user, require_login, require_td, require_admin
+from auth import get_current_user, require_login, require_td, require_admin, require_coach
 from notify import send_verification_email, send_verification_sms, send_password_reset_email
 from fide import calculate_rating, generate_pdf as fide_generate_pdf
 import pgn_harvester as ph
@@ -515,8 +522,18 @@ def users_page(request: Request, saved: Optional[str] = None, user: dict = Depen
         "reg_method": get_setting("registration_method", "both"),
         "login_message": get_setting("login_message", ""),
         "require_verification": get_setting("require_verification", "1") == "1",
+        "platform_fee": _platform_fee_percent(),
         "saved": saved == "1",
     })
+
+@app.post("/admin/settings/platform-fee")
+def save_platform_fee(platform_fee_percent: str = Form("15"), _user: dict = Depends(require_admin)):
+    try:
+        pct = max(0, min(100, int(platform_fee_percent)))
+    except ValueError:
+        pct = 15
+    set_setting("platform_fee_percent", str(pct))
+    return RedirectResponse("/users?saved=1", status_code=303)
 
 @app.post("/admin/settings")
 async def save_settings(
@@ -3006,9 +3023,13 @@ async def stripe_webhook(request: Request):
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"].to_dict()
         if session.get("payment_status") == "paid":
-            player_id = (session.get("metadata") or {}).get("player_id")
+            metadata = session.get("metadata") or {}
+            player_id = metadata.get("player_id")
             if player_id:
                 update_player_payment(int(player_id), "paid", session.get("id"))
+            enrollment_id = metadata.get("enrollment_id")
+            if enrollment_id:
+                _complete_enrollment(int(enrollment_id), session.get("id"))
 
     return JSONResponse({"status": "success"})
 
@@ -4394,6 +4415,394 @@ async def _harvest_loop():
 @app.on_event("startup")
 async def start_harvest_loop():
     asyncio.create_task(_harvest_loop())
+
+
+# ---------------------------------------------------------------------------
+# Coaching: dashboards, students, sessions, homework
+# ---------------------------------------------------------------------------
+
+_HOMEWORK_KINDS = ("study", "puzzle", "exercise")
+
+
+def _is_coach(user: dict) -> bool:
+    return user.get("role") in ("coach", "admin")
+
+
+def _platform_fee_percent() -> int:
+    try:
+        return max(0, min(100, int(get_setting("platform_fee_percent", "15"))))
+    except ValueError:
+        return 15
+
+
+def _form_int_list(form, key: str) -> List[int]:
+    out = []
+    for v in form.getlist(key):
+        try:
+            out.append(int(v))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _coach_student_ids(form, coach_id: int) -> List[int]:
+    """Selected students, restricted to the coach's own; none selected means everyone."""
+    allowed = {s["id"] for s in list_coach_students(coach_id)}
+    chosen = [s for s in _form_int_list(form, "student_ids") if s in allowed]
+    return chosen or sorted(allowed)
+
+
+def _parse_solution(text: str) -> str:
+    moves = []
+    for tok in (text or "").replace("...", " ").split():
+        tok = re.sub(r"^\d+\.+", "", tok)
+        if tok and tok not in ("1-0", "0-1", "1/2-1/2", "*"):
+            moves.append(tok)
+    return " ".join(moves)
+
+
+def _norm_san(s: str) -> str:
+    return re.sub(r"[+#!?\s]", "", s or "")
+
+
+def _owns_homework(hw: dict, user: dict) -> bool:
+    return hw["coach_id"] == user["id"] or user.get("role") == "admin"
+
+
+@app.get("/coaching", response_class=HTMLResponse)
+def coaching_page(request: Request, msg: Optional[str] = None, user: dict = Depends(require_login)):
+    uid = user["id"]
+    if _is_coach(user):
+        return templates.TemplateResponse(request=request, name="coaching_coach.html", context={
+            "profile": get_coach_profile(uid),
+            "students": list_coach_students(uid),
+            "sessions": list_coach_sessions(uid),
+            "homework": list_coach_homework(uid),
+            "courses": list_coach_courses(uid),
+            "stripe_configured": bool(STRIPE_SECRET_KEY),
+            "platform_fee": _platform_fee_percent(),
+            "msg": msg,
+        })
+    return templates.TemplateResponse(request=request, name="coaching_student.html", context={
+        "coaches": list_coaches_for_student(uid),
+        "sessions": list_student_sessions(uid),
+        "homework": list_student_homework(uid),
+        "enrollments": list_user_enrollments(uid),
+        "msg": msg,
+    })
+
+
+@app.post("/coaching/profile")
+def coaching_profile_save(default_link: str = Form(""), bio: str = Form(""), user: dict = Depends(require_coach)):
+    update_coach_profile(user["id"], default_link, bio)
+    return RedirectResponse("/coaching?msg=profile", status_code=303)
+
+
+@app.post("/coaching/students")
+def coaching_add_student(username: str = Form(...), user: dict = Depends(require_coach)):
+    target = get_user_by_username(username)
+    if not target:
+        return RedirectResponse("/coaching?msg=nouser", status_code=303)
+    if target["id"] == user["id"]:
+        return RedirectResponse("/coaching?msg=self", status_code=303)
+    add_coach_student(user["id"], target["id"])
+    return RedirectResponse("/coaching?msg=student", status_code=303)
+
+
+@app.post("/coaching/students/{sid}/remove")
+def coaching_remove_student(sid: int, user: dict = Depends(require_coach)):
+    remove_coach_student(user["id"], sid)
+    return RedirectResponse("/coaching", status_code=303)
+
+
+@app.post("/coaching/sessions")
+async def coaching_create_session(request: Request, user: dict = Depends(require_coach)):
+    form = await request.form()
+    title = (form.get("title") or "").strip()
+    starts_at = (form.get("starts_at") or "").strip()
+    if not title or not starts_at:
+        return RedirectResponse("/coaching?msg=session_invalid", status_code=303)
+    create_coach_session(user["id"], title, starts_at, form.get("link"), form.get("notes"),
+                         _coach_student_ids(form, user["id"]))
+    return RedirectResponse("/coaching?msg=session", status_code=303)
+
+
+@app.post("/coaching/sessions/{sid}/delete")
+def coaching_delete_session(sid: int, user: dict = Depends(require_coach)):
+    delete_coach_session(sid, user["id"])
+    return RedirectResponse("/coaching", status_code=303)
+
+
+@app.post("/coaching/homework")
+async def coaching_create_homework(request: Request, user: dict = Depends(require_coach)):
+    form = await request.form()
+    title = (form.get("title") or "").strip()
+    kind = form.get("kind") if form.get("kind") in _HOMEWORK_KINDS else "study"
+    fen = (form.get("fen") or "").strip()
+    solution = _parse_solution(form.get("solution") or "")
+    if not title:
+        return RedirectResponse("/coaching?msg=homework_invalid", status_code=303)
+    if kind == "puzzle" and not (fen and solution):
+        return RedirectResponse("/coaching?msg=puzzle_invalid", status_code=303)
+    hid = create_homework(user["id"], title, form.get("instructions"), kind, fen, form.get("pgn"),
+                          solution if kind == "puzzle" else None, form.get("due_date"),
+                          _coach_student_ids(form, user["id"]))
+    return RedirectResponse(f"/coaching/homework/{hid}", status_code=303)
+
+
+@app.get("/coaching/homework/{hid}", response_class=HTMLResponse)
+def coaching_homework_detail(request: Request, hid: int, msg: Optional[str] = None,
+                             user: dict = Depends(require_login)):
+    hw = get_homework(hid)
+    if not hw:
+        raise HTTPException(404)
+    is_owner = _owns_homework(hw, user)
+    assignment = None
+    if not is_owner:
+        assignment = get_assignment(hid, user["id"])
+        if not assignment:
+            raise HTTPException(status_code=403, detail="This homework is not assigned to you")
+        hw = dict(hw, solution=None)
+    return templates.TemplateResponse(request=request, name="coaching_homework.html", context={
+        "hw": hw,
+        "is_owner": is_owner,
+        "assignment": assignment,
+        "assignments": list_homework_assignments(hid) if is_owner else [],
+        "coach": get_coach_profile(hw["coach_id"]),
+        "msg": msg,
+    })
+
+
+@app.post("/coaching/homework/{hid}/delete")
+def coaching_delete_homework(hid: int, user: dict = Depends(require_coach)):
+    hw = get_homework(hid)
+    if hw and _owns_homework(hw, user):
+        delete_homework(hid, hw["coach_id"])
+    return RedirectResponse("/coaching", status_code=303)
+
+
+@app.post("/coaching/homework/{hid}/submit")
+async def coaching_submit_homework(request: Request, hid: int, user: dict = Depends(require_login)):
+    if not get_homework(hid):
+        raise HTTPException(404)
+    form = await request.form()
+    pgn = form.get("pgn") or ""
+    upload = form.get("pgn_file")
+    if upload is not None and hasattr(upload, "read"):
+        data = await upload.read()
+        if data:
+            pgn = data.decode("utf-8", errors="replace")
+    if not submit_assignment(hid, user["id"], form.get("note"), pgn):
+        raise HTTPException(status_code=403, detail="This homework is not assigned to you")
+    return RedirectResponse(f"/coaching/homework/{hid}?msg=submitted", status_code=303)
+
+
+@app.post("/coaching/homework/{hid}/grade")
+def coaching_grade_homework(hid: int, assignment_id: int = Form(...), grade: str = Form(""),
+                            feedback: str = Form(""), user: dict = Depends(require_coach)):
+    hw = get_homework(hid)
+    if not hw or not _owns_homework(hw, user):
+        raise HTTPException(status_code=403, detail="Not your homework")
+    grade_assignment(assignment_id, hw["coach_id"], grade, feedback)
+    return RedirectResponse(f"/coaching/homework/{hid}?msg=graded", status_code=303)
+
+
+@app.post("/api/coaching/puzzle-move")
+async def coaching_puzzle_move(request: Request, user: dict = Depends(require_login)):
+    """Server-side puzzle checking so the solution never reaches the student's browser."""
+    body = await request.json()
+    try:
+        hid, ply = int(body.get("hid")), int(body.get("ply"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="hid and ply required")
+    hw = get_homework(hid)
+    if not hw or hw["kind"] != "puzzle" or not hw["solution"]:
+        raise HTTPException(404)
+    is_owner = _owns_homework(hw, user)
+    if not is_owner and not get_assignment(hid, user["id"]):
+        raise HTTPException(status_code=403, detail="This homework is not assigned to you")
+    solution = hw["solution"].split()
+    if ply < 0 or ply >= len(solution):
+        return {"correct": False, "reply": None, "solved": True}
+    if _norm_san(solution[ply]) != _norm_san(str(body.get("san") or "")):
+        return {"correct": False, "reply": None, "solved": False}
+    reply = solution[ply + 1] if ply + 1 < len(solution) else None
+    solved = ply + 2 >= len(solution)
+    if solved and not is_owner:
+        mark_puzzle_solved(hid, user["id"])
+    return {"correct": True, "reply": reply, "solved": solved}
+
+
+# ---------------------------------------------------------------------------
+# Coaching: courses, enrollment payments (Stripe Connect), coach payouts
+# ---------------------------------------------------------------------------
+
+@app.post("/coaching/courses")
+def coaching_create_course(title: str = Form(...), description: str = Form(""), price: str = Form("0"),
+                           user: dict = Depends(require_coach)):
+    try:
+        cents = int(round(float(price) * 100))
+    except ValueError:
+        cents = 0
+    if not title.strip():
+        return RedirectResponse("/coaching?msg=course_invalid", status_code=303)
+    create_course(user["id"], title, description, cents)
+    return RedirectResponse("/coaching?msg=course", status_code=303)
+
+
+@app.post("/coaching/courses/{cid}/toggle")
+def coaching_toggle_course(cid: int, user: dict = Depends(require_coach)):
+    course = get_course(cid)
+    if course and course["coach_id"] == user["id"]:
+        set_course_active(cid, user["id"], not course["active"])
+    return RedirectResponse("/coaching", status_code=303)
+
+
+def _stripe_connect_onboarding_url(request: Request, user: dict) -> str:
+    stripe.api_key = STRIPE_SECRET_KEY
+    profile = get_coach_profile(user["id"])
+    account_id = profile.get("stripe_account_id")
+    if not account_id:
+        account = stripe.Account.create(
+            type="express",
+            email=profile.get("email") or None,
+            capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
+        )
+        account_id = account.id
+        set_coach_stripe_account(user["id"], account_id, False)
+    base_url = str(request.base_url).rstrip("/")
+    link = stripe.AccountLink.create(
+        account=account_id,
+        refresh_url=f"{base_url}/coaching/stripe/refresh",
+        return_url=f"{base_url}/coaching/stripe/return",
+        type="account_onboarding",
+    )
+    return link.url
+
+
+@app.post("/coaching/stripe/connect")
+def coaching_stripe_connect(request: Request, user: dict = Depends(require_coach)):
+    if not STRIPE_SECRET_KEY:
+        return RedirectResponse("/coaching?msg=stripe_unconfigured", status_code=303)
+    return RedirectResponse(_stripe_connect_onboarding_url(request, user), status_code=303)
+
+
+@app.get("/coaching/stripe/refresh")
+def coaching_stripe_refresh(request: Request, user: dict = Depends(require_coach)):
+    if not STRIPE_SECRET_KEY:
+        return RedirectResponse("/coaching?msg=stripe_unconfigured", status_code=303)
+    return RedirectResponse(_stripe_connect_onboarding_url(request, user), status_code=303)
+
+
+@app.get("/coaching/stripe/return")
+def coaching_stripe_return(user: dict = Depends(require_coach)):
+    profile = get_coach_profile(user["id"])
+    account_id = profile.get("stripe_account_id")
+    if account_id and STRIPE_SECRET_KEY:
+        stripe.api_key = STRIPE_SECRET_KEY
+        try:
+            account = stripe.Account.retrieve(account_id)
+            set_coach_stripe_account(user["id"], account_id, bool(account.charges_enabled))
+        except Exception as e:
+            logging.warning("stripe connect return for user %s: %s", user["id"], e)
+    return RedirectResponse("/coaching?msg=stripe", status_code=303)
+
+
+def _complete_enrollment(eid: int, stripe_session_id: Optional[str]):
+    enrollment = get_enrollment(eid)
+    if not enrollment:
+        return
+    if enrollment["status"] != "paid":
+        mark_enrollment_paid(eid, stripe_session_id)
+    course = get_course(enrollment["course_id"])
+    if course:
+        add_coach_student(course["coach_id"], enrollment["user_id"])
+
+
+@app.get("/courses", response_class=HTMLResponse)
+def courses_page(request: Request):
+    return templates.TemplateResponse(request=request, name="courses.html", context={
+        "courses": list_courses(),
+        "user": get_current_user(request),
+    })
+
+
+@app.get("/courses/{cid}", response_class=HTMLResponse)
+def course_detail_page(request: Request, cid: int, cancelled: Optional[str] = None, error: Optional[str] = None):
+    course = get_course(cid)
+    user = get_current_user(request)
+    is_owner = bool(user) and (course or {}).get("coach_id") == user["id"]
+    if not course or (not course["active"] and not is_owner and (user or {}).get("role") != "admin"):
+        raise HTTPException(404)
+    enrollment = get_user_enrollment(cid, user["id"]) if user else None
+    payments_ready = course["price_cents"] <= 0 or (
+        bool(STRIPE_SECRET_KEY) and bool(course["stripe_account_id"]) and bool(course["stripe_charges_enabled"])
+    )
+    return templates.TemplateResponse(request=request, name="course_detail.html", context={
+        "course": course, "user": user, "is_owner": is_owner, "enrollment": enrollment,
+        "payments_ready": payments_ready, "cancelled": cancelled == "1", "error": error,
+    })
+
+
+@app.post("/courses/{cid}/enroll")
+def course_enroll(request: Request, cid: int, user: dict = Depends(require_login)):
+    course = get_course(cid)
+    if not course or not course["active"]:
+        raise HTTPException(404)
+    if course["coach_id"] == user["id"]:
+        return RedirectResponse(f"/courses/{cid}?error=own", status_code=303)
+    if get_user_enrollment(cid, user["id"]):
+        return RedirectResponse("/coaching", status_code=303)
+    price = course["price_cents"]
+    if price <= 0:
+        create_enrollment(cid, user["id"], "free", 0)
+        add_coach_student(course["coach_id"], user["id"])
+        return RedirectResponse(f"/courses/{cid}/enroll/success", status_code=303)
+    if not STRIPE_SECRET_KEY or not course["stripe_account_id"] or not course["stripe_charges_enabled"]:
+        return RedirectResponse(f"/courses/{cid}?error=payments", status_code=303)
+
+    eid = create_enrollment(cid, user["id"], "pending", price)
+    stripe.api_key = STRIPE_SECRET_KEY
+    base_url = str(request.base_url).rstrip("/")
+    email = (get_user_by_username(user["username"]) or {}).get("email")
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{"price_data": {"currency": "usd",
+            "product_data": {"name": f"Course: {course['title']} (coach {course['coach']})"},
+            "unit_amount": price}, "quantity": 1}],
+        mode="payment",
+        success_url=f"{base_url}/courses/{cid}/enroll/success?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{base_url}/courses/{cid}?cancelled=1",
+        customer_email=email or None,
+        metadata={"enrollment_id": str(eid), "course_id": str(cid)},
+        payment_intent_data={
+            "application_fee_amount": price * _platform_fee_percent() // 100,
+            "transfer_data": {"destination": course["stripe_account_id"]},
+        },
+    )
+    return RedirectResponse(session.url, status_code=303)
+
+
+@app.get("/courses/{cid}/enroll/success", response_class=HTMLResponse)
+def course_enroll_success(request: Request, cid: int, session_id: Optional[str] = None,
+                          user: dict = Depends(require_login)):
+    course = get_course(cid)
+    if not course:
+        raise HTTPException(404)
+    if session_id and STRIPE_SECRET_KEY:
+        stripe.api_key = STRIPE_SECRET_KEY
+        try:
+            s = stripe.checkout.Session.retrieve(session_id)
+            if s.payment_status == "paid":
+                enrollment = get_enrollment(int((s.metadata or {}).get("enrollment_id") or 0))
+                if enrollment and enrollment["user_id"] == user["id"] and enrollment["course_id"] == cid:
+                    _complete_enrollment(enrollment["id"], session_id)
+        except Exception as e:
+            logging.warning("course enroll success check: %s", e)
+    return templates.TemplateResponse(request=request, name="course_enroll_success.html", context={
+        "course": course,
+        "enrollment": get_user_enrollment(cid, user["id"]),
+    })
 
 
 if __name__ == "__main__":

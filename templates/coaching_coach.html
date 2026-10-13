@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}Coaching{% endblock %}
+{% block content %}
+{% macro student_picker() %}
+  {% if students %}
+    <div class="d-flex flex-wrap gap-3">
+      {% for s in students %}
+        <label class="form-check-label small"><input type="checkbox" class="form-check-input me-1" name="student_ids" value="{{ s.id }}">{{ s.username }}</label>
+      {% endfor %}
+    </div>
+    <div class="form-text">Leave all unchecked to include every student.</div>
+  {% else %}
+    <div class="form-text">Add students first — new items go to all of them by default.</div>
+  {% endif %}
+{% endmacro %}
+
+{% set notices = {
+  'profile': ('success', 'Coach profile saved.'),
+  'student': ('success', 'Student added.'),
+  'nouser': ('warning', 'No user with that username.'),
+  'self': ('warning', "You can't add yourself as a student."),
+  'session': ('success', 'Session scheduled.'),
+  'session_invalid': ('warning', 'A session needs a title and a date/time.'),
+  'homework_invalid': ('warning', 'Homework needs a title.'),
+  'puzzle_invalid': ('warning', 'A puzzle needs a starting position (FEN) and a solution line.'),
+  'course': ('success', 'Course published to the catalog.'),
+  'course_invalid': ('warning', 'A course needs a title.'),
+  'stripe': ('success', 'Stripe account status updated.'),
+  'stripe_unconfigured': ('warning', 'Stripe is not configured on this server yet.'),
+} %}
+{% if msg in notices %}
+  <div class="alert alert-{{ notices[msg][0] }} alert-dismissible fade show">{{ notices[msg][1] }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+{% endif %}
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">Coaching — {{ profile.username }}</h2>
+  <a href="/courses" class="btn btn-outline-secondary btn-sm">View public course catalog</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Coach profile &amp; standing session link</div>
+      <div class="card-body">
+        <form method="post" action="/coaching/profile">
+          <div class="mb-2">
+            <label class="form-label small mb-0">Default meeting link (Google Meet, Zoom, …)</label>
+            <input type="url" name="default_link" class="form-control" placeholder="https://meet.google.com/…" value="{{ profile.coach_default_link or '' }}">
+            <div class="form-text">Students always see this; scheduled sessions below can override it.</div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">Bio (shown on your course listings)</label>
+            <textarea name="bio" class="form-control" rows="3">{{ profile.coach_bio or '' }}</textarea>
+          </div>
+          <button class="btn btn-primary btn-sm">Save</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Getting paid</div>
+      <div class="card-body">
+        {% if profile.stripe_charges_enabled %}
+          <span class="badge bg-success">Stripe connected — payouts enabled</span>
+          <p class="small text-muted mt-2 mb-0">Course payments go straight to your Stripe account. The site keeps {{ platform_fee }}% per sale.</p>
+        {% else %}
+          {% if profile.stripe_account_id %}
+            <span class="badge bg-warning text-dark">Stripe onboarding incomplete</span>
+          {% else %}
+            <span class="badge bg-secondary">Not connected</span>
+          {% endif %}
+          <p class="small text-muted mt-2">Connect a Stripe account to sell courses. Buyers pay you directly; the site keeps {{ platform_fee }}% per sale.</p>
+          <form method="post" action="/coaching/stripe/connect" class="d-inline">
+            <button class="btn btn-outline-primary btn-sm" {% if not stripe_configured %}disabled title="Stripe is not configured on this server"{% endif %}>
+              {% if profile.stripe_account_id %}Continue Stripe setup{% else %}Connect Stripe{% endif %}
+            </button>
+          </form>
+          {% if profile.stripe_account_id %}
+            <a href="/coaching/stripe/return" class="btn btn-link btn-sm">Re-check status</a>
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Students</div>
+      <div class="card-body">
+        <form method="post" action="/coaching/students" class="d-flex gap-2 mb-3">
+          <input type="text" name="username" class="form-control form-control-sm" placeholder="Student's username" required>
+          <button class="btn btn-primary btn-sm text-nowrap">Add student</button>
+        </form>
+        {% if students %}
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>Username</th><th>USCF</th><th></th></tr></thead>
+          <tbody>
+            {% for s in students %}
+            <tr>
+              <td>{{ s.username }}</td>
+              <td class="text-muted small">{{ s.uscf_rating or '—' }}</td>
+              <td class="text-end">
+                <form method="post" action="/coaching/students/{{ s.id }}/remove" onsubmit="return confirm('Remove {{ s.username }} from your students?')">
+                  <button class="btn btn-outline-danger btn-sm">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+          <p class="text-muted small mb-0">No students yet. Students also join automatically when they enroll in one of your courses.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Sessions</div>
+      <div class="card-body">
+        <form method="post" action="/coaching/sessions" class="row g-2 mb-3">
+          <div class="col-sm-7"><input type="text" name="title" class="form-control form-control-sm" placeholder="Title (e.g. Endgame class)" required></div>
+          <div class="col-sm-5"><input type="datetime-local" name="starts_at" class="form-control form-control-sm" required></div>
+          <div class="col-12"><input type="url" name="link" class="form-control form-control-sm" placeholder="Meeting link (optional — defaults to your standing link)"></div>
+          <div class="col-12"><input type="text" name="notes" class="form-control form-control-sm" placeholder="Notes (optional)"></div>
+          <div class="col-12">{{ student_picker() }}</div>
+          <div class="col-12"><button class="btn btn-primary btn-sm">Schedule session</button></div>
+        </form>
+        {% if sessions %}
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>When</th><th>Title</th><th>Students</th><th></th></tr></thead>
+          <tbody>
+            {% for s in sessions %}
+            <tr>
+              <td class="text-nowrap small">{{ s.starts_at|replace('T', ' ') }}</td>
+              <td>{{ s.title }}{% if s.notes %}<div class="text-muted small">{{ s.notes }}</div>{% endif %}</td>
+              <td class="small text-muted">{{ s.students or '—' }}</td>
+              <td class="text-end text-nowrap">
+                {% set join = s.link or profile.coach_default_link %}
+                {% if join %}<a href="{{ join }}" target="_blank" rel="noopener" class="btn btn-success btn-sm">Join</a>{% endif %}
+                <form method="post" action="/coaching/sessions/{{ s.id }}/delete" class="d-inline"><button class="btn btn-outline-danger btn-sm">Delete</button></form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Homework &amp; demonstrations</div>
+      <div class="card-body">
+        <form method="post" action="/coaching/homework" class="row g-2 mb-3" id="homework-form">
+          <div class="col-sm-8"><input type="text" name="title" class="form-control form-control-sm" placeholder="Title" required></div>
+          <div class="col-sm-4">
+            <select name="kind" class="form-select form-select-sm" onchange="document.getElementById('solution-row').style.display = this.value === 'puzzle' ? '' : 'none'">
+              <option value="study">Study (position / game)</option>
+              <option value="puzzle">Puzzle (find the move)</option>
+              <option value="exercise">Exercise (text / submit PGN)</option>
+            </select>
+          </div>
+          <div class="col-12"><textarea name="instructions" class="form-control form-control-sm" rows="3" placeholder="Instructions for the student"></textarea></div>
+          <div class="col-12"><input type="text" name="fen" class="form-control form-control-sm font-monospace" placeholder="Starting position (FEN) — optional for study, required for puzzle"></div>
+          <div class="col-12"><textarea name="pgn" class="form-control form-control-sm font-monospace" rows="3" placeholder="PGN to play through on the board (optional)"></textarea></div>
+          <div class="col-12" id="solution-row" style="display:none">
+            <input type="text" name="solution" class="form-control form-control-sm font-monospace" placeholder="Solution line in SAN, e.g. 1. Qh5 Kf8 2. Qf7#">
+            <div class="form-text">Student moves are checked one at a time; the opponent's replies are played automatically.</div>
+          </div>
+          <div class="col-sm-5"><label class="form-label small mb-0">Due date</label><input type="date" name="due_date" class="form-control form-control-sm"></div>
+          <div class="col-12">{{ student_picker() }}</div>
+          <div class="col-12"><button class="btn btn-primary btn-sm">Assign homework</button></div>
+        </form>
+        {% if homework %}
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>Title</th><th>Kind</th><th>Due</th><th class="text-center">Assigned / Submitted / Graded</th></tr></thead>
+          <tbody>
+            {% for h in homework %}
+            <tr>
+              <td><a href="/coaching/homework/{{ h.id }}">{{ h.title }}</a></td>
+              <td class="small text-muted">{{ h.kind }}</td>
+              <td class="small text-muted">{{ h.due_date or '—' }}</td>
+              <td class="text-center small">{{ h.assigned }} / {{ h.submitted or 0 }} / {{ h.graded or 0 }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Courses for sale</div>
+      <div class="card-body">
+        <form method="post" action="/coaching/courses" class="row g-2 mb-3">
+          <div class="col-sm-8"><input type="text" name="title" class="form-control form-control-sm" placeholder="Course title" required></div>
+          <div class="col-sm-4"><div class="input-group input-group-sm"><span class="input-group-text">$</span><input type="number" name="price" min="0" step="0.01" class="form-control" placeholder="0 = free" value="0"></div></div>
+          <div class="col-12"><textarea name="description" class="form-control form-control-sm" rows="3" placeholder="What students get: topics, number of sessions, level…"></textarea></div>
+          <div class="col-12"><button class="btn btn-primary btn-sm">Publish course</button></div>
+        </form>
+        <p class="small text-muted">Paid courses need your Stripe account connected before anyone can buy. Buyers become your students automatically.</p>
+        {% if courses %}
+        <table class="table table-sm align-middle mb-0">
+          <thead><tr><th>Course</th><th>Price</th><th>Enrolled</th><th>Revenue</th><th></th></tr></thead>
+          <tbody>
+            {% for c in courses %}
+            <tr class="{% if not c.active %}text-muted{% endif %}">
+              <td><a href="/courses/{{ c.id }}">{{ c.title }}</a>{% if not c.active %} <span class="badge bg-secondary">hidden</span>{% endif %}</td>
+              <td class="small">{% if c.price_cents %}${{ '%.2f' % (c.price_cents / 100) }}{% else %}Free{% endif %}</td>
+              <td class="small">{{ c.enrolled }}</td>
+              <td class="small">${{ '%.2f' % (c.revenue_cents / 100) }}</td>
+              <td class="text-end"><form method="post" action="/coaching/courses/{{ c.id }}/toggle"><button class="btn btn-outline-secondary btn-sm">{% if c.active %}Hide{% else %}Show{% endif %}</button></form></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

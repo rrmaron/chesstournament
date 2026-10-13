@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Coaching{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <h2 class="mb-0">My Coaching</h2>
+  <a href="/courses" class="btn btn-outline-primary btn-sm">Browse courses</a>
+</div>
+
+{% if not coaches %}
+  <div class="alert alert-info">
+    You don't have a coach yet. <a href="/courses">Browse courses</a> to enroll with one, or ask your coach to add your username (<strong>{{ request.session.user.username }}</strong>).
+  </div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    {% if coaches %}
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">My coaches</div>
+      <ul class="list-group list-group-flush">
+        {% for c in coaches %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <div class="fw-semibold">{{ c.username }}</div>
+            {% if c.bio %}<div class="small text-muted">{{ c.bio }}</div>{% endif %}
+          </div>
+          {% if c.default_link %}<a href="{{ c.default_link }}" target="_blank" rel="noopener" class="btn btn-success btn-sm">Join lesson room</a>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">Sessions</div>
+      {% if sessions %}
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>When</th><th>Session</th><th></th></tr></thead>
+        <tbody>
+          {% for s in sessions %}
+          <tr>
+            <td class="small text-nowrap">{{ s.starts_at|replace('T', ' ') }}</td>
+            <td>{{ s.title }}<div class="small text-muted">with {{ s.coach }}{% if s.notes %} · {{ s.notes }}{% endif %}</div></td>
+            <td class="text-end">{% if s.link %}<a href="{{ s.link }}" target="_blank" rel="noopener" class="btn btn-success btn-sm">Join</a>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="card-body text-muted small">No sessions scheduled.</div>
+      {% endif %}
+    </div>
+
+    {% if enrollments %}
+    <div class="card mb-4">
+      <div class="card-header fw-semibold">My courses</div>
+      <ul class="list-group list-group-flush">
+        {% for e in enrollments %}
+        <li class="list-group-item d-flex justify-content-between">
+          <a href="/courses/{{ e.course_id }}">{{ e.title }}</a>
+          <span class="small text-muted">{{ e.coach }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header fw-semibold">Homework</div>
+      {% if homework %}
+      <table class="table table-sm align-middle mb-0">
+        <thead><tr><th>Title</th><th>Coach</th><th>Due</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for h in homework %}
+          <tr>
+            <td><a href="/coaching/homework/{{ h.id }}">{{ h.title }}</a> <span class="badge bg-light text-dark border">{{ h.kind }}</span></td>
+            <td class="small text-muted">{{ h.coach }}</td>
+            <td class="small text-muted">{{ h.due_date or '—' }}</td>
+            <td>
+              {% if h.status == 'graded' %}<span class="badge bg-success">Graded{% if h.grade %}: {{ h.grade }}{% endif %}</span>
+              {% elif h.status == 'submitted' %}<span class="badge bg-primary">Submitted</span>
+              {% else %}<span class="badge bg-warning text-dark">To do</span>{% endif %}
+              {% if h.kind == 'puzzle' and h.puzzle_solved %}<span class="badge bg-info text-dark">Solved</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="card-body text-muted small">No homework assigned.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

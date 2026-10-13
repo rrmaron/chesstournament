@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Enrolled{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card shadow-sm text-center">
+      <div class="card-body py-5">
+        {% if enrollment %}
+          <h3 class="text-success">You're enrolled in {{ course.title }}</h3>
+          <p class="text-muted">Coach {{ course.coach }} has been notified and you'll see sessions and homework on your coaching page.</p>
+          <a href="/coaching" class="btn btn-primary">Go to my coaching</a>
+        {% else %}
+          <h3>Payment received — finishing up</h3>
+          <p class="text-muted">Your enrollment is being confirmed. Refresh in a moment, or head to your coaching page.</p>
+          <a href="/coaching" class="btn btn-outline-primary">My coaching</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -18,6 +18,12 @@ def require_td(user: dict = Depends(require_login)):
     return user
 
 
+def require_coach(user: dict = Depends(require_login)):
+    if user["role"] not in ("coach", "admin"):
+        raise HTTPException(status_code=403, detail="Coach role required")
+    return user
+
+
 def require_admin(user: dict = Depends(require_login)):
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin role required")
