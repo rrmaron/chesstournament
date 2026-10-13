@@ -53,6 +53,48 @@
   </div>
 </div>
 
+<div class="card mb-3">
+  <div class="card-header fw-semibold">Location</div>
+  <div class="card-body">
+    <p class="text-muted small mb-2">Used to show tournaments and federation info for your area on the home page.</p>
+    {% if location.country_code or location.city %}
+      <p class="small mb-2"><span class="text-muted">Current:</span>
+        {{ location.city or '' }}{% if location.city and (user_federation or location.country_code) %}, {% endif %}{% if user_federation %}{{ user_federation.name }}{% elif location.country_code %}{{ location.country_code }}{% endif %}
+      </p>
+    {% else %}
+      <p class="small text-muted mb-2">No location set.</p>
+    {% endif %}
+    <form method="post" action="/profile/location" id="locationForm">
+      <div class="mb-2">
+        <label class="form-label small mb-1">Country</label>
+        <select name="country_code" id="countrySelect" class="form-select form-select-sm" onchange="loadFederations()">
+          <option value="">— Select country —</option>
+          {% for c in countries %}
+          <option value="{{ c.country_code }}" {% if c.country_code == location.country_code %}selected{% endif %}>{{ c.country_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="mb-2" id="fedBlock" style="display:none">
+        <label class="form-label small mb-1">Federation / Rating System</label>
+        <select name="federation_id" id="fedSelect" class="form-select form-select-sm" onchange="loadCities()">
+          <option value="">— Select federation —</option>
+        </select>
+      </div>
+      <div class="mb-2" id="cityBlock" style="display:none">
+        <label class="form-label small mb-1">City</label>
+        <select name="city" id="citySelect" class="form-select form-select-sm">
+          <option value="">— Select city —</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-sm btn-primary">Save location</button>
+      {% if location.country_code or location.city %}
+      <button type="submit" class="btn btn-sm btn-outline-secondary ms-1"
+              onclick="document.getElementById('countrySelect').value=''; document.getElementById('fedSelect').innerHTML=''; document.getElementById('citySelect').innerHTML='';">Clear</button>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header fw-semibold">Ratings</div>
   <div class="card-body">
@@ -130,4 +172,69 @@
 
 </div>
 </div>
+<script>
+const allFederations = {{ federations | tojson }};
+const savedLocation = {{ location | tojson }};
+
+function loadFederations(preselectFed, preselectCity) {
+    const cc = document.getElementById('countrySelect').value;
+    const fedBlock = document.getElementById('fedBlock');
+    const fedSelect = document.getElementById('fedSelect');
+    const cityBlock = document.getElementById('cityBlock');
+    const citySelect = document.getElementById('citySelect');
+
+    fedSelect.innerHTML = '<option value="">— Select federation —</option>';
+    citySelect.innerHTML = '<option value="">— Select city —</option>';
+    cityBlock.style.display = 'none';
+
+    if (!cc) { fedBlock.style.display = 'none'; return; }
+
+    const feds = allFederations.filter(f => f.country_code === cc);
+    if (feds.length === 0) { fedBlock.style.display = 'none'; return; }
+
+    if (feds.length === 1) {
+        fedBlock.style.display = 'none';
+        fedSelect.innerHTML = `<option value="${feds[0].id}" selected>${feds[0].name}</option>`;
+        loadCities(preselectCity);
+    } else {
+        feds.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.id;
+            opt.textContent = `${f.name} (${f.rating_system || f.abbreviation})`;
+            if (preselectFed && String(preselectFed) === String(f.id)) opt.selected = true;
+            fedSelect.appendChild(opt);
+        });
+        fedBlock.style.display = 'block';
+        if (preselectFed) loadCities(preselectCity);
+    }
+}
+
+async function loadCities(preselectCity) {
+    const fedId = document.getElementById('fedSelect').value;
+    const cityBlock = document.getElementById('cityBlock');
+    const citySelect = document.getElementById('citySelect');
+    citySelect.innerHTML = '<option value="">— Select city —</option>';
+    if (!fedId) { cityBlock.style.display = 'none'; return; }
+
+    try {
+        const resp = await fetch('/api/cities/' + fedId);
+        const cities = await resp.json();
+        if (cities.length === 0) { cityBlock.style.display = 'none'; return; }
+        cities.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.city_name;
+            opt.textContent = c.region ? `${c.city_name} (${c.region})` : c.city_name;
+            if (preselectCity && preselectCity === c.city_name) opt.selected = true;
+            citySelect.appendChild(opt);
+        });
+        cityBlock.style.display = 'block';
+    } catch(e) {
+        cityBlock.style.display = 'none';
+    }
+}
+
+if (savedLocation && savedLocation.country_code) {
+    loadFederations(savedLocation.federation_id, savedLocation.city);
+}
+</script>
 {% endblock %}

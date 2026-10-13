@@ -3001,11 +3001,38 @@ async def profile_page(request: Request, saved: Optional[str] = None, user: dict
                 uscf_refreshed = True
         except Exception:
             pass
+    location = get_user_location(user["id"])
     return templates.TemplateResponse(request=request, name="profile.html", context={
         "profile": profile,
         "saved": saved == "1",
         "uscf_refreshed": uscf_refreshed,
+        "location": location,
+        "user_federation": get_federation(location["federation_id"]) if location.get("federation_id") else None,
+        "countries": list_countries(),
+        "federations": list_federations(active_only=True),
     })
+
+
+@app.post("/profile/location")
+def update_location(
+    country_code: str = Form(""),
+    city: str = Form(""),
+    federation_id: str = Form(""),
+    user: dict = Depends(require_login),
+):
+    """Change the country / federation / city that scope the home page's local tournaments."""
+    country_code = country_code.strip().upper()[:3]
+    fed_id = int(federation_id) if federation_id.strip().isdigit() else None
+    if fed_id is not None:
+        fed = get_federation(fed_id)
+        if not fed or (country_code and fed.get("country_code") != country_code):
+            fed_id = None
+    if fed_id is None and country_code:
+        feds = get_federations_for_country(country_code)
+        if len(feds) == 1:
+            fed_id = feds[0]["id"]
+    update_user_location(user["id"], country_code, city.strip()[:80], fed_id)
+    return RedirectResponse("/profile?saved=1", status_code=303)
 
 
 @app.post("/profile/contact")
