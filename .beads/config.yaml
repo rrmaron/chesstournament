@@ -53,4 +53,4 @@
 # - github.org
 # - github.repo
 
-sync.remote: "https://doltremoteapi.dolthub.com/rrmaron/mychesspairings-beads"
+sync.remote: "git+https://github.com/rrmaron/chesstournament"
