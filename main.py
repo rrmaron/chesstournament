@@ -5063,8 +5063,42 @@ def _anthropic_client():
     return client
 
 
-def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
-    """Ask Claude to read a board image; returns the FEN placement, or None if no board was found."""
+# USD per million tokens: (input, cache write 5m, cache read, output).
+# Source: platform.claude.com/docs/en/about-claude/pricing, October 2026.
+_CLAUDE_PRICES_PER_MTOK = {
+    "claude-opus-5-5": (4.0, 5.0, 0.20, 20.0),
+    "claude-opus-5": (5.0, 6.25, 0.50, 25.0),
+    "claude-opus-4-8": (5.0, 6.25, 0.50, 25.0),
+    "claude-sonnet-5-5": (2.0, 2.50, 0.10, 10.0),
+    "claude-sonnet-5": (2.0, 2.50, 0.20, 10.0),
+    "claude-haiku-5-5": (0.10, 0.125, 0.01, 0.50),
+}
+
+
+def _claude_usage_cost(model: str, usage) -> dict:
+    """Token counts plus an estimated USD cost, priced by the model that actually
+    served the request (server-side fallback can swap it). cost_usd is None for a
+    model missing from the price table."""
+    model = model or ""
+    key = next((k for k in sorted(_CLAUDE_PRICES_PER_MTOK, key=len, reverse=True) if model.startswith(k)), None)
+    inp = getattr(usage, "input_tokens", 0) or 0
+    out = getattr(usage, "output_tokens", 0) or 0
+    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    cost = None
+    if key:
+        p_in, p_cw, p_cr, p_out = _CLAUDE_PRICES_PER_MTOK[key]
+        cost = round((inp * p_in + cache_write * p_cw + cache_read * p_cr + out * p_out) / 1_000_000, 6)
+    summary = f"{inp + cache_write + cache_read:,} input + {out:,} output tokens on {model or 'unknown model'}"
+    if cost is not None:
+        summary += f" ≈ ${cost:.4f}"
+    return {"model": model, "input_tokens": inp, "output_tokens": out, "cache_write_tokens": cache_write,
+            "cache_read_tokens": cache_read, "cost_usd": cost, "summary": summary}
+
+
+def _fen_from_image(data: bytes, media_type: str) -> tuple:
+    """Ask Claude to read a board image. Returns (placement, usage): the FEN
+    placement or None if no board was found, and the token usage / cost dict."""
     import base64
 
     client = _anthropic_client()
@@ -5080,11 +5114,12 @@ def _fen_from_image(data: bytes, media_type: str) -> Optional[str]:
             {"type": "text", "text": _FEN_IMAGE_PROMPT},
         ]}],
     )
+    usage = _claude_usage_cost(getattr(response, "model", ""), getattr(response, "usage", None))
     if response.stop_reason == "refusal":
-        return None
+        return None, usage
     text = "".join(block.text for block in response.content if block.type == "text")
     match = re.search(r"[pnbrqkPNBRQK1-8]+(?:/[pnbrqkPNBRQK1-8]+){7}", text)
-    return match.group(0) if match else None
+    return (match.group(0) if match else None), usage
 
 
 @app.post("/api/coaching/board-from-image")
@@ -5105,14 +5140,16 @@ async def coaching_board_from_image(image: UploadFile = File(...), user: dict = 
     except ValueError:
         raise HTTPException(status_code=422, detail="Couldn't read that file as an image")
     try:
-        placement = await loop.run_in_executor(None, _fen_from_image, data, media_type)
+        placement, usage = await loop.run_in_executor(None, _fen_from_image, data, media_type)
     except Exception as e:
         detail = f" [last identity token: {_last_fly_token_claims}]" if _claude_auth_mode() == "federation" else ""
         logging.warning("board-from-image for user %s: %s%s", user["id"], e, detail)
         raise HTTPException(status_code=502, detail="Could not read the image right now - please try again")
+    logging.info("board-from-image for user %s: %s", user["id"], (usage or {}).get("summary"))
     if not placement or not _valid_fen_placement(placement):
-        raise HTTPException(status_code=422, detail="Couldn't find a readable chessboard in that image")
-    return {"fen": f"{placement} w - - 0 1"}
+        raise HTTPException(status_code=422, detail="Couldn't find a readable chessboard in that image"
+                            + (f" (API usage: {usage['summary']})" if usage else ""))
+    return {"fen": f"{placement} w - - 0 1", "usage": usage}
 
 
 def _owns_homework(hw: dict, user: dict) -> bool:

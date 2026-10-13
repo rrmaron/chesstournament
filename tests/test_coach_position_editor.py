@@ -57,7 +57,7 @@ def test_board_from_image_returns_fen_from_recognized_placement(client, app_modu
 
     def fake_reader(data, media_type):
         seen["data"], seen["media_type"] = data, media_type
-        return "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR"
+        return "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR", None
 
     monkeypatch.setattr(app_module, "_fen_from_image", fake_reader)
     make_coach(app_module)
@@ -66,7 +66,7 @@ def test_board_from_image_returns_fen_from_recognized_placement(client, app_modu
     resp = client.post("/api/coaching/board-from-image", files={"image": ("shot.jpg", PNG, "image/jpeg")})
 
     assert resp.status_code == 200
-    assert resp.json() == {"fen": "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w - - 0 1"}
+    assert resp.json()["fen"] == "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w - - 0 1"
     assert seen["media_type"] == "image/jpeg"
     assert seen["data"][:3] == b"\xff\xd8\xff"  # normalized to JPEG before reaching Claude
 
@@ -76,11 +76,11 @@ def test_board_from_image_rejects_unreadable_or_bad_results(client, app_module, 
     make_coach(app_module)
     login(client, "coachk", "correct-horse")
 
-    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: None)
+    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: (None, None))
     resp = client.post("/api/coaching/board-from-image", files={"image": ("b.png", PNG, "image/png")})
     assert resp.status_code == 422
 
-    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: "8/8/8/8/8/8/8/8")
+    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: ("8/8/8/8/8/8/8/8", None))
     resp = client.post("/api/coaching/board-from-image", files={"image": ("b.png", PNG, "image/png")})
     assert resp.status_code == 422
 

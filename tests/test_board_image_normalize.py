@@ -42,7 +42,7 @@ def test_route_sends_normalized_image_and_rejects_undecodable_files(client, app_
 
     def fake_reader(data, media_type):
         seen.update(size=len(data), media_type=media_type, dims=Image.open(io.BytesIO(data)).size)
-        return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+        return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", None
 
     monkeypatch.setattr(app_module, "_fen_from_image", fake_reader)
 

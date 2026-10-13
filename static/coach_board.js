@@ -222,7 +222,8 @@ window.CoachBoard = (function () {
         .then(function (res) {
           if (!res.ok) { setText(opts.statusId, res.data.detail || "Could not read that image."); return; }
           loadFen(res.data.fen);
-          setText(opts.statusId, "Position loaded from the image - check every piece and set the side to move before assigning.");
+          var usage = res.data.usage && res.data.usage.summary ? " API usage: " + res.data.usage.summary + "." : "";
+          setText(opts.statusId, "Position loaded from the image - check every piece and set the side to move before assigning." + usage);
         })
         .catch(function () { setText(opts.statusId, "Could not read that image."); });
     }

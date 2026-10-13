@@ -110,7 +110,7 @@ def test_board_from_image_works_with_federation_and_no_api_key(client, app_modul
     assert unconfigured.status_code == 503
 
     _configure(app_module, monkeypatch)
-    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR")
+    monkeypatch.setattr(app_module, "_fen_from_image", lambda data, mt: ("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", None))
     resp = client.post("/api/coaching/board-from-image", files={"image": ("b.png", PNG, "image/png")})
     assert resp.status_code == 200
     assert resp.json()["fen"].startswith("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w")
