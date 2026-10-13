@@ -17,6 +17,7 @@ import html
 import re
 import httpx
 import anthropic
+import io
 import json
 from typing import Optional, List
 import stripe
@@ -4927,6 +4928,29 @@ _FEN_IMAGE_PROMPT = (
 )
 _BOARD_IMAGE_MEDIA_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _MAX_BOARD_IMAGE_BYTES = 10 * 1024 * 1024
+_BOARD_IMAGE_MAX_SIDE = 1568  # Claude's recommended ceiling; a board needs far less
+
+
+def _normalize_board_image(data: bytes, media_type: str) -> tuple:
+    """Shrink an uploaded board image to what Claude needs: RGB JPEG, longest side
+    <= 1568 px. Keeps every upload under our 10 MB cap well inside the API's
+    base64 size limit (a full-resolution screenshot can exceed it). Raises
+    ValueError when the bytes are not a decodable image."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except (UnidentifiedImageError, OSError, ValueError) as e:
+        raise ValueError("not a decodable image") from e
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    scale = _BOARD_IMAGE_MAX_SIDE / max(img.size)
+    if scale < 1:
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=88, optimize=True)
+    return out.getvalue(), "image/jpeg"
 
 
 def _valid_fen_placement(placement: str) -> bool:
@@ -5075,8 +5099,13 @@ async def coaching_board_from_image(image: UploadFile = File(...), user: dict = 
     data = await image.read()
     if not data or len(data) > _MAX_BOARD_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image must be between 1 byte and 10 MB")
+    loop = asyncio.get_event_loop()
     try:
-        placement = await asyncio.get_event_loop().run_in_executor(None, _fen_from_image, data, media_type)
+        data, media_type = await loop.run_in_executor(None, _normalize_board_image, data, media_type)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Couldn't read that file as an image")
+    try:
+        placement = await loop.run_in_executor(None, _fen_from_image, data, media_type)
     except Exception as e:
         detail = f" [last identity token: {_last_fly_token_claims}]" if _claude_auth_mode() == "federation" else ""
         logging.warning("board-from-image for user %s: %s%s", user["id"], e, detail)

@@ -3,7 +3,15 @@ uploading a screenshot/photo of a board, instead of hand-typing FEN.
 """
 from tests.conftest import login
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+def _tiny_png() -> bytes:
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO()
+    Image.new("RGB", (8, 8), (200, 200, 200)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+PNG = _tiny_png()  # a real, decodable image: uploads are normalized before reaching Claude
 
 
 def make_coach(app_module, username="coachk", password="correct-horse"):
