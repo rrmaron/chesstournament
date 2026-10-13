@@ -132,3 +132,24 @@ def test_fly_identity_token_logs_claims_for_diagnosis(app_module, monkeypatch, c
     assert "personal:mychessrating:m1" in line and "https://api.anthropic.com" in line
     assert "secret-ish" not in line and "c2ln" not in line
     assert app_module._jwt_claims_summary("garbage") == "<undecodable>"
+    assert "personal:mychessrating:m1" in app_module._last_fly_token_claims
+
+
+def test_board_from_image_failure_warning_includes_last_token_claims(client, app_module, monkeypatch, caplog):
+    """The app logs only WARNING and above in production, so the claims ride
+    along on the exchange-failure warning rather than a separate INFO line."""
+    app_module.create_user("coachg", "correct-horse", role="coach", status="active")
+    login(client, "coachg", "correct-horse")
+    _configure(app_module, monkeypatch)
+    monkeypatch.setattr(app_module, "_last_fly_token_claims", '{"sub": "personal:mychessrating:m9"}')
+
+    def boom(data, mt):
+        raise RuntimeError("Token exchange failed (HTTP 401)")
+
+    monkeypatch.setattr(app_module, "_fen_from_image", boom)
+    with caplog.at_level("WARNING"):
+        resp = client.post("/api/coaching/board-from-image", files={"image": ("b.png", PNG, "image/png")})
+
+    assert resp.status_code == 502
+    line = next(r.message for r in caplog.records if "board-from-image for user" in r.message)
+    assert "HTTP 401" in line and "personal:mychessrating:m9" in line

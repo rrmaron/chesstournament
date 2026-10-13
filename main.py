@@ -4983,8 +4983,13 @@ def _fly_identity_token() -> str:
                       if isinstance(payload.get(k), str)), "")
     if token.count(".") != 2:
         raise RuntimeError("Fly OIDC endpoint did not return a JWT")
-    logging.info("Fly identity token minted: %s", _jwt_claims_summary(token))
+    global _last_fly_token_claims
+    _last_fly_token_claims = _jwt_claims_summary(token)
+    logging.info("Fly identity token minted: %s", _last_fly_token_claims)
     return token
+
+
+_last_fly_token_claims = ""
 
 
 def _jwt_claims_summary(token: str) -> str:
@@ -5073,7 +5078,8 @@ async def coaching_board_from_image(image: UploadFile = File(...), user: dict = 
     try:
         placement = await asyncio.get_event_loop().run_in_executor(None, _fen_from_image, data, media_type)
     except Exception as e:
-        logging.warning("board-from-image for user %s: %s", user["id"], e)
+        detail = f" [last identity token: {_last_fly_token_claims}]" if _claude_auth_mode() == "federation" else ""
+        logging.warning("board-from-image for user %s: %s%s", user["id"], e, detail)
         raise HTTPException(status_code=502, detail="Could not read the image right now - please try again")
     if not placement or not _valid_fen_placement(placement):
         raise HTTPException(status_code=422, detail="Couldn't find a readable chessboard in that image")
