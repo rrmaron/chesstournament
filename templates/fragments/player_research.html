@@ -4,7 +4,8 @@
     {% if used_lichess %}<span class="badge bg-secondary">Lichess ({{ lichess_username }})</span>{% endif %}
     {% if used_chesscom %}<span class="badge bg-secondary">Chess.com ({{ chesscom_username }})</span>{% endif %}
     {% if used_db %}<span class="badge bg-secondary">Broadcast archive</span>{% endif %}
-    {% if not used_lichess and not used_chesscom and not used_db %}<span class="text-muted">none</span>{% endif %}
+    {% if used_archive %}<span class="badge bg-secondary">Found games ({{ used_archive }})</span>{% endif %}
+    {% if not used_lichess and not used_chesscom and not used_db and not used_archive %}<span class="text-muted">none</span>{% endif %}
   </div>
 
   {% if report.total_games == 0 %}

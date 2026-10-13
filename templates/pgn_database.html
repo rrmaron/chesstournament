@@ -104,6 +104,47 @@
       </div>
     </div>
 
+    {% if is_admin %}
+    {# PGN file upload (e.g. ChessBase export) #}
+    <div class="card mb-3">
+      <div class="card-header py-2 fw-semibold">Import PGN file</div>
+      <div class="card-body">
+        <form method="post" action="/pgn-database/import-file" enctype="multipart/form-data" class="row g-2">
+          <div class="col-12"><input type="file" name="pgn_file" accept=".pgn,text/plain" class="form-control form-control-sm" required></div>
+          <div class="col-12"><input type="text" name="label" class="form-control form-control-sm" placeholder="Label (e.g. ChessBase Mega — Carlsen games)"></div>
+          <div class="col-auto"><button class="btn btn-primary btn-sm">Upload</button></div>
+          <div class="form-text" style="font-size:0.7rem">
+            Export a subset from ChessBase (Mega Database etc.) as PGN and upload it here — up to 50 MB per file.
+            Games are deduplicated and become searchable by "Find all games". Licensed databases: upload only what you're allowed to.
+          </div>
+        </form>
+      </div>
+    </div>
+
+    {# TWIC weekly archive #}
+    <div class="card mb-3">
+      <div class="card-header py-2 fw-semibold">The Week in Chess archive</div>
+      <div class="card-body small">
+        <div class="mb-2 text-muted">
+          Last imported issue: <strong>{{ twic.last_issue if twic.last_issue != '0' else 'none' }}</strong>
+          {% if twic.running %}<span class="badge bg-info text-dark ms-1">running</span>{% endif %}
+          {% if twic.message %}<div class="mt-1">{{ twic.message }}</div>{% endif %}
+        </div>
+        <form method="post" action="/admin/twic/import" class="row g-2 align-items-center mb-2">
+          <div class="col-5"><input type="number" name="from_issue" class="form-control form-control-sm" placeholder="From issue" required min="1"></div>
+          <div class="col-5"><input type="number" name="to_issue" class="form-control form-control-sm" placeholder="To (blank = latest)" min="0"></div>
+          <div class="col-2"><button class="btn btn-primary btn-sm w-100" {% if twic.running %}disabled{% endif %}>Go</button></div>
+          <div class="form-text" style="font-size:0.7rem">Each weekly issue is ~2,000–5,000 OTB games (~5 MB in the database). Max 60 issues per run — keep an eye on the Fly volume (1 GB).</div>
+        </form>
+        <form method="post" action="/admin/twic/auto" class="form-check form-switch mb-0">
+          <input type="hidden" name="enabled" value="{{ '0' if twic.auto else '1' }}">
+          <input class="form-check-input" type="checkbox" role="switch" id="twic-auto" {% if twic.auto %}checked{% endif %} onchange="this.form.submit()">
+          <label class="form-check-label" for="twic-auto">Import new issues automatically (checked daily)</label>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
     {# Sources list #}
     {% if sources %}
     <div class="card">

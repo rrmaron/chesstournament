@@ -1,0 +1,91 @@
+<div id="player-games-{{ uscf_id or 'x' }}">
+  <div id="pg-ctx-{{ uscf_id or 'x' }}" class="d-none">
+    <input type="hidden" name="name" value="{{ name }}">
+    <input type="hidden" name="uscf_id" value="{{ uscf_id }}">
+    <input type="hidden" name="fide_id" value="{{ fide_id }}">
+  </div>
+
+  {% if summary %}
+  <div class="small mb-2">
+    Searched:
+    {% for s in summary.sources %}
+      <span class="badge bg-secondary me-1" {% if s.detail %}title="{{ s.detail }}"{% endif %}>{{ s.name }}: {{ s.found }}{% if s.new %} (+{{ s.new }} new){% endif %}</span>
+    {% endfor %}
+  </div>
+  {% if summary.suggestions.lichess or summary.suggestions.chesscom %}
+  <div class="alert alert-info py-2 small">
+    Possible online accounts (profile name matches):
+    {% for u in summary.suggestions.lichess %}
+      <button type="button" class="btn btn-outline-primary btn-sm py-0 me-1"
+              onclick="var i=document.getElementById('research-lichess-{{ uscf_id }}'); if(i) i.value='{{ u }}'">Lichess: {{ u }}</button>
+    {% endfor %}
+    {% for u in summary.suggestions.chesscom %}
+      <button type="button" class="btn btn-outline-primary btn-sm py-0 me-1"
+              onclick="var i=document.getElementById('research-chesscom-{{ uscf_id }}'); if(i) i.value='{{ u }}'">Chess.com: {{ u }}</button>
+    {% endfor %}
+    <span class="text-muted">— click to use it, run "Find all games" again, and report it below so it's saved.</span>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if games %}
+  <div class="d-flex justify-content-between align-items-center mb-1 flex-wrap gap-1">
+    <span class="small">
+      <strong>{{ counts.confirmed + counts.probable }}</strong> game{{ 's' if counts.confirmed + counts.probable != 1 else '' }}
+      ({{ counts.confirmed }} confirmed, {{ counts.probable }} probable{% if counts.rejected %}, {{ counts.rejected }} rejected{% endif %})
+    </span>
+    <a class="btn btn-success btn-sm" href="/api/player-games/download?uscf_id={{ uscf_id|urlencode }}&fide_id={{ fide_id|urlencode }}&name={{ name|urlencode }}">Download all as PGN</a>
+  </div>
+  <div class="table-responsive" style="max-height:380px;overflow-y:auto">
+    <table class="table table-sm mb-0" style="font-size:0.8rem">
+      <thead class="table-light sticky-top">
+        <tr><th>Date</th><th>White</th><th>Black</th><th>Result</th><th>Event</th><th>Source</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for g in games %}
+        <tr class="{% if g.status == 'rejected' %}text-muted text-decoration-line-through{% endif %}">
+          <td class="text-nowrap">{{ g.date or '—' }}</td>
+          <td>{{ g.white }}{% if g.white_elo %} <span class="text-muted">({{ g.white_elo }})</span>{% endif %}</td>
+          <td>{{ g.black }}{% if g.black_elo %} <span class="text-muted">({{ g.black_elo }})</span>{% endif %}</td>
+          <td class="text-nowrap">{{ g.result }}</td>
+          <td class="text-truncate" style="max-width:180px" title="{{ g.event }}">{{ g.event or g.source_name or '—' }}{% if g.eco %} <span class="text-muted">{{ g.eco }}</span>{% endif %}</td>
+          <td class="text-nowrap"><span class="badge bg-light text-dark border">{{ g.source_type or '?' }}</span> <a href="/api/player-games/game/{{ g.game_id }}" target="_blank" rel="noopener">PGN</a></td>
+          <td class="text-nowrap">
+            {% if g.status == 'confirmed' %}<span class="badge bg-success">confirmed</span>
+            {% elif g.status == 'probable' %}<span class="badge bg-warning text-dark">probable</span>
+            {% else %}<span class="badge bg-secondary">rejected</span>{% endif %}
+            {% if can_review %}
+              {% if g.status != 'confirmed' %}
+              <button class="btn btn-outline-success btn-sm py-0 px-1" title="Confirm this is their game"
+                      hx-post="/api/player-games/{{ g.link_id }}/status" hx-vals='{"status": "confirmed"}'
+                      hx-include="#pg-ctx-{{ uscf_id or 'x' }}" hx-target="#player-games-{{ uscf_id or 'x' }}" hx-swap="outerHTML">✓</button>
+              {% endif %}
+              {% if g.status != 'rejected' %}
+              <button class="btn btn-outline-danger btn-sm py-0 px-1" title="Not this player"
+                      hx-post="/api/player-games/{{ g.link_id }}/status" hx-vals='{"status": "rejected"}'
+                      hx-include="#pg-ctx-{{ uscf_id or 'x' }}" hx-target="#player-games-{{ uscf_id or 'x' }}" hx-swap="outerHTML">✕</button>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif summary %}
+  <p class="small text-muted mb-1">No games found yet. Add their Lichess/Chess.com username above and search again, or upload games below.</p>
+  {% endif %}
+
+  <details class="small mt-2">
+    <summary class="text-primary" style="cursor:pointer">Upload games you have against this player (PGN)</summary>
+    <form hx-post="/api/player-games/upload" hx-encoding="multipart/form-data"
+          hx-target="#player-games-{{ uscf_id or 'x' }}" hx-swap="outerHTML" class="d-flex gap-2 mt-1 align-items-center">
+      <input type="hidden" name="name" value="{{ name }}">
+      <input type="hidden" name="uscf_id" value="{{ uscf_id }}">
+      <input type="hidden" name="fide_id" value="{{ fide_id }}">
+      <input type="file" name="pgn_file" accept=".pgn,text/plain" class="form-control form-control-sm" required>
+      <button class="btn btn-outline-primary btn-sm text-nowrap">Upload</button>
+    </form>
+    <div class="text-muted mt-1">Games where this player's name appears are attached as "probable" until a coach or admin confirms them.</div>
+  </details>
+</div>

@@ -76,6 +76,21 @@ function runPlayerResearch(uscfId, fideId, name) {
   });
 }
 
+function findPlayerGames(uscfId, fideId, name) {
+  var li = document.getElementById("research-lichess-" + uscfId);
+  var cc = document.getElementById("research-chesscom-" + uscfId);
+  htmx.ajax("POST", "/api/player-games/find", {
+    target: "#player-games-" + uscfId,
+    swap: "outerHTML",
+    indicator: "#games-spin-" + uscfId,
+    values: {
+      name: name, uscf_id: uscfId, fide_id: fideId || "",
+      lichess_username: li ? li.value.trim() : "",
+      chesscom_username: cc ? cc.value.trim() : ""
+    }
+  });
+}
+
 async function loadRatingImpact(btn) {
   var card = btn.closest("[data-opp-name]");
 

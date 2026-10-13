@@ -69,6 +69,9 @@ from database import (
     create_course, set_course_active, get_course, list_courses, list_coach_courses,
     create_enrollment, get_enrollment, get_user_enrollment, mark_enrollment_paid, list_user_enrollments,
     search_users,
+    ensure_pgn_source, get_pgn_game_ids_by_hashes, find_pgn_games_by_surname, find_pgn_games_by_fide_id,
+    link_player_games, get_player_game_link, set_player_game_link_status, list_player_games,
+    count_player_games, download_player_games_pgn,
 )
 from trf_builder import build_trf
 from auth import get_current_user, require_login, require_td, require_admin, require_coach
@@ -2397,11 +2400,17 @@ async def player_research(
                 None, get_confirmed_online_id, uscf_id, "chesscom")
             chesscom_username = confirmed or ""
 
-    if not lichess_username and not chesscom_username and not fide_id:
+    # Games already found and linked to this player by "Find all games".
+    linked = await asyncio.get_event_loop().run_in_executor(
+        None, list_player_games, _player_key(uscf_id, fide_id, display_name))
+    linked_games = [{"color": g["color"], "result": g["result"], "eco": g["eco"],
+                     "opening": g["opening"], "date": g["date"]} for g in linked]
+
+    if not lichess_username and not chesscom_username and not fide_id and not linked_games:
         return HTMLResponse(
             '<div class="alert alert-secondary small mb-0">'
             'No confirmed Lichess/Chess.com username yet for this player. '
-            'Report one below, or enter a username above and click Research.</div>'
+            'Report one below, enter a username above and click Research, or click "Find all games".</div>'
         )
 
     lichess_games, chesscom_games, db_games = await asyncio.gather(
@@ -2410,7 +2419,7 @@ async def player_research(
         asyncio.get_event_loop().run_in_executor(None, get_pgn_games_by_fide_id, fide_id) if fide_id else _immediate([]),
     )
 
-    report = _aggregate_player_research(display_name, lichess_games + chesscom_games + db_games)
+    report = _aggregate_player_research(display_name, lichess_games + chesscom_games + db_games + linked_games)
 
     return templates.TemplateResponse(request=request, name="fragments/player_research.html", context={
         "display_name": display_name,
@@ -2418,6 +2427,7 @@ async def player_research(
         "used_lichess": bool(lichess_username),
         "used_chesscom": bool(chesscom_username),
         "used_db": bool(fide_id and db_games),
+        "used_archive": len(linked_games),
         "lichess_username": lichess_username,
         "chesscom_username": chesscom_username,
     })
@@ -2425,6 +2435,371 @@ async def player_research(
 
 async def _immediate(value):
     return value
+
+
+# ---------------------------------------------------------------------------
+# Find all games for a player: local archive, Lichess/Chess.com, broadcast
+# search, uploads -- deduped into pgn_games and linked per player.
+# ---------------------------------------------------------------------------
+
+_NAME_TITLES = re.compile(r"\b(GM|IM|FM|WGM|WIM|WFM|CM|WCM|NM|Dr|Mr|Mrs|Ms)\.?\b", re.I)
+
+
+def _player_key(uscf_id: str, fide_id: str, name: str) -> str:
+    if (uscf_id or "").strip():
+        return f"uscf:{uscf_id.strip()}"
+    if (fide_id or "").strip():
+        return f"fide:{fide_id.strip()}"
+    return "name:" + re.sub(r"[^a-z]", "", (name or "").lower())
+
+
+def _name_parts(name: str) -> tuple:
+    """(surname, first names) lowercased, from 'Last, First' or 'First Last'."""
+    n = _NAME_TITLES.sub(" ", name or "")
+    n = re.sub(r"[^\w,\s'-]", " ", n).strip()
+    if "," in n:
+        last, first = (p.strip() for p in n.split(",", 1))
+    else:
+        parts = n.split()
+        if not parts:
+            return "", ""
+        last, first = parts[-1], " ".join(parts[:-1])
+    return last.lower(), first.lower()
+
+
+def _name_matches(player_name: str, other: str) -> bool:
+    pl, pf = _name_parts(player_name)
+    ol, of = _name_parts(other)
+    if not pl or pl != ol:
+        return False
+    if not pf or not of:
+        return True
+    a, b = pf.split()[0], of.split()[0]
+    return a == b or a.startswith(b) or b.startswith(a)
+
+
+def _matcher_by_name(player_name: str):
+    def match(white: str, black: str):
+        if _name_matches(player_name, white):
+            return "white"
+        if _name_matches(player_name, black):
+            return "black"
+        return None
+    return match
+
+
+def _matcher_by_username(username: str):
+    u = username.strip().lower()
+
+    def match(white: str, black: str):
+        if white.strip().lower() == u:
+            return "white"
+        if black.strip().lower() == u:
+            return "black"
+        return None
+    return match
+
+
+def _store_pgn_text(raw: str, source_id: int) -> list:
+    """Insert every game in `raw` (duplicates ignored); returns [(game_id, white, black)]."""
+    dicts = [d for d in (ph.pgn_to_game_dict(p, source_id) for p in ph.split_pgn(raw or "")) if d]
+    if not dicts:
+        return []
+    insert_pgn_games(dicts)
+    ids = get_pgn_game_ids_by_hashes([d["game_hash"] for d in dicts])
+    return [(ids[d["game_hash"]], d["white"], d["black"]) for d in dicts if d["game_hash"] in ids]
+
+
+def _store_and_link(raw: str, source_id: int, player_key: str, matcher, status: str, reason: str,
+                    created_by: Optional[int]) -> dict:
+    stored = _store_pgn_text(raw, source_id)
+    links = []
+    for gid, white, black in stored:
+        color = matcher(white, black)
+        if color:
+            links.append((gid, color, status, reason))
+    new = link_player_games(player_key, links, created_by)
+    update_pgn_source_fetched(source_id, len(stored))
+    return {"stored": len(stored), "matched": len(links), "new": new}
+
+
+def _guess_usernames(name: str) -> list:
+    last, first = _name_parts(name)
+    if not last or not first:
+        return []
+    f = re.sub(r"[^a-z0-9]", "", first.split()[0])
+    l = re.sub(r"[^a-z0-9]", "", last)
+    if not f or not l:
+        return []
+    cands = [f + l, f + "_" + l, f + "." + l, l + f, f[0] + l, f + l[0], l + "_" + f, f + "-" + l]
+    seen, out = set(), []
+    for c in cands:
+        if len(c) >= 3 and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+async def _suggest_online_ids(name: str) -> dict:
+    """Guess Lichess/Chess.com usernames from the name; keep only accounts whose
+    public profile name matches, so the user has something concrete to confirm."""
+    cands = _guess_usernames(name)
+    if not cands:
+        return {"lichess": [], "chesscom": []}
+    lichess_users, chesscom_profiles = await asyncio.gather(
+        ph.lichess_users_by_ids(cands),
+        asyncio.gather(*(ph.chesscom_profile(c) for c in cands)),
+    )
+    lichess = []
+    for u in lichess_users or []:
+        prof = u.get("profile") or {}
+        real = " ".join(x for x in (prof.get("firstName"), prof.get("lastName")) if x) or prof.get("realName", "")
+        if real and _name_matches(name, real):
+            lichess.append(u.get("username") or u.get("id"))
+    chesscom = [p.get("username") for p in chesscom_profiles if p.get("name") and _name_matches(name, p["name"])]
+    return {"lichess": lichess, "chesscom": [c for c in chesscom if c]}
+
+
+async def _import_broadcasts_by_name(name: str, max_tours: int = 4, max_rounds: int = 12) -> dict:
+    last, _ = _name_parts(name)
+    if not last:
+        return {"tours": 0, "rounds": 0, "stored": 0}
+    run = asyncio.get_event_loop().run_in_executor
+    tours = await ph.lichess_search_broadcasts(name if "," not in name else last)
+    tours = [t for t in tours if last in ((t.get("info") or {}).get("players") or "").lower()
+             or last in (t.get("name") or "").lower()][:max_tours]
+    rounds_done = stored = 0
+    for tour in tours:
+        rounds = (await ph.lichess_broadcast_all_rounds(tour.get("id", ""))) or []
+        for idx, rnd in enumerate(rounds[:max_rounds], start=1):
+            rid = rnd.get("id", "")
+            if not rid or await run(None, lichess_round_already_known, rid):
+                continue
+            try:
+                raw = await ph.lichess_round_pgn(rid, rnd.get("url", ""))
+            except Exception as e:
+                logging.warning("broadcast search round %s: %s", rid, e)
+                continue
+            if not raw:
+                continue
+            sid = await run(None, upsert_pgn_source, "lichess", rnd.get("url", "") or f"https://lichess.org/broadcast/-/-/{rid}",
+                            tour.get("name", ""), idx, rnd.get("name", ""), tour.get("id", ""), rid, False, None, True)
+            games = await run(None, _store_pgn_text, raw, sid)
+            await run(None, update_pgn_source_fetched, sid, len(games))
+            stored += len(games)
+            rounds_done += 1
+    return {"tours": len(tours), "rounds": rounds_done, "stored": stored}
+
+
+async def _find_player_games(player_key: str, name: str, fide_id: str, lichess_username: str,
+                             chesscom_username: str, user_id: int) -> dict:
+    run = asyncio.get_event_loop().run_in_executor
+    sources = []
+
+    lichess_raw, chesscom_raw, broadcast, suggestions = await asyncio.gather(
+        ph.lichess_user_games_pgn(lichess_username) if lichess_username else _immediate(""),
+        ph.chesscom_user_games_pgn(chesscom_username) if chesscom_username else _immediate(""),
+        _import_broadcasts_by_name(name),
+        _suggest_online_ids(name) if not (lichess_username and chesscom_username) else _immediate({"lichess": [], "chesscom": []}),
+        return_exceptions=True,
+    )
+    if isinstance(lichess_raw, Exception):
+        logging.warning("find games lichess: %s", lichess_raw); lichess_raw = ""
+    if isinstance(chesscom_raw, Exception):
+        logging.warning("find games chesscom: %s", chesscom_raw); chesscom_raw = ""
+    if isinstance(broadcast, Exception):
+        logging.warning("find games broadcasts: %s", broadcast); broadcast = {"tours": 0, "rounds": 0, "stored": 0}
+    if isinstance(suggestions, Exception):
+        logging.warning("find games suggestions: %s", suggestions); suggestions = {"lichess": [], "chesscom": []}
+
+    if lichess_username:
+        sid = await run(None, ensure_pgn_source, "lichess_user", f"https://lichess.org/@/{lichess_username}",
+                        f"Lichess games of {lichess_username}")
+        r = await run(None, _store_and_link, lichess_raw, sid, player_key, _matcher_by_username(lichess_username),
+                      "confirmed", f"lichess:{lichess_username}", user_id)
+        sources.append({"name": f"Lichess ({lichess_username})", "found": r["matched"], "new": r["new"]})
+    if chesscom_username:
+        sid = await run(None, ensure_pgn_source, "chesscom_user", f"https://www.chess.com/member/{chesscom_username}",
+                        f"Chess.com games of {chesscom_username}")
+        r = await run(None, _store_and_link, chesscom_raw, sid, player_key, _matcher_by_username(chesscom_username),
+                      "confirmed", f"chesscom:{chesscom_username}", user_id)
+        sources.append({"name": f"Chess.com ({chesscom_username})", "found": r["matched"], "new": r["new"]})
+    sources.append({"name": "Lichess broadcasts", "found": broadcast["stored"],
+                    "new": None, "detail": f"{broadcast['tours']} event(s), {broadcast['rounds']} new round(s) imported"})
+
+    # Name pass over everything now in the archive (TWIC, broadcasts, uploads, ...)
+    last, _ = _name_parts(name)
+    matcher = _matcher_by_name(name)
+    archive_links = []
+    if last:
+        for row in await run(None, find_pgn_games_by_surname, last):
+            color = matcher(row["white"], row["black"])
+            if color:
+                archive_links.append((row["id"], color, "probable", "name"))
+    if fide_id:
+        archive_links += [(gid, color, "confirmed", "fide_id") for gid, color in
+                          await run(None, find_pgn_games_by_fide_id, fide_id)]
+    new = await run(None, link_player_games, player_key, archive_links, user_id)
+    sources.insert(0, {"name": "Games archive", "found": len(archive_links), "new": new})
+
+    return {"sources": sources, "suggestions": suggestions}
+
+
+def _can_review_games(user: dict) -> bool:
+    return user.get("role") in ("coach", "admin")
+
+
+def _render_player_games(request: Request, name: str, uscf_id: str, fide_id: str, user: dict, summary=None):
+    key = _player_key(uscf_id, fide_id, name)
+    return templates.TemplateResponse(request=request, name="fragments/player_games.html", context={
+        "name": name, "uscf_id": uscf_id, "fide_id": fide_id, "player_key": key,
+        "games": list_player_games(key, include_rejected=True),
+        "counts": count_player_games(key),
+        "summary": summary,
+        "can_review": _can_review_games(user),
+    })
+
+
+async def _resolve_online_usernames(uscf_id: str, lichess_username: str, chesscom_username: str) -> tuple:
+    run = asyncio.get_event_loop().run_in_executor
+    if uscf_id and not lichess_username:
+        lichess_username = (await run(None, get_confirmed_online_id, uscf_id, "lichess")) or ""
+    if uscf_id and not chesscom_username:
+        chesscom_username = (await run(None, get_confirmed_online_id, uscf_id, "chesscom")) or ""
+    return lichess_username.strip(), chesscom_username.strip()
+
+
+@app.get("/api/player-games", response_class=HTMLResponse)
+def player_games_list(request: Request, name: str = "", uscf_id: str = "", fide_id: str = "",
+                      user: dict = Depends(require_login)):
+    return _render_player_games(request, name.strip(), uscf_id.strip(), fide_id.strip(), user)
+
+
+@app.post("/api/player-games/find", response_class=HTMLResponse)
+async def player_games_find(request: Request, name: str = Form(""), uscf_id: str = Form(""), fide_id: str = Form(""),
+                            lichess_username: str = Form(""), chesscom_username: str = Form(""),
+                            user: dict = Depends(require_login)):
+    name, uscf_id, fide_id = name.strip(), uscf_id.strip(), fide_id.strip()
+    if not name and not uscf_id:
+        raise HTTPException(status_code=400, detail="name or uscf_id required")
+    lichess_username, chesscom_username = await _resolve_online_usernames(uscf_id, lichess_username, chesscom_username)
+    key = _player_key(uscf_id, fide_id, name)
+    summary = await _find_player_games(key, name, fide_id, lichess_username, chesscom_username, user["id"])
+    return _render_player_games(request, name, uscf_id, fide_id, user, summary)
+
+
+@app.post("/api/player-games/{link_id}/status", response_class=HTMLResponse)
+def player_games_set_status(request: Request, link_id: int, status: str = Form(...), name: str = Form(""),
+                            uscf_id: str = Form(""), fide_id: str = Form(""), user: dict = Depends(require_login)):
+    if not _can_review_games(user):
+        raise HTTPException(status_code=403, detail="Coach or admin role required")
+    link = get_player_game_link(link_id)
+    if not link or link["player_key"] != _player_key(uscf_id.strip(), fide_id.strip(), name.strip()):
+        raise HTTPException(404)
+    set_player_game_link_status(link_id, status)
+    return _render_player_games(request, name.strip(), uscf_id.strip(), fide_id.strip(), user)
+
+
+@app.post("/api/player-games/upload", response_class=HTMLResponse)
+async def player_games_upload(request: Request, pgn_file: UploadFile = File(...), name: str = Form(""),
+                              uscf_id: str = Form(""), fide_id: str = Form(""), user: dict = Depends(require_login)):
+    name, uscf_id, fide_id = name.strip(), uscf_id.strip(), fide_id.strip()
+    data = await pgn_file.read()
+    if not data or len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="PGN must be between 1 byte and 5 MB")
+    raw = data.decode("utf-8", errors="replace")
+    key = _player_key(uscf_id, fide_id, name)
+    run = asyncio.get_event_loop().run_in_executor
+    sid = await run(None, ensure_pgn_source, "upload", f"upload:{user['id']}:{uuid.uuid4().hex}",
+                    f"Uploaded by {user['username']} for {name or uscf_id}")
+    result = await run(None, _store_and_link, raw, sid, key, _matcher_by_name(name), "probable", "upload", user["id"])
+    summary = {"sources": [{"name": "Your upload", "found": result["matched"], "new": result["new"],
+                            "detail": f"{result['stored']} game(s) in file"}],
+               "suggestions": {"lichess": [], "chesscom": []}}
+    return _render_player_games(request, name, uscf_id, fide_id, user, summary)
+
+
+@app.get("/api/player-games/download")
+def player_games_download(name: str = "", uscf_id: str = "", fide_id: str = "", user: dict = Depends(require_login)):
+    key = _player_key(uscf_id.strip(), fide_id.strip(), name.strip())
+    pgn = download_player_games_pgn(key)
+    if not pgn:
+        raise HTTPException(404, "No games found for this player yet")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name.strip() or uscf_id.strip() or "player").strip("_") or "player"
+    return Response(content=pgn, media_type="application/x-chess-pgn",
+                    headers={"Content-Disposition": f'attachment; filename="{slug}_games.pgn"'})
+
+
+@app.get("/api/player-games/game/{gid}")
+def player_games_game_raw(gid: int, user: dict = Depends(require_login)):
+    raw = get_pgn_game_raw(gid)
+    if raw is None:
+        raise HTTPException(404, "Game not found")
+    return Response(content=raw, media_type="text/plain")
+
+
+# ---------------------------------------------------------------------------
+# TWIC (The Week in Chess) weekly archive import -- feeds the games archive
+# ---------------------------------------------------------------------------
+
+_twic_state = {"running": False, "message": ""}
+_TWIC_MAX_ISSUES_PER_RUN = 60
+
+
+async def _twic_import_issue(n: int) -> int:
+    raw = await ph.twic_issue_pgn(n)
+    if not raw:
+        return 0
+    run = asyncio.get_event_loop().run_in_executor
+    sid = await run(None, ensure_pgn_source, "twic", ph.TWIC_ZIP_URL.format(n=n), f"TWIC {n}")
+    games = await run(None, _store_pgn_text, raw, sid)
+    await run(None, update_pgn_source_fetched, sid, len(games))
+    last = int(get_setting("twic_last_issue", "0") or 0)
+    if n > last:
+        set_setting("twic_last_issue", str(n))
+    return len(games)
+
+
+async def _twic_import_range(start: int, end: int):
+    _twic_state["running"] = True
+    total = 0
+    try:
+        for n in range(start, end + 1):
+            _twic_state["message"] = f"Importing TWIC {n} ({n - start + 1}/{end - start + 1})…"
+            try:
+                total += await _twic_import_issue(n)
+            except Exception as e:
+                logging.warning("TWIC %s import: %s", n, e)
+        _twic_state["message"] = f"Done: TWIC {start}–{end}, {total} games stored."
+    finally:
+        _twic_state["running"] = False
+
+
+async def _twic_auto_check():
+    if get_setting("twic_auto", "0") != "1" or _twic_state["running"]:
+        return
+    latest = await ph.twic_latest_issue()
+    last = int(get_setting("twic_last_issue", "0") or 0)
+    if latest and latest > last:
+        await _twic_import_range(max(last + 1, latest - 3), latest)
+
+
+@app.post("/admin/twic/import")
+async def admin_twic_import(from_issue: int = Form(...), to_issue: int = Form(0), _user: dict = Depends(require_admin)):
+    if _twic_state["running"]:
+        return RedirectResponse("/pgn-database?import_err=TWIC+import+already+running", status_code=303)
+    if to_issue <= 0:
+        to_issue = await ph.twic_latest_issue() or from_issue
+    from_issue = max(1, from_issue)
+    to_issue = max(from_issue, min(to_issue, from_issue + _TWIC_MAX_ISSUES_PER_RUN - 1))
+    asyncio.create_task(_twic_import_range(from_issue, to_issue))
+    return RedirectResponse(f"/pgn-database?import_msg=TWIC+import+{from_issue}-{to_issue}+started", status_code=303)
+
+
+@app.post("/admin/twic/auto")
+def admin_twic_auto(enabled: str = Form("0"), _user: dict = Depends(require_admin)):
+    set_setting("twic_auto", "1" if enabled == "1" else "0")
+    return RedirectResponse("/pgn-database", status_code=303)
 
 
 @app.get("/api/player-online-ids", response_class=HTMLResponse)
@@ -4051,6 +4426,11 @@ def pgn_database_page(
         "event":      event,
         "research_only": research_only,
         "events":     list_pgn_events(),
+        "import_msg": request.query_params.get("import_msg", ""),
+        "import_err": request.query_params.get("import_err", ""),
+        "twic": {"last_issue": get_setting("twic_last_issue", "0"), "auto": get_setting("twic_auto", "0") == "1",
+                 "running": _twic_state["running"], "message": _twic_state["message"]},
+        "is_admin": user.get("role") == "admin",
     })
 
 
@@ -4072,6 +4452,25 @@ def pgn_add_organizer(
 def pgn_delete_organizer(oid: int, user: dict = Depends(require_login)):
     delete_pgn_organizer(oid)
     return RedirectResponse("/pgn-database", status_code=303)
+
+
+@app.post("/pgn-database/import-file")
+async def pgn_import_file(pgn_file: UploadFile = File(...), label: str = Form(""), user: dict = Depends(require_admin)):
+    """Bulk PGN upload (e.g. a subset exported from ChessBase) into the games archive."""
+    data = await pgn_file.read()
+    if not data or len(data) > 50 * 1024 * 1024:
+        return RedirectResponse("/pgn-database?import_err=PGN+file+must+be+between+1+byte+and+50+MB", status_code=303)
+    try:
+        raw = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raw = data.decode("latin-1")
+    name = label.strip() or (pgn_file.filename or "PGN upload")
+    run = asyncio.get_event_loop().run_in_executor
+    sid = await run(None, ensure_pgn_source, "upload", f"upload:{user['id']}:{uuid.uuid4().hex}", name)
+    games = await run(None, _store_pgn_text, raw, sid)
+    await run(None, update_pgn_source_fetched, sid, len(games))
+    from urllib.parse import quote
+    return RedirectResponse(f"/pgn-database?import_msg={quote(f'{len(games)} game(s) imported from {name}')}", status_code=303)
 
 
 @app.post("/pgn-database/import")
@@ -4410,6 +4809,8 @@ async def _harvest_loop():
             await _refresh_live_sources()
             if counter % 10 == 0:
                 await _discover_new_broadcasts()
+            if counter % 1440 == 0:
+                await _twic_auto_check()
         except Exception as e:
             logging.warning("harvest loop: %s", e)
 

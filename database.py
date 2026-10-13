@@ -1394,6 +1394,18 @@ def init_pgn_db():
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_white ON pgn_games(white COLLATE NOCASE)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_black ON pgn_games(black COLLATE NOCASE)')
+    c.execute('''CREATE TABLE IF NOT EXISTS player_game_links (
+        id INTEGER PRIMARY KEY,
+        player_key TEXT NOT NULL,
+        game_id INTEGER NOT NULL REFERENCES pgn_games(id),
+        color TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'probable',
+        reason TEXT,
+        created_by INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(player_key, game_id)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_player_game_links_key ON player_game_links(player_key)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_pgn_games_event ON pgn_games(event)')
     conn.commit()
     conn.close()
@@ -2776,3 +2788,136 @@ def list_user_enrollments(user_id: int) -> List[Dict]:
     conn.close()
     cols = ["course_id", "title", "coach", "status", "amount_cents", "created_at"]
     return [dict(zip(cols, r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Player game finder: sources, hash lookups, player<->game links
+# ---------------------------------------------------------------------------
+
+_PLAYER_GAME_STATUSES = ("confirmed", "probable", "rejected")
+
+def ensure_pgn_source(source_type: str, source_url: str, tournament_name: str) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT id FROM pgn_sources WHERE source_type=? AND source_url=?",
+                       (source_type, source_url)).fetchone()
+    if row:
+        conn.close()
+        return row[0]
+    cur = conn.execute(
+        "INSERT INTO pgn_sources (source_type, source_url, tournament_name, round_num, is_live, auto_refresh, auto_discovered) "
+        "VALUES (?, ?, ?, 0, 0, 0, 1)", (source_type, source_url, tournament_name)
+    )
+    sid = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+def get_pgn_game_ids_by_hashes(hashes: List[str]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    if not hashes:
+        return out
+    conn = sqlite3.connect(DB_FILE)
+    for i in range(0, len(hashes), 500):
+        chunk = hashes[i:i + 500]
+        rows = conn.execute(
+            f"SELECT game_hash, id FROM pgn_games WHERE game_hash IN ({','.join('?' * len(chunk))})", chunk
+        ).fetchall()
+        out.update(dict(rows))
+    conn.close()
+    return out
+
+def find_pgn_games_by_surname(surname: str, limit: int = 3000) -> List[Dict]:
+    like = f"%{surname.strip()}%"
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT id, white, black FROM pgn_games WHERE white LIKE ? OR black LIKE ? ORDER BY id DESC LIMIT ?",
+        (like, like, limit)
+    ).fetchall()
+    conn.close()
+    return [dict(zip(["id", "white", "black"], r)) for r in rows]
+
+def find_pgn_games_by_fide_id(fide_id: str) -> List[tuple]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT g.id, CASE WHEN g.research_white_id = pr.id THEN 'white' ELSE 'black' END
+           FROM pgn_games g JOIN player_research pr ON pr.id IN (g.research_white_id, g.research_black_id)
+           WHERE pr.fide_id = ?""", (fide_id.strip(),)
+    ).fetchall()
+    conn.close()
+    return [(r[0], r[1]) for r in rows]
+
+def link_player_games(player_key: str, links: list, created_by: Optional[int] = None) -> int:
+    """links: iterable of (game_id, color, status, reason). Existing links are kept,
+    except a probable link is upgraded when a confirmed one arrives. Returns new links."""
+    conn = sqlite3.connect(DB_FILE)
+    inserted = 0
+    for game_id, color, status, reason in links:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO player_game_links (player_key, game_id, color, status, reason, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (player_key, game_id, color, status, reason, created_by)
+        )
+        if cur.rowcount:
+            inserted += 1
+        elif status == "confirmed":
+            conn.execute(
+                "UPDATE player_game_links SET status='confirmed', reason=? "
+                "WHERE player_key=? AND game_id=? AND status='probable'", (reason, player_key, game_id)
+            )
+    conn.commit()
+    conn.close()
+    return inserted
+
+def get_player_game_link(link_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT id, player_key, game_id, color, status, reason FROM player_game_links WHERE id=?",
+                       (link_id,)).fetchone()
+    conn.close()
+    return dict(zip(["id", "player_key", "game_id", "color", "status", "reason"], row)) if row else None
+
+def set_player_game_link_status(link_id: int, status: str) -> bool:
+    if status not in _PLAYER_GAME_STATUSES:
+        return False
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("UPDATE player_game_links SET status=? WHERE id=?", (status, link_id))
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+_PLAYER_GAME_COLS = ["link_id", "game_id", "color", "status", "reason", "event", "site", "date", "round",
+                     "white", "black", "result", "white_elo", "black_elo", "eco", "opening",
+                     "source_type", "source_name"]
+
+def list_player_games(player_key: str, include_rejected: bool = False) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    where = "" if include_rejected else "AND l.status != 'rejected'"
+    rows = conn.execute(
+        f"""SELECT l.id, l.game_id, l.color, l.status, l.reason, g.event, g.site, g.date, g.round,
+                   g.white, g.black, g.result, g.white_elo, g.black_elo, g.eco, g.opening,
+                   s.source_type, s.tournament_name
+            FROM player_game_links l
+            JOIN pgn_games g ON g.id = l.game_id
+            LEFT JOIN pgn_sources s ON s.id = g.source_id
+            WHERE l.player_key=? {where}
+            ORDER BY g.date DESC, g.id DESC""", (player_key,)
+    ).fetchall()
+    conn.close()
+    return [dict(zip(_PLAYER_GAME_COLS, r)) for r in rows]
+
+def count_player_games(player_key: str) -> Dict[str, int]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute("SELECT status, COUNT(*) FROM player_game_links WHERE player_key=? GROUP BY status",
+                        (player_key,)).fetchall()
+    conn.close()
+    counts = {s: 0 for s in _PLAYER_GAME_STATUSES}
+    counts.update(dict(rows))
+    return counts
+
+def download_player_games_pgn(player_key: str) -> str:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        """SELECT g.raw_pgn FROM player_game_links l JOIN pgn_games g ON g.id = l.game_id
+           WHERE l.player_key=? AND l.status != 'rejected' ORDER BY g.date DESC, g.id DESC""", (player_key,)
+    ).fetchall()
+    conn.close()
+    return "\n\n".join(r[0] for r in rows)

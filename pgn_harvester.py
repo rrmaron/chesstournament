@@ -235,6 +235,103 @@ async def lichess_recent_broadcasts(nb: int = 100) -> list[dict]:
     return broadcasts
 
 # ---------------------------------------------------------------------------
+# Player game finding: TWIC archive, Lichess broadcast search, online profiles
+# ---------------------------------------------------------------------------
+
+TWIC_ZIP_URL = "https://theweekinchess.com/zips/twic{n}g.zip"
+
+async def twic_latest_issue() -> int:
+    async with httpx.AsyncClient(timeout=20, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        try:
+            r = await client.get("https://theweekinchess.com/twic")
+        except Exception as e:
+            log.warning("twic_latest_issue: %s", e)
+            return 0
+    nums = [int(n) for n in re.findall(r'zips/twic(\d+)g\.zip', r.text)] if r.status_code == 200 else []
+    return max(nums) if nums else 0
+
+async def twic_issue_pgn(n: int) -> str:
+    """Download one weekly TWIC games zip and return its PGN text ('' if unavailable)."""
+    import io
+    import zipfile
+    async with httpx.AsyncClient(timeout=120, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        r = await client.get(TWIC_ZIP_URL.format(n=n))
+    if r.status_code != 200:
+        return ''
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        names = [m for m in z.namelist() if m.lower().endswith('.pgn')]
+        if not names:
+            return ''
+        data = z.read(names[0])
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        return data.decode('latin-1')
+
+async def lichess_search_broadcasts(q: str, limit: int = 10) -> list[dict]:
+    """Search Lichess broadcasts by free text; returns tour dicts (id, name, info.players...)."""
+    async with httpx.AsyncClient(timeout=20, headers={'User-Agent': UA}) as client:
+        try:
+            r = await client.get("https://lichess.org/api/broadcast/search", params={'q': q},
+                                 headers={'Accept': 'application/json'})
+        except Exception as e:
+            log.warning("lichess_search_broadcasts(%s): %s", q, e)
+            return []
+    if r.status_code != 200:
+        return []
+    results = r.json().get('currentPageResults', [])
+    return [x['tour'] for x in results[:limit] if x.get('tour')]
+
+async def lichess_users_by_ids(ids: list[str]) -> list[dict]:
+    """Public profiles for up to 300 Lichess usernames (unknown names are simply absent)."""
+    if not ids:
+        return []
+    async with httpx.AsyncClient(timeout=20, headers={'User-Agent': UA}) as client:
+        try:
+            r = await client.post("https://lichess.org/api/users", content=",".join(ids[:300]),
+                                  headers={'Content-Type': 'text/plain', 'Accept': 'application/json'})
+        except Exception as e:
+            log.warning("lichess_users_by_ids: %s", e)
+            return []
+    return r.json() if r.status_code == 200 else []
+
+async def chesscom_profile(username: str) -> dict:
+    async with httpx.AsyncClient(timeout=15, headers={'User-Agent': UA}) as client:
+        try:
+            r = await client.get(f"https://api.chess.com/pub/player/{username}")
+        except Exception:
+            return {}
+    return r.json() if r.status_code == 200 else {}
+
+async def lichess_user_games_pgn(username: str, max_games: int = 300) -> str:
+    async with httpx.AsyncClient(timeout=60, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        try:
+            r = await client.get(f"https://lichess.org/api/games/user/{username}",
+                                 params={'max': max_games, 'opening': 'true'},
+                                 headers={'Accept': 'application/x-chess-pgn'})
+        except Exception as e:
+            log.warning("lichess_user_games_pgn(%s): %s", username, e)
+            return ''
+    return r.text if r.status_code == 200 and '[Event' in r.text else ''
+
+async def chesscom_user_games_pgn(username: str, months: int = 6) -> str:
+    async with httpx.AsyncClient(timeout=60, headers={'User-Agent': UA}, follow_redirects=True) as client:
+        try:
+            r = await client.get(f"https://api.chess.com/pub/player/{username}/games/archives")
+            if r.status_code != 200:
+                return ''
+            archives = r.json().get('archives', [])[-months:]
+            responses = await asyncio.gather(*(client.get(u) for u in archives))
+        except Exception as e:
+            log.warning("chesscom_user_games_pgn(%s): %s", username, e)
+            return ''
+    pgns = []
+    for resp in responses:
+        if resp.status_code == 200:
+            pgns.extend(g['pgn'] for g in resp.json().get('games', []) if g.get('pgn'))
+    return '\n\n'.join(pgns)
+
+# ---------------------------------------------------------------------------
 # Chess.com API
 # ---------------------------------------------------------------------------
 
