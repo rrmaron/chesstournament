@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}My Tournaments{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">My Tournaments</h2>
+  <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addTracked">Add a tournament manually</button>
+</div>
+
+{% if msg %}<div class="alert alert-success py-2">{{ msg }}</div>{% endif %}
+{% if err %}<div class="alert alert-danger py-2">{{ err }}</div>{% endif %}
+
+<div class="collapse mb-3" id="addTracked">
+  <div class="card card-body">
+    <form method="post" action="/my-tournaments/add" class="row g-2 align-items-end">
+      <div class="col-md-4"><label class="form-label small mb-1">Tournament name</label><input name="name" class="form-control form-control-sm" required></div>
+      <div class="col-md-2"><label class="form-label small mb-1">Start</label><input type="date" name="start_date" class="form-control form-control-sm"></div>
+      <div class="col-md-2"><label class="form-label small mb-1">End</label><input type="date" name="end_date" class="form-control form-control-sm"></div>
+      <div class="col-md-2"><label class="form-label small mb-1">Section</label><input name="section" class="form-control form-control-sm" placeholder="Open, U1800…"></div>
+      <div class="col-md-2"><button class="btn btn-primary btn-sm w-100">Track</button></div>
+      <div class="col-12"><label class="form-label small mb-1">Entry list link (optional)</label><input type="url" name="entry_list_url" class="form-control form-control-sm" placeholder="https://…/advance-entries"></div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="card h-100">
+      <div class="card-header fw-semibold">Email</div>
+      <div class="card-body">
+        {% if account %}
+          <p class="mb-1"><strong>{{ account.email_address }}</strong> <span class="badge bg-success">connected</span></p>
+          <p class="small text-muted mb-1">Server {{ account.imap_host }} · {{ account.messages_seen }} message(s) checked
+            {% if account.last_checked_at %}· last check {{ account.last_checked_at }} UTC{% endif %}</p>
+          {% if account.last_error %}<div class="alert alert-warning py-1 small mb-2">Last check failed: {{ account.last_error }}</div>{% endif %}
+          <p class="small text-muted">Checked automatically every 15 minutes. Registration confirmations become tracked tournaments; emailed PGNs (ChessNoteR and friends) attach to the matching tournament.</p>
+          <form method="post" action="/my-tournaments/email/check" class="d-inline"><button class="btn btn-sm btn-primary">Check now</button></form>
+          <form method="post" action="/my-tournaments/email/disconnect" class="d-inline ms-1"
+                onsubmit="return confirm('Disconnect this mailbox and delete its stored password?')"><button class="btn btn-sm btn-outline-danger">Disconnect</button></form>
+        {% else %}
+          <p class="small text-muted">Connect the mailbox where your tournament confirmations and ChessNoteR games arrive. Use an <strong>app password</strong>, not your normal password:
+            <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">Gmail</a> ·
+            <a href="https://login.yahoo.com/myaccount/security/app-password" target="_blank" rel="noopener">Yahoo</a> ·
+            <a href="https://appleid.apple.com/account/manage" target="_blank" rel="noopener">iCloud</a>.</p>
+          <form method="post" action="/my-tournaments/email/connect">
+            <div class="mb-2"><label class="form-label small mb-1">Email address</label><input type="email" name="email_address" class="form-control form-control-sm" required></div>
+            <div class="mb-2"><label class="form-label small mb-1">App password</label><input type="password" name="password" class="form-control form-control-sm" required autocomplete="off"></div>
+            <div class="mb-2"><label class="form-label small mb-1">IMAP server <span class="text-muted">(only if not Gmail / Yahoo / iCloud / AOL)</span></label><input name="imap_host" class="form-control form-control-sm" placeholder="imap.example.com"></div>
+            <button class="btn btn-sm btn-primary">Connect mailbox</button>
+          </form>
+          <p class="small text-muted mt-2 mb-0">Privacy: only the last 90 days are scanned, only chess-related messages are read by the AI, and message bodies are never stored. The password is encrypted at rest and deleted when you disconnect.</p>
+        {% endif %}
+        {% if not claude_ready %}<div class="alert alert-info py-1 small mt-2 mb-0">Registration detection needs the Claude API, which is not configured on this server. Emailed PGNs still attach, and tournaments can be added manually.</div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card h-100">
+      <div class="card-header fw-semibold">Tracked tournaments</div>
+      <div class="card-body">
+        {% if not tracked %}
+          <p class="text-muted small mb-0">Nothing tracked yet. Connect your email or add a tournament manually.</p>
+        {% else %}
+          <div class="list-group list-group-flush">
+            {% for t in tracked %}
+            <a class="list-group-item list-group-item-action px-0" href="/my-tournaments/{{ t.id }}">
+              <div class="d-flex justify-content-between">
+                <div>
+                  <div class="fw-semibold">{{ t.name }}</div>
+                  <div class="small text-muted">
+                    {% if t.start_date %}{{ t.start_date }}{% if t.end_date and t.end_date != t.start_date %} – {{ t.end_date }}{% endif %}{% else %}dates unknown{% endif %}
+                    {% if t.section %}· {{ t.section }}{% endif %}{% if t.venue %}· {{ t.venue }}{% endif %}
+                  </div>
+                </div>
+                <div class="text-end small">
+                  {% if t.my_start_rank %}<span class="badge bg-primary">seed #{{ t.my_start_rank }}</span>
+                  {% elif t.tournament_source %}<span class="badge bg-secondary">entries imported</span>
+                  {% else %}<span class="badge bg-light text-dark border">no entry list yet</span>{% endif %}
+                </div>
+              </div>
+            </a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if unmatched %}
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Games waiting for a tournament ({{ unmatched|length }})</div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0 align-middle">
+      <thead><tr><th>Date</th><th>Event</th><th>Rd</th><th>White</th><th>Black</th><th>Result</th><th></th></tr></thead>
+      <tbody>
+      {% for g in unmatched %}
+      <tr>
+        <td class="small">{{ g.date }}</td><td class="small">{{ g.event }}</td><td class="small">{{ g.round }}</td>
+        <td class="small">{{ g.white }}</td><td class="small">{{ g.black }}</td><td class="small">{{ g.result }}</td>
+        <td class="text-end">
+          {% if tracked %}
+          <form method="post" class="d-flex gap-1 justify-content-end" onsubmit="this.action='/my-tournaments/'+this.tid.value+'/games/attach'">
+            <input type="hidden" name="pgn_game_id" value="{{ g.pgn_game_id }}">
+            <select name="tid" class="form-select form-select-sm w-auto">{% for t in tracked %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select>
+            <button class="btn btn-sm btn-outline-primary">Attach</button>
+          </form>
+          {% endif %}
+          <a class="small" href="/api/player-games/game/{{ g.pgn_game_id }}" target="_blank">PGN</a>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if messages %}
+<div class="card mt-3">
+  <div class="card-header fw-semibold">Recent mail activity</div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0">
+      <thead><tr><th>Received</th><th>From</th><th>Subject</th><th>Filed as</th><th>Note</th></tr></thead>
+      <tbody>
+      {% for m in messages %}
+      <tr>
+        <td class="small text-nowrap">{{ m.received_at[:16] }}</td>
+        <td class="small">{{ m.from_addr }}</td>
+        <td class="small">{{ m.subject }}</td>
+        <td><span class="badge {% if m.kind == 'registration' %}bg-success{% elif m.kind == 'pgn' %}bg-primary{% elif m.kind == 'chess' %}bg-secondary{% else %}bg-light text-dark border{% endif %}">{{ m.kind }}</span></td>
+        <td class="small">{% if m.tracked_id %}<a href="/my-tournaments/{{ m.tracked_id }}">{{ m.summary }}</a>{% else %}{{ m.summary }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

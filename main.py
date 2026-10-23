@@ -4861,6 +4861,8 @@ async def _harvest_loop():
                 await _discover_new_broadcasts()
             if counter % 1440 == 0:
                 await _twic_auto_check()
+            if counter % _EMAIL_POLL_EVERY_MIN == 0:
+                await _poll_all_email_accounts()
         except Exception as e:
             logging.warning("harvest loop: %s", e)
 
@@ -5534,3 +5536,483 @@ def course_enroll_success(request: Request, cid: int, session_id: Optional[str] 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+import datetime as _dt
+import urllib.parse as _urlparse
+import mail_reader as mr
+from database import (
+    upsert_email_account, get_email_account, list_email_accounts, delete_email_account,
+    update_email_account_state, record_email_message, update_email_message, list_email_messages,
+    create_tracked_tournament, get_tracked_tournament, list_tracked_tournaments, update_tracked_tournament,
+    add_tracked_game, list_tracked_games, remove_tracked_game, add_unmatched_game, list_unmatched_games,
+    remove_unmatched_game, get_pgn_game,
+)
+
+
+# ---------------------------------------------------------------------------
+# My Tournaments: a connected mailbox feeds tournament tracking
+#
+# Registration confirmations become tracked tournaments; the entry list is
+# imported into the research/simulate flow to predict pairings; PGNs arriving
+# by email (ChessNoteR etc.) or upload attach to the tournament's games.
+# ---------------------------------------------------------------------------
+_EMAIL_SCAN_DAYS = 90
+_EMAIL_FETCH_LIMIT = 40
+_EMAIL_POLL_EVERY_MIN = 15
+_PAGE_TEXT_LIMIT = 60_000
+
+_REGISTRATION_PROMPT = """You are reading one email received by a chess player. Decide whether it confirms that
+the recipient is registered / entered / paid for a specific chess tournament (an entry confirmation, receipt for
+an entry fee, "you are registered", "advance entry received", "see you at the board", etc.).
+
+NOT a registration: newsletters, marketing or "upcoming events" announcements, membership renewals, rating
+reports, invitations with no entry, pairings or results notices for an event, generic receipts.
+
+Return ONLY a JSON object, no prose:
+{"is_registration": true|false, "tournament_name": "", "start_date": "YYYY-MM-DD" or "", "end_date": "YYYY-MM-DD" or "",
+ "section": "", "venue": "", "organizer": "", "rounds": integer or null, "time_control": "", "info_url": "",
+ "entry_list_url": "", "player_name": ""}
+Use "" when unknown. entry_list_url is a link on the page to the list of entries / advance entries / registered
+players if one is given; info_url is the main tournament page."""
+
+_ENTRY_LIST_PROMPT = """This is the text of a chess tournament's entry list / advance entries / registered players page.
+Extract every player. Return ONLY a JSON object, no prose:
+{"tournament_name": "", "players": [{"name": "Last, First", "rating": integer or null, "section": "", "uscf_id": "",
+ "fide_id": "", "title": ""}]}
+Keep the players in the order they appear. If the page lists several sections, fill "section" for each player."""
+
+
+def _claude_json(prompt: str, text: str, max_tokens: int = 4000, model: str = "claude-sonnet-5-5") -> Optional[dict]:
+    """Ask Claude for a JSON object; None when nothing parseable comes back."""
+    client = _anthropic_client()
+    response = client.messages.create(
+        model=model, max_tokens=max_tokens,
+        messages=[{"role": "user", "content": f"{prompt}\n\n<document>\n{text}\n</document>"}],
+    )
+    logging.info("claude-json: %s", _claude_usage_cost(getattr(response, "model", model), getattr(response, "usage", None))["summary"])
+    out = "".join(block.text for block in response.content if block.type == "text")
+    match = re.search(r"\{.*\}", out, re.S)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except ValueError:
+        return None
+
+
+def _extract_registration(subject: str, sender: str, text: str) -> Optional[dict]:
+    """Tournament details when the email confirms a registration, else None."""
+    if not _claude_auth_mode():
+        return None
+    data = _claude_json(_REGISTRATION_PROMPT, f"From: {sender}\nSubject: {subject}\n\n{text}", max_tokens=1200)
+    if not data or not data.get("is_registration") or not (data.get("tournament_name") or "").strip():
+        return None
+    return data
+
+
+def _my_player_names(user: dict) -> list:
+    profile = get_user_profile(user["id"]) or {}
+    names = [profile.get("player_name") or "", user.get("username") or ""]
+    return [n for n in names if n.strip()]
+
+
+def _my_color_in_game(names: list, white: str, black: str) -> Optional[str]:
+    for n in names:
+        if _name_matches(n, white or ""):
+            return "white"
+        if _name_matches(n, black or ""):
+            return "black"
+    return None
+
+
+def _pgn_date(value: str) -> str:
+    """'2026.11.07' -> '2026-11-07'; '' when unknown/partial."""
+    m = re.match(r"(\d{4})[.\-/](\d{2})[.\-/](\d{2})", value or "")
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def _round_int(value) -> int:
+    m = re.search(r"\d+", str(value or ""))
+    return int(m.group(0)) if m else 0
+
+
+def _name_tokens(text: str) -> set:
+    stop = {"the", "of", "and", "chess", "tournament", "open", "section", "round", "at", "in"}
+    return {t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) > 2 and t not in stop}
+
+
+def _match_tracked_for_game(user_id: int, game: dict) -> Optional[int]:
+    """Which tracked tournament a game belongs to: by the game date inside the event
+    window (one day of slack), then by event-name overlap."""
+    tracked = list_tracked_tournaments(user_id)
+    if not tracked:
+        return None
+    played = _pgn_date(game.get("date"))
+    by_date = []
+    if played:
+        day = _dt.date.fromisoformat(played)
+        for t in tracked:
+            if not t["start_date"]:
+                continue
+            start = _dt.date.fromisoformat(t["start_date"]) - _dt.timedelta(days=1)
+            end = _dt.date.fromisoformat(t["end_date"] or t["start_date"]) + _dt.timedelta(days=1)
+            if start <= day <= end:
+                by_date.append(t)
+    if len(by_date) == 1:
+        return by_date[0]["id"]
+    ev = _name_tokens(game.get("event"))
+    scored = sorted(((len(ev & _name_tokens(t["name"])), t["id"]) for t in (by_date or tracked)), reverse=True)
+    if scored and scored[0][0] >= 2:
+        return scored[0][1]
+    return by_date[0]["id"] if by_date else None
+
+
+def _ingest_pgn_games(user: dict, raw: str, email_message_id: Optional[int] = None,
+                      force_tracked_id: Optional[int] = None, source: str = "email") -> dict:
+    """Store games in the archive and attach each to the user's matching tracked
+    tournament; the rest wait in the unmatched list."""
+    sid = ensure_pgn_source("upload", f"{source}:user:{user['id']}", f"{source.title()} games for {user['username']}")
+    stored = _store_pgn_text(raw, sid)
+    names = _my_player_names(user)
+    attached = unmatched = 0
+    for gid, white, black in stored:
+        g = get_pgn_game(gid) or {}
+        color = _my_color_in_game(names, white, black)
+        tid = force_tracked_id or _match_tracked_for_game(user["id"], g)
+        if tid and (color or force_tracked_id):
+            color = color or ""
+            opponent = black if color == "white" else white
+            opp_elo = g.get("black_elo") if color == "white" else g.get("white_elo")
+            add_tracked_game(tid, _round_int(g.get("round")), _pgn_date(g.get("date")), color, opponent, opp_elo,
+                             g.get("result") or "*", gid, source, email_message_id)
+            remove_unmatched_game(user["id"], gid)
+            attached += 1
+        else:
+            add_unmatched_game(user["id"], gid, email_message_id)
+            unmatched += 1
+    return {"stored": len(stored), "attached": attached, "unmatched": unmatched}
+
+
+def _tracked_from_registration(user_id: int, reg: dict, email_message_id: Optional[int]) -> tuple:
+    rounds = reg.get("rounds")
+    return create_tracked_tournament(
+        user_id, reg.get("tournament_name") or "", reg.get("start_date") or "", reg.get("end_date") or "",
+        reg.get("section") or "", reg.get("venue") or "", reg.get("organizer") or "",
+        int(rounds) if isinstance(rounds, int) else None, reg.get("time_control") or "",
+        reg.get("info_url") or "", reg.get("entry_list_url") or "", email_message_id)
+
+
+def _process_email_message(user: dict, account: dict, msg: dict) -> str:
+    """Record one message and act on it. Returns the kind it was filed as."""
+    mid = record_email_message(user["id"], account["id"], msg["uid"], msg.get("message_id", ""),
+                               msg.get("from_addr", ""), msg.get("subject", ""), msg.get("received_at", ""))
+    if mid is None:
+        return "duplicate"
+    if msg.get("pgns"):
+        res = _ingest_pgn_games(user, "\n\n".join(msg["pgns"]), email_message_id=mid)
+        update_email_message(mid, "pgn", f"{res['stored']} game(s): {res['attached']} attached, {res['unmatched']} unmatched")
+        return "pgn"
+    if not mr.looks_chess_related(msg):
+        return "other"
+    try:
+        reg = _extract_registration(msg.get("subject", ""), msg.get("from_addr", ""), msg.get("text", ""))
+    except Exception as e:
+        logging.warning("registration extraction failed for user %s: %s", user["id"], e)
+        reg = None
+    if reg:
+        tid, created = _tracked_from_registration(user["id"], reg, mid)
+        update_email_message(mid, "registration", reg["tournament_name"] + ("" if created else " (already tracked)"), tid)
+        return "registration"
+    update_email_message(mid, "chess", "")
+    return "chess"
+
+
+def _fetch_new_messages(account: dict) -> list:
+    """Pull unseen messages from the user's mailbox (sync; runs in a worker thread)."""
+    password = mr.decrypt_secret(SECRET_KEY or "", account["password_enc"])
+    with mr.Mailbox(account["imap_host"], account["imap_port"], account["username"], password, account["folder"]) as box:
+        return box.fetch_new(account["last_uid"], _EMAIL_SCAN_DAYS, _EMAIL_FETCH_LIMIT)
+
+
+def _poll_email_account_sync(account: dict) -> dict:
+    user = get_user_profile(account["user_id"])
+    if not user:
+        return {"error": "user missing"}
+    try:
+        messages = _fetch_new_messages(account)
+    except Exception as e:
+        update_email_account_state(account["id"], error=str(e)[:300])
+        return {"error": str(e)}
+    counts, max_uid = {}, account["last_uid"]
+    for msg in messages:
+        try:
+            kind = _process_email_message(user, account, msg)
+        except Exception as e:
+            logging.warning("email message %s for user %s: %s", msg.get("uid"), user["id"], e)
+            kind = "error"
+        counts[kind] = counts.get(kind, 0) + 1
+        max_uid = max(max_uid, int(msg.get("uid") or 0))
+    update_email_account_state(account["id"], last_uid=max_uid, error="", seen_inc=len(messages))
+    return counts
+
+
+async def _poll_email_account(account: dict) -> dict:
+    return await asyncio.get_event_loop().run_in_executor(None, _poll_email_account_sync, account)
+
+
+async def _poll_all_email_accounts():
+    for account in list_email_accounts():
+        try:
+            await _poll_email_account(account)
+        except Exception as e:
+            logging.warning("email poll for account %s: %s", account["id"], e)
+
+
+async def _fetch_page_text(url: str) -> str:
+    from bs4 import BeautifulSoup
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; MyChessRating/1.0; +https://mychessrating.fly.dev)"}
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n\s*\n+", "\n", soup.get_text("\n"))
+    return text[:_PAGE_TEXT_LIMIT]
+
+
+def _section_matches(wanted: str, candidate: str) -> bool:
+    w, c = _name_tokens(wanted), _name_tokens(candidate)
+    return bool(w) and bool(c) and (w <= c or c <= w)
+
+
+async def _entry_list_rows(url: str, section: str = "") -> tuple:
+    """(tournament_name, players in start-rank order) from an entry-list page."""
+    if "chess-results.com" in url:
+        return await _scrape_chess_results(url)
+    if not _claude_auth_mode():
+        raise ValueError("Reading entry lists from other sites needs the Claude API, which is not configured.")
+    text = await _fetch_page_text(url)
+    data = await asyncio.get_event_loop().run_in_executor(None, _claude_json, _ENTRY_LIST_PROMPT, text, 16000)
+    rows = [r for r in ((data or {}).get("players") or []) if isinstance(r, dict) and (r.get("name") or "").strip()]
+    if section:
+        in_section = [r for r in rows if _section_matches(section, r.get("section") or "")]
+        if in_section:
+            rows = in_section
+    rows.sort(key=lambda r: -(r.get("rating") or 0) if isinstance(r.get("rating"), int) else 0)
+    players = [{"start_rank": i, "name": r["name"].strip(), "title": r.get("title") or "", "fide_id": r.get("fide_id") or "",
+                "fide_rating": r.get("rating") if isinstance(r.get("rating"), int) else 0, "country": "",
+                "national_id": r.get("uscf_id") or ""} for i, r in enumerate(rows, start=1)]
+    return (data or {}).get("tournament_name") or "", players
+
+
+async def _import_entry_list(tracked: dict, user: dict) -> dict:
+    url = (tracked.get("entry_list_url") or tracked.get("info_url") or "").strip()
+    if not url:
+        raise ValueError("No entry list link is known for this tournament yet - paste one below.")
+    name, players = await _entry_list_rows(url, tracked.get("section") or "")
+    if not players:
+        raise ValueError("No players were found on that page.")
+    delete_research_by_source(url)
+    upsert_research_players(players, url, name or tracked["name"], user["id"])
+    profile = get_user_profile(user["id"]) or {}
+    names = _my_player_names(user)
+    uscf = (profile.get("uscf_id") or "").strip()
+    my_rank = 0
+    for p in players:
+        if (uscf and p.get("national_id") == uscf) or any(_name_matches(n, p["name"]) for n in names):
+            my_rank = p["start_rank"]
+            break
+    update_tracked_tournament(tracked["id"], tournament_source=url, entry_list_url=url, my_start_rank=my_rank)
+    return {"players": len(players), "my_rank": my_rank, "tournament": name}
+
+
+def _round1_prediction(tracked: dict) -> Optional[dict]:
+    """Top half plays bottom half in round 1: the likely opponent and neighbours."""
+    import math
+    source, me = tracked.get("tournament_source"), tracked.get("my_start_rank") or 0
+    if not source or not me:
+        return None
+    total = get_research_player_count(source)
+    if total < 2:
+        return None
+    half = math.ceil(total / 2)
+    opponent = me + half if me <= half else me - half
+    players = get_research_players_by_rank_range(source, max(1, opponent - 3), min(total, opponent + 3))
+    return {"total": total, "opponent_rank": opponent, "players": players,
+            "likely": next((p for p in players if p["start_rank"] == opponent), None)}
+
+
+def _own_tracked(tid: int, user: dict) -> dict:
+    t = get_tracked_tournament(tid)
+    if not t or t["user_id"] != user["id"]:
+        raise HTTPException(404, "Tournament not found")
+    return t
+
+
+def _my_tournaments_context(request: Request, user: dict, **extra) -> dict:
+    account = get_email_account(user["id"])
+    if account:
+        account = {k: v for k, v in account.items() if k != "password_enc"}
+    return {"request": request, "account": account, "tracked": list_tracked_tournaments(user["id"]),
+            "messages": list_email_messages(user["id"]), "unmatched": list_unmatched_games(user["id"]),
+            "claude_ready": bool(_claude_auth_mode()), **extra}
+
+
+@app.get("/my-tournaments", response_class=HTMLResponse)
+def my_tournaments_page(request: Request, msg: str = "", err: str = "", user: dict = Depends(require_login)):
+    return templates.TemplateResponse(request=request, name="my_tournaments.html",
+                                      context=_my_tournaments_context(request, user, msg=msg, err=err))
+
+
+def _redirect_my(msg: str = "", err: str = "", tid: Optional[int] = None) -> RedirectResponse:
+    base = f"/my-tournaments/{tid}" if tid else "/my-tournaments"
+    query = _urlparse.urlencode({k: v for k, v in (("msg", msg), ("err", err)) if v})
+    return RedirectResponse(base + (f"?{query}" if query else ""), status_code=303)
+
+
+@app.post("/my-tournaments/email/connect")
+async def my_tournaments_connect_email(
+    email_address: str = Form(...),
+    password: str = Form(...),
+    imap_host: str = Form(""),
+    user: dict = Depends(require_login),
+):
+    email_address = email_address.strip().lower()
+    if "@" not in email_address:
+        return _redirect_my(err="Enter the full email address.")
+    if not mr.password_imap_supported(email_address):
+        return _redirect_my(err="Outlook / Hotmail / Live mailboxes no longer allow password sign-in for IMAP. "
+                                "Use a Gmail, Yahoo or iCloud address, or forward your chess mail to one.")
+    host, port = (imap_host.strip(), 993) if imap_host.strip() else mr.guess_imap(email_address)
+    if not host:
+        return _redirect_my(err="We don't know the mail server for that address - enter the IMAP host.")
+    error = await asyncio.get_event_loop().run_in_executor(None, mr.test_connection, host, port, email_address, password)
+    if error:
+        return _redirect_my(err=error)
+    upsert_email_account(user["id"], email_address, host, port, email_address,
+                         mr.encrypt_secret(SECRET_KEY or "", password))
+    account = get_email_account(user["id"])
+    counts = await _poll_email_account(account)
+    return _redirect_my(msg=_describe_poll(counts, first=True))
+
+
+def _describe_poll(counts: dict, first: bool = False) -> str:
+    if counts.get("error"):
+        return f"Connected, but the first check failed: {counts['error']}"
+    seen = sum(v for k, v in counts.items() if k != "error")
+    parts = [f"{seen} new message(s) checked"]
+    if counts.get("registration"):
+        parts.append(f"{counts['registration']} registration(s) found")
+    if counts.get("pgn"):
+        parts.append(f"{counts['pgn']} email(s) with games")
+    prefix = "Mailbox connected. " if first else ""
+    return prefix + ", ".join(parts) + "."
+
+
+@app.post("/my-tournaments/email/check")
+async def my_tournaments_check_email(user: dict = Depends(require_login)):
+    account = get_email_account(user["id"])
+    if not account:
+        return _redirect_my(err="Connect a mailbox first.")
+    counts = await _poll_email_account(account)
+    if counts.get("error"):
+        return _redirect_my(err=f"Mail check failed: {counts['error']}")
+    return _redirect_my(msg=_describe_poll(counts))
+
+
+@app.post("/my-tournaments/email/disconnect")
+def my_tournaments_disconnect_email(user: dict = Depends(require_login)):
+    delete_email_account(user["id"])
+    return _redirect_my(msg="Mailbox disconnected and its password removed.")
+
+
+@app.post("/my-tournaments/add")
+def my_tournaments_add(
+    name: str = Form(...),
+    start_date: str = Form(""),
+    end_date: str = Form(""),
+    section: str = Form(""),
+    entry_list_url: str = Form(""),
+    user: dict = Depends(require_login),
+):
+    if not name.strip():
+        return _redirect_my(err="Give the tournament a name.")
+    tid, created = create_tracked_tournament(user["id"], name.strip(), start_date.strip(), end_date.strip(),
+                                             section.strip(), entry_list_url=entry_list_url.strip())
+    return _redirect_my(tid=tid, msg="Tracking started." if created else "That tournament was already tracked.")
+
+
+@app.get("/my-tournaments/{tid}", response_class=HTMLResponse)
+def my_tournament_detail(request: Request, tid: int, msg: str = "", err: str = "", user: dict = Depends(require_login)):
+    t = _own_tracked(tid, user)
+    return templates.TemplateResponse(request=request, name="my_tournament_detail.html", context={
+        "request": request, "t": t, "games": list_tracked_games(tid), "prediction": _round1_prediction(t),
+        "unmatched": list_unmatched_games(user["id"]), "msg": msg, "err": err,
+        "claude_ready": bool(_claude_auth_mode()),
+    })
+
+
+@app.post("/my-tournaments/{tid}/entries")
+async def my_tournament_import_entries(tid: int, entry_list_url: str = Form(""), section: str = Form(""),
+                                       user: dict = Depends(require_login)):
+    t = _own_tracked(tid, user)
+    fields = {}
+    if entry_list_url.strip():
+        fields["entry_list_url"] = entry_list_url.strip()
+    if section.strip():
+        fields["section"] = section.strip()
+    if fields:
+        update_tracked_tournament(tid, **fields)
+        t = get_tracked_tournament(tid)
+    try:
+        res = await _import_entry_list(t, user)
+    except Exception as e:
+        return _redirect_my(tid=tid, err=f"Entry list import failed: {e}")
+    rank = f" You are seed #{res['my_rank']}." if res["my_rank"] else " We couldn't find you in the list - set your player name on My Profile."
+    return _redirect_my(tid=tid, msg=f"Imported {res['players']} players.{rank}")
+
+
+@app.post("/my-tournaments/{tid}/games/upload")
+async def my_tournament_upload_games(tid: int, pgn_text: str = Form(""), pgn_file: Optional[UploadFile] = File(None),
+                                     user: dict = Depends(require_login)):
+    _own_tracked(tid, user)
+    raw = pgn_text or ""
+    if pgn_file is not None and pgn_file.filename:
+        data = await pgn_file.read()
+        if len(data) > 5 * 1024 * 1024:
+            return _redirect_my(tid=tid, err="PGN file is too large (5 MB max).")
+        raw += "\n\n" + data.decode("utf-8", errors="replace")
+    if '[Event "' not in raw and "[White " not in raw:
+        return _redirect_my(tid=tid, err="That doesn't look like PGN.")
+    res = _ingest_pgn_games(user, raw, force_tracked_id=tid, source="upload")
+    return _redirect_my(tid=tid, msg=f"Added {res['attached']} game(s) to this tournament.")
+
+
+@app.post("/my-tournaments/{tid}/games/attach")
+def my_tournament_attach_game(tid: int, pgn_game_id: int = Form(...), user: dict = Depends(require_login)):
+    _own_tracked(tid, user)
+    if not any(g["pgn_game_id"] == pgn_game_id for g in list_unmatched_games(user["id"])):
+        raise HTTPException(404, "Game not found")
+    g = get_pgn_game(pgn_game_id) or {}
+    color = _my_color_in_game(_my_player_names(user), g.get("white", ""), g.get("black", "")) or ""
+    opponent = g.get("black") if color == "white" else g.get("white")
+    add_tracked_game(tid, _round_int(g.get("round")), _pgn_date(g.get("date")), color, opponent or "",
+                     g.get("black_elo") if color == "white" else g.get("white_elo"), g.get("result") or "*",
+                     pgn_game_id, "email")
+    remove_unmatched_game(user["id"], pgn_game_id)
+    return _redirect_my(tid=tid, msg="Game attached.")
+
+
+@app.post("/my-tournaments/{tid}/games/{game_id}/remove")
+def my_tournament_remove_game(tid: int, game_id: int, user: dict = Depends(require_login)):
+    _own_tracked(tid, user)
+    remove_tracked_game(tid, game_id)
+    return _redirect_my(tid=tid, msg="Game removed from this tournament.")
+
+
+@app.post("/my-tournaments/{tid}/dismiss")
+def my_tournament_dismiss(tid: int, user: dict = Depends(require_login)):
+    _own_tracked(tid, user)
+    update_tracked_tournament(tid, status="dismissed")
+    return _redirect_my(msg="Tournament dismissed.")

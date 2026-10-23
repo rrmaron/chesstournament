@@ -2921,3 +2921,318 @@ def download_player_games_pgn(player_key: str) -> str:
     ).fetchall()
     conn.close()
     return "\n\n".join(r[0] for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# My Tournaments: email accounts, tracked tournaments, attached games
+# ---------------------------------------------------------------------------
+
+def init_my_tournaments():
+    conn = sqlite3.connect(DB_FILE)
+    conn.executescript('''
+    CREATE TABLE IF NOT EXISTS email_accounts (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE,
+        email_address TEXT NOT NULL,
+        imap_host TEXT NOT NULL,
+        imap_port INTEGER DEFAULT 993,
+        username TEXT NOT NULL,
+        password_enc TEXT NOT NULL,
+        folder TEXT DEFAULT 'INBOX',
+        last_uid INTEGER DEFAULT 0,
+        last_checked_at TEXT,
+        last_error TEXT DEFAULT '',
+        messages_seen INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS email_messages (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        account_id INTEGER NOT NULL,
+        uid INTEGER NOT NULL,
+        message_id TEXT DEFAULT '',
+        from_addr TEXT DEFAULT '',
+        subject TEXT DEFAULT '',
+        received_at TEXT DEFAULT '',
+        kind TEXT DEFAULT 'other',
+        summary TEXT DEFAULT '',
+        tracked_id INTEGER,
+        processed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(account_id, uid)
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_messages_user ON email_messages(user_id, processed_at);
+    CREATE TABLE IF NOT EXISTS tracked_tournaments (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        start_date TEXT DEFAULT '',
+        end_date TEXT DEFAULT '',
+        section TEXT DEFAULT '',
+        venue TEXT DEFAULT '',
+        organizer TEXT DEFAULT '',
+        rounds INTEGER,
+        time_control TEXT DEFAULT '',
+        info_url TEXT DEFAULT '',
+        entry_list_url TEXT DEFAULT '',
+        tournament_source TEXT DEFAULT '',
+        my_start_rank INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'upcoming',
+        source_email_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        deleted_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_tracked_user ON tracked_tournaments(user_id, status);
+    CREATE TABLE IF NOT EXISTS tracked_games (
+        id INTEGER PRIMARY KEY,
+        tracked_id INTEGER NOT NULL,
+        round INTEGER DEFAULT 0,
+        played_on TEXT DEFAULT '',
+        my_color TEXT DEFAULT '',
+        opponent_name TEXT DEFAULT '',
+        opponent_rating INTEGER,
+        result TEXT DEFAULT '*',
+        pgn_game_id INTEGER,
+        source TEXT DEFAULT 'email',
+        email_message_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(tracked_id, pgn_game_id),
+        FOREIGN KEY(tracked_id) REFERENCES tracked_tournaments(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS unmatched_games (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        pgn_game_id INTEGER NOT NULL,
+        email_message_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, pgn_game_id)
+    );
+    ''')
+    conn.commit()
+    conn.close()
+
+init_my_tournaments()
+
+_EMAIL_ACCOUNT_COLS = ["id", "user_id", "email_address", "imap_host", "imap_port", "username", "password_enc",
+                       "folder", "last_uid", "last_checked_at", "last_error", "messages_seen", "created_at"]
+
+
+def upsert_email_account(user_id: int, email_address: str, imap_host: str, imap_port: int,
+                         username: str, password_enc: str) -> int:
+    """One account per user; reconnecting replaces it and rescans from scratch."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM email_accounts WHERE user_id=?", (user_id,))
+    cur = conn.execute(
+        "INSERT INTO email_accounts (user_id, email_address, imap_host, imap_port, username, password_enc) "
+        "VALUES (?,?,?,?,?,?)", (user_id, email_address, imap_host, imap_port, username, password_enc))
+    conn.commit()
+    aid = cur.lastrowid
+    conn.close()
+    return aid
+
+
+def _email_account_rows(where: str, params: tuple) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(f"SELECT {', '.join(_EMAIL_ACCOUNT_COLS)} FROM email_accounts {where}", params).fetchall()
+    conn.close()
+    return [dict(zip(_EMAIL_ACCOUNT_COLS, r)) for r in rows]
+
+
+def get_email_account(user_id: int) -> Optional[Dict]:
+    rows = _email_account_rows("WHERE user_id=?", (user_id,))
+    return rows[0] if rows else None
+
+
+def list_email_accounts() -> List[Dict]:
+    return _email_account_rows("ORDER BY id", ())
+
+
+def delete_email_account(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM email_accounts WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_email_account_state(aid: int, last_uid: Optional[int] = None, error: Optional[str] = None,
+                               seen_inc: int = 0):
+    conn = sqlite3.connect(DB_FILE)
+    sets, params = ["last_checked_at=CURRENT_TIMESTAMP", "messages_seen=messages_seen+?"], [seen_inc]
+    if last_uid is not None:
+        sets.append("last_uid=?"); params.append(last_uid)
+    if error is not None:
+        sets.append("last_error=?"); params.append(error)
+    conn.execute(f"UPDATE email_accounts SET {', '.join(sets)} WHERE id=?", params + [aid])
+    conn.commit()
+    conn.close()
+
+
+def record_email_message(user_id: int, account_id: int, uid: int, message_id: str, from_addr: str,
+                         subject: str, received_at: str) -> Optional[int]:
+    """Insert a message record; None when this uid (or Message-ID) was already seen for the account."""
+    conn = sqlite3.connect(DB_FILE)
+    if message_id:
+        dup = conn.execute("SELECT id FROM email_messages WHERE account_id=? AND message_id=?",
+                           (account_id, message_id)).fetchone()
+        if dup:
+            conn.close()
+            return None
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO email_messages (user_id, account_id, uid, message_id, from_addr, subject, received_at) "
+        "VALUES (?,?,?,?,?,?,?)", (user_id, account_id, uid, message_id or "", from_addr, subject[:300], received_at))
+    conn.commit()
+    mid = cur.lastrowid if cur.rowcount else None
+    conn.close()
+    return mid
+
+
+def update_email_message(mid: int, kind: str, summary: str = "", tracked_id: Optional[int] = None):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE email_messages SET kind=?, summary=?, tracked_id=COALESCE(?, tracked_id) WHERE id=?",
+                 (kind, summary[:300], tracked_id, mid))
+    conn.commit()
+    conn.close()
+
+
+def list_email_messages(user_id: int, limit: int = 15) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    cols = ["id", "uid", "from_addr", "subject", "received_at", "kind", "summary", "tracked_id", "processed_at"]
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM email_messages WHERE user_id=? "
+                        "ORDER BY processed_at DESC, id DESC LIMIT ?", (user_id, limit)).fetchall()
+    conn.close()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+_TRACKED_COLS = ["id", "user_id", "name", "start_date", "end_date", "section", "venue", "organizer", "rounds",
+                 "time_control", "info_url", "entry_list_url", "tournament_source", "my_start_rank", "status",
+                 "source_email_id", "created_at", "updated_at"]
+
+
+def create_tracked_tournament(user_id: int, name: str, start_date: str = "", end_date: str = "", section: str = "",
+                              venue: str = "", organizer: str = "", rounds: Optional[int] = None,
+                              time_control: str = "", info_url: str = "", entry_list_url: str = "",
+                              source_email_id: Optional[int] = None) -> tuple:
+    """(id, created). The same event (name + start date) for a user is reused, not duplicated."""
+    conn = sqlite3.connect(DB_FILE)
+    name = (name or "").strip()
+    row = conn.execute(
+        "SELECT id FROM tracked_tournaments WHERE user_id=? AND lower(name)=lower(?) AND start_date=? AND deleted_at IS NULL",
+        (user_id, name, start_date or "")).fetchone()
+    if row:
+        conn.execute("UPDATE tracked_tournaments SET section=CASE WHEN section='' THEN ? ELSE section END, "
+                     "entry_list_url=CASE WHEN entry_list_url='' THEN ? ELSE entry_list_url END, "
+                     "info_url=CASE WHEN info_url='' THEN ? ELSE info_url END, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (section or "", entry_list_url or "", info_url or "", row[0]))
+        conn.commit()
+        conn.close()
+        return row[0], False
+    cur = conn.execute(
+        "INSERT INTO tracked_tournaments (user_id, name, start_date, end_date, section, venue, organizer, rounds, "
+        "time_control, info_url, entry_list_url, source_email_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (user_id, name, start_date or "", end_date or start_date or "", section or "", venue or "", organizer or "",
+         rounds, time_control or "", info_url or "", entry_list_url or "", source_email_id))
+    conn.commit()
+    tid = cur.lastrowid
+    conn.close()
+    return tid, True
+
+
+def get_tracked_tournament(tid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(f"SELECT {', '.join(_TRACKED_COLS)} FROM tracked_tournaments WHERE id=? AND deleted_at IS NULL",
+                       (tid,)).fetchone()
+    conn.close()
+    return dict(zip(_TRACKED_COLS, row)) if row else None
+
+
+def list_tracked_tournaments(user_id: int, include_dismissed: bool = False) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    sql = f"SELECT {', '.join(_TRACKED_COLS)} FROM tracked_tournaments WHERE user_id=? AND deleted_at IS NULL"
+    if not include_dismissed:
+        sql += " AND status != 'dismissed'"
+    rows = conn.execute(sql + " ORDER BY CASE WHEN start_date='' THEN 1 ELSE 0 END, start_date DESC, id DESC",
+                        (user_id,)).fetchall()
+    conn.close()
+    return [dict(zip(_TRACKED_COLS, r)) for r in rows]
+
+
+def update_tracked_tournament(tid: int, **fields):
+    allowed = {"name", "start_date", "end_date", "section", "venue", "organizer", "rounds", "time_control",
+               "info_url", "entry_list_url", "tournament_source", "my_start_rank", "status"}
+    fields = {k: v for k, v in fields.items() if k in allowed}
+    if not fields:
+        return
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute(f"UPDATE tracked_tournaments SET {', '.join(f'{k}=?' for k in fields)}, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                 list(fields.values()) + [tid])
+    conn.commit()
+    conn.close()
+
+
+def add_tracked_game(tracked_id: int, round_no: int, played_on: str, my_color: str, opponent_name: str,
+                     opponent_rating: Optional[int], result: str, pgn_game_id: Optional[int],
+                     source: str = "email", email_message_id: Optional[int] = None) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO tracked_games (tracked_id, round, played_on, my_color, opponent_name, opponent_rating, "
+        "result, pgn_game_id, source, email_message_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (tracked_id, round_no or 0, played_on or "", my_color or "", opponent_name or "", opponent_rating,
+         result or "*", pgn_game_id, source, email_message_id))
+    conn.commit()
+    added = cur.rowcount > 0
+    conn.close()
+    return added
+
+
+def list_tracked_games(tracked_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    cols = ["id", "round", "played_on", "my_color", "opponent_name", "opponent_rating", "result", "pgn_game_id",
+            "source", "created_at"]
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM tracked_games WHERE tracked_id=? ORDER BY round, played_on, id",
+                        (tracked_id,)).fetchall()
+    conn.close()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def remove_tracked_game(tracked_id: int, game_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.execute("DELETE FROM tracked_games WHERE tracked_id=? AND id=?", (tracked_id, game_id))
+    conn.commit()
+    conn.close()
+    return cur.rowcount > 0
+
+
+def add_unmatched_game(user_id: int, pgn_game_id: int, email_message_id: Optional[int] = None):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("INSERT OR IGNORE INTO unmatched_games (user_id, pgn_game_id, email_message_id) VALUES (?,?,?)",
+                 (user_id, pgn_game_id, email_message_id))
+    conn.commit()
+    conn.close()
+
+
+def list_unmatched_games(user_id: int) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(
+        "SELECT u.pgn_game_id, g.event, g.date, g.round, g.white, g.black, g.result, u.created_at "
+        "FROM unmatched_games u JOIN pgn_games g ON g.id=u.pgn_game_id WHERE u.user_id=? ORDER BY u.id DESC",
+        (user_id,)).fetchall()
+    conn.close()
+    cols = ["pgn_game_id", "event", "date", "round", "white", "black", "result", "created_at"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def remove_unmatched_game(user_id: int, pgn_game_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM unmatched_games WHERE user_id=? AND pgn_game_id=?", (user_id, pgn_game_id))
+    conn.commit()
+    conn.close()
+
+
+def get_pgn_game(gid: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    cols = ["id", "event", "site", "date", "round", "white", "black", "result", "white_elo", "black_elo", "eco", "opening"]
+    row = conn.execute(f"SELECT {', '.join(cols)} FROM pgn_games WHERE id=?", (gid,)).fetchone()
+    conn.close()
+    return dict(zip(cols, row)) if row else None
