@@ -1333,6 +1333,7 @@ def admin_add_tournament(
     description: str = Form(""),
     info_url: str = Form(""),
     pairings_url: str = Form(""),
+    broadcast_url: str = Form(""),
     source: str = Form("manual"),
     source_url: str = Form(""),
     display_order: int = Form(0),
@@ -1345,6 +1346,7 @@ def admin_add_tournament(
         description=description.strip() or None,
         info_url=info_url.strip() or None,
         pairings_url=pairings_url.strip() or None,
+        broadcast_url=broadcast_url.strip() or None,
         source=source or "manual",
         source_url=source_url.strip() or None,
         display_order=display_order,
@@ -1374,6 +1376,7 @@ def admin_edit_tournament(
     description: str = Form(""),
     info_url: str = Form(""),
     pairings_url: str = Form(""),
+    broadcast_url: str = Form(""),
     display_order: int = Form(0),
     country_code: str = Form(""),
     _user: dict = Depends(require_admin),
@@ -1385,6 +1388,7 @@ def admin_edit_tournament(
         description=description.strip() or None,
         info_url=info_url.strip() or None,
         pairings_url=pairings_url.strip() or None,
+        broadcast_url=broadcast_url.strip() or None,
         display_order=display_order,
         country_code=country_code.strip(),
     )
@@ -4211,6 +4215,7 @@ def research_simulate(
         "imported_rounds": imported_rounds,
         "round_urls": round_urls,
         "round_predictions": round_predictions,
+        "swiss_prediction": _swiss_prediction(tournament_source, effective_rank) if tournament_source else None,
         "imported_standings_list": imported_standings_list,
         "standings_predictions": standings_predictions,
         "import_msg": import_msg,
@@ -5856,7 +5861,7 @@ def _my_tournaments_context(request: Request, user: dict, **extra) -> dict:
         account = {k: v for k, v in account.items() if k != "password_enc"}
     return {"request": request, "account": account, "tracked": list_tracked_tournaments(user["id"]),
             "messages": list_email_messages(user["id"]), "unmatched": list_unmatched_games(user["id"]),
-            "claude_ready": bool(_claude_auth_mode()), **extra}
+            "claude_ready": bool(_claude_auth_mode()), **_inbound_context(user), **extra}
 
 
 @app.get("/my-tournaments", response_class=HTMLResponse)
@@ -5950,6 +5955,7 @@ def my_tournament_detail(request: Request, tid: int, msg: str = "", err: str = "
         "request": request, "t": t, "games": list_tracked_games(tid), "prediction": _round1_prediction(t),
         "unmatched": list_unmatched_games(user["id"]), "msg": msg, "err": err,
         "claude_ready": bool(_claude_auth_mode()),
+        "swiss": _swiss_prediction(t.get("tournament_source") or "", t.get("my_start_rank") or 0),
     })
 
 
@@ -6016,3 +6022,147 @@ def my_tournament_dismiss(tid: int, user: dict = Depends(require_login)):
     _own_tracked(tid, user)
     update_tracked_tournament(tid, status="dismissed")
     return _redirect_my(msg="Tournament dismissed.")
+
+
+# ---------------------------------------------------------------------------
+# Inbound tournament addresses: <name>-<code>@INBOUND_EMAIL_DOMAIN, delivered by
+# Resend's receiving webhook, processed like IMAP mail, then forwarded on.
+# ---------------------------------------------------------------------------
+import secrets as _secrets
+import inbound_mail as im
+import swiss_pairing as sp
+import notify as _notify
+from database import (
+    create_inbound_address, get_inbound_address, get_user_id_by_local_part, delete_inbound_address,
+    set_inbound_forward, bump_inbound_received, get_research_players_for_source,
+)
+
+INBOUND_EMAIL_DOMAIN = os.environ.get("INBOUND_EMAIL_DOMAIN", "").strip().lower()
+RESEND_INBOUND_WEBHOOK_SECRET = os.environ.get("RESEND_INBOUND_WEBHOOK_SECRET", "")
+
+
+def _inbound_context(user: dict) -> dict:
+    row = get_inbound_address(user["id"]) if INBOUND_EMAIL_DOMAIN else None
+    return {
+        "inbound_domain": INBOUND_EMAIL_DOMAIN,
+        "inbound_address": f"{row['local_part']}@{INBOUND_EMAIL_DOMAIN}" if row else "",
+        "inbound_forward": bool(row and row["forward"]),
+        "inbound_received": row["received"] if row else 0,
+    }
+
+
+@app.post("/my-tournaments/inbound/enable")
+def my_tournaments_inbound_enable(user: dict = Depends(require_login)):
+    if not INBOUND_EMAIL_DOMAIN:
+        return _redirect_my(err="Tournament addresses are not enabled on this server.")
+    row = get_inbound_address(user["id"])
+    for _ in range(5):
+        if row:
+            break
+        row = create_inbound_address(user["id"], im.make_local_part(user["username"], _secrets.token_hex(2)))
+    if not row:
+        return _redirect_my(err="Could not create an address right now - try again.")
+    return _redirect_my(msg=f"Your tournament address is {row['local_part']}@{INBOUND_EMAIL_DOMAIN}. "
+                            "Use it on entry forms and in ChessNoteR; mail sent there is processed here and forwarded to you.")
+
+
+@app.post("/my-tournaments/inbound/disable")
+def my_tournaments_inbound_disable(user: dict = Depends(require_login)):
+    delete_inbound_address(user["id"])
+    return _redirect_my(msg="Tournament address removed. Mail sent to it will be dropped.")
+
+
+@app.post("/my-tournaments/inbound/forward")
+def my_tournaments_inbound_forward(enabled: str = Form("0"), user: dict = Depends(require_login)):
+    set_inbound_forward(user["id"], enabled == "1")
+    return _redirect_my(msg="Forwarding turned " + ("on." if enabled == "1" else "off."))
+
+
+async def _handle_inbound_email(user_id: int, email_id: str) -> str:
+    """Fetch a received email from Resend, run it through the mail pipeline, forward it."""
+    user = get_user_profile(user_id)
+    if not user:
+        return "unknown-user"
+    email = await im.fetch_received_email(_notify.RESEND_API_KEY, email_id)
+    attachments = await im.fetch_attachments(_notify.RESEND_API_KEY, email_id)
+    msg = im.to_message(email, attachments, im.uid_from_email_id(email_id))
+    account = {"id": -user_id}  # inbound messages use a per-user pseudo account for dedupe
+    kind = await asyncio.get_event_loop().run_in_executor(None, _process_email_message, user, account, msg)
+    bump_inbound_received(user_id)
+    row = get_inbound_address(user_id)
+    if kind != "duplicate" and row and row["forward"] and user.get("email"):
+        try:
+            await _notify.send_forward_email(user["email"], msg["from_addr"], msg["subject"], msg["text"],
+                                             msg.get("html", ""), attachments)
+        except Exception as e:
+            logging.warning("inbound forward to user %s failed: %s", user_id, e)
+    return kind
+
+
+@app.post("/webhooks/resend-inbound")
+async def resend_inbound_webhook(request: Request):
+    if not RESEND_INBOUND_WEBHOOK_SECRET or not INBOUND_EMAIL_DOMAIN:
+        raise HTTPException(503, "Inbound email is not configured")
+    body = await request.body()
+    headers = request.headers
+    if not im.verify_signature(RESEND_INBOUND_WEBHOOK_SECRET, headers.get("svix-id", ""),
+                               headers.get("svix-timestamp", ""), headers.get("svix-signature", ""), body):
+        raise HTTPException(403, "Bad signature")
+    try:
+        event = json.loads(body)
+    except ValueError:
+        raise HTTPException(400, "Bad JSON")
+    if event.get("type") != "email.received":
+        return {"ignored": event.get("type")}
+    data = event.get("data") or {}
+    recipients = list(data.get("to") or []) + list(data.get("received_for") or []) + list(data.get("cc") or []) + list(data.get("bcc") or [])
+    local = im.local_part_of(recipients, INBOUND_EMAIL_DOMAIN)
+    user_id = get_user_id_by_local_part(local) if local else None
+    if not user_id:
+        logging.info("inbound email for unknown address %s", local)
+        return {"ignored": "unknown recipient"}
+    try:
+        kind = await _handle_inbound_email(user_id, data.get("email_id") or "")
+    except Exception as e:
+        logging.warning("inbound email %s: %s", data.get("email_id"), e)
+        raise HTTPException(502, "Could not fetch the email")
+    return {"ok": True, "kind": kind}
+
+
+# ---------------------------------------------------------------------------
+# Next-round pairing prediction with USCF (SwissSys) rules
+# ---------------------------------------------------------------------------
+
+def _swiss_prediction(tournament_source: str, my_rank: int = 0) -> Optional[dict]:
+    """Predict the next round for the whole field from imported round results."""
+    rounds = list_imported_rounds(tournament_source) if tournament_source else []
+    if not rounds:
+        return None
+    players = get_research_players_for_source(tournament_source)
+    if len(players) < 2:
+        return None
+    results = {rd: get_round_results(tournament_source, rd) for rd in rounds}
+    last = max(rounds)
+    entrants = sp.entrants_from_rounds(players, results)
+    res = sp.pair_round(entrants)
+    info = {p["start_rank"]: p for p in players}
+
+    def named(no):
+        p = info.get(no, {})
+        return {"no": no, "name": p.get("name", f"#{no}"), "rating": p.get("fide_rating") or 0}
+
+    boards = []
+    for b in res["boards"]:
+        boards.append({**b, "white_p": named(b["white"]), "black_p": named(b["black"])})
+    my_board = next((b for b in boards if my_rank and my_rank in (b["white"], b["black"])), None)
+    my_color = None
+    if my_board:
+        my_color = "white" if my_board["white"] == my_rank else "black"
+    return {
+        "after_round": last, "predict_round": last + 1, "boards": boards,
+        "bye": named(res["bye"]) if res["bye"] else None, "floaters": res["floaters"],
+        "my_board": my_board, "my_color": my_color,
+        "my_opponent": (my_board["black_p"] if my_color == "white" else my_board["white_p"]) if my_board else None,
+        "in_progress": any((g.get("result") or "*") == "*" for g in results[last]),
+        "my_bye": bool(res["bye"] and my_rank and res["bye"] == my_rank),
+    }

@@ -49,6 +49,20 @@
           </form>
           <p class="small text-muted mt-2 mb-0">Privacy: only the last 90 days are scanned, only chess-related messages are read by the AI, and message bodies are never stored. The password is encrypted at rest and deleted when you disconnect.</p>
         {% endif %}
+        {% if inbound_domain %}
+        <hr>
+        <h6 class="small fw-semibold mb-1">Your tournament address</h6>
+        {% if inbound_address %}
+          <p class="mb-1"><code>{{ inbound_address }}</code> <span class="badge bg-success">active</span></p>
+          <p class="small text-muted mb-2">Use it on entry forms and in ChessNoteR. {{ inbound_received }} message(s) received.
+            {% if inbound_forward %}Copies are forwarded to your account email.{% else %}Forwarding is off.{% endif %}</p>
+          <form method="post" action="/my-tournaments/inbound/forward" class="d-inline"><input type="hidden" name="enabled" value="{{ '0' if inbound_forward else '1' }}"><button class="btn btn-sm btn-outline-secondary">{{ 'Stop forwarding' if inbound_forward else 'Forward copies to me' }}</button></form>
+          <form method="post" action="/my-tournaments/inbound/disable" class="d-inline ms-1" onsubmit="return confirm('Remove this address? Mail sent to it will be dropped.')"><button class="btn btn-sm btn-outline-danger">Remove</button></form>
+        {% else %}
+          <p class="small text-muted mb-2">No password needed: get a private address at <strong>{{ inbound_domain }}</strong>, give it to ChessNoteR and tournament entry forms, and everything sent there lands here and is forwarded to your account email.</p>
+          <form method="post" action="/my-tournaments/inbound/enable"><button class="btn btn-sm btn-outline-primary">Create my tournament address</button></form>
+        {% endif %}
+        {% endif %}
         {% if not claude_ready %}<div class="alert alert-info py-1 small mt-2 mb-0">Registration detection needs the Claude API, which is not configured on this server. Emailed PGNs still attach, and tournaments can be added manually.</div>{% endif %}
       </div>
     </div>

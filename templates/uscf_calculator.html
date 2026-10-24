@@ -677,7 +677,7 @@ function renderAll() {
     ${renderBreakdown(calcs, types)}
   </div>
 </div>`;
-  }).join('');
+  }).reverse().join('');  // newest tournament at the top; indexes stay chronological
 
   renderSummary(progression, curRatings, curPrior);
 }

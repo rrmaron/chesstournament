@@ -168,6 +168,42 @@
 <p class="text-muted">Enter your starting rank to see the simulation.</p>
 {% endif %}
 
+{% if swiss_prediction %}
+<div class="card mb-4 border-primary">
+  <div class="card-header py-2 bg-primary text-white">
+    <strong>Round {{ swiss_prediction.predict_round }} predicted pairings (USCF / SwissSys rules)</strong>
+    <span class="small ms-2">from rounds 1–{{ swiss_prediction.after_round }}{% if swiss_prediction.in_progress %} · some round {{ swiss_prediction.after_round }} games are still in progress{% endif %}</span>
+  </div>
+  <div class="card-body">
+    {% if swiss_prediction.my_board %}
+    <div class="alert alert-warning py-2">Board {{ swiss_prediction.my_board.board }}: you are predicted to play
+      <strong>{{ swiss_prediction.my_opponent.name }}</strong>{% if swiss_prediction.my_opponent.rating %} ({{ swiss_prediction.my_opponent.rating }}){% endif %}
+      with <strong>{{ swiss_prediction.my_color }}</strong>.</div>
+    {% elif swiss_prediction.my_bye %}
+    <div class="alert alert-warning py-2">You are predicted to receive the bye.</div>
+    {% endif %}
+    <div class="table-responsive">
+      <table class="table table-sm mb-2">
+        <thead class="table-dark"><tr><th>Board</th><th>White</th><th class="text-center">Pts</th><th>Black</th><th class="text-center">Pts</th></tr></thead>
+        <tbody>
+        {% for b in swiss_prediction.boards %}
+        <tr class="{% if swiss_prediction.my_board and b.board == swiss_prediction.my_board.board %}table-warning fw-semibold{% endif %}">
+          <td>{{ b.board }}{% if b.floater %} <span class="badge bg-info text-dark" title="A player floated down from a higher score group">float</span>{% endif %}</td>
+          <td>#{{ b.white }} {{ b.white_p.name }}{% if b.white_p.rating %} <span class="text-muted small">({{ b.white_p.rating }})</span>{% endif %}</td>
+          <td class="text-center">{{ b.white_score }}</td>
+          <td>#{{ b.black }} {{ b.black_p.name }}{% if b.black_p.rating %} <span class="text-muted small">({{ b.black_p.rating }})</span>{% endif %}</td>
+          <td class="text-center">{{ b.black_score }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if swiss_prediction.bye %}<p class="small mb-1">Bye: #{{ swiss_prediction.bye.no }} {{ swiss_prediction.bye.name }}</p>{% endif %}
+    <p class="small text-muted mb-0">Rules applied: rank by score then rating; each score group pairs its top half against its bottom half; an odd group floats its lowest-rated player down; no rematches; colors are equalised, then alternated, never three in a row; transpositions to fix colors are limited to 80 points (alternation) or 200 points (equalisation); the bye goes to the lowest-rated player in the bottom group who hasn't had one.</p>
+  </div>
+</div>
+{% endif %}
+
 {# ── Round-by-round predictions based on imported results ── #}
 {% for pred in round_predictions %}
 <div class="card mb-4">

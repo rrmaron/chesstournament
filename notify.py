@@ -112,3 +112,31 @@ async def send_verification_sms(to: str, code: str):
     if r.status_code not in (200, 201):
         logging.error(f"Twilio error {r.status_code}: {r.text}")
         raise RuntimeError("SMS could not be sent. Please try again.")
+
+
+async def send_forward_email(to: str, original_from: str, subject: str, text: str, html: str, attachments: list):
+    """Forward a message received at a user's tournament address to their real inbox.
+    attachments: [{filename, content_type, data(bytes)}]."""
+    import html as _html
+    if not RESEND_API_KEY:
+        logging.warning(f"[DEV] Would forward '{subject}' from {original_from} to {to}")
+        return
+    note = f"Forwarded from {original_from} by MyChessRating"
+    payload = {
+        "from": RESEND_FROM, "to": [to], "subject": f"Fwd: {subject or '(no subject)'}",
+        "text": f"{note}\n\n{text or ''}",
+    }
+    if original_from:
+        payload["reply_to"] = original_from
+    if html:
+        payload["html"] = f'<p style="color:#888;font:12px sans-serif">{_html.escape(note)}</p>' + html
+    atts = [{"filename": a["filename"], "content": base64.b64encode(a["data"]).decode("ascii")}
+            for a in (attachments or []) if len(a.get("data") or b"") <= 2 * 1024 * 1024][:10]
+    if atts:
+        payload["attachments"] = atts
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post("https://api.resend.com/emails",
+                              headers={"Authorization": f"Bearer {RESEND_API_KEY}"}, json=payload)
+    if r.status_code not in (200, 201):
+        logging.error(f"Resend forward error {r.status_code}: {r.text}")
+        raise RuntimeError("Forward could not be sent")

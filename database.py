@@ -632,6 +632,7 @@ def init_db():
         "ALTER TABLE users ADD COLUMN city TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN federation_id INTEGER",
         "ALTER TABLE featured_tournaments ADD COLUMN country_code TEXT DEFAULT ''",
+        "ALTER TABLE featured_tournaments ADD COLUMN broadcast_url TEXT",
         "ALTER TABLE users ADD COLUMN uscf_online_rating INTEGER",
         "ALTER TABLE users ADD COLUMN uscf_online_quick_rating INTEGER",
         "ALTER TABLE users ADD COLUMN uscf_online_blitz_rating INTEGER",
@@ -865,7 +866,7 @@ def list_user_tournaments(user_id: int) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
     rows = conn.execute(
         "SELECT id, name, tournament_type, start_rating, end_rating, games_json, created_at "
-        "FROM user_tournaments WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC",
+        "FROM user_tournaments WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC",
         (user_id,)
     ).fetchall()
     conn.close()
@@ -931,12 +932,12 @@ def undelete_user_tournament(tournament_id: int, user_id: int) -> bool:
 def add_featured_tournament(name: str, subtitle: str = None, description: str = None,
                              info_url: str = None, pairings_url: str = None,
                              source: str = 'manual', source_url: str = None,
-                             display_order: int = 0, country_code: str = '') -> int:
+                             display_order: int = 0, country_code: str = '', broadcast_url: str = None) -> int:
     conn = sqlite3.connect(DB_FILE)
     cur = conn.execute(
-        "INSERT INTO featured_tournaments (name, subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (name.strip(), subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code or '')
+        "INSERT INTO featured_tournaments (name, subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code, broadcast_url) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (name.strip(), subtitle, description, info_url, pairings_url, source, source_url, display_order, country_code or '', broadcast_url)
     )
     fid = cur.lastrowid
     conn.commit()
@@ -944,7 +945,7 @@ def add_featured_tournament(name: str, subtitle: str = None, description: str = 
     return fid
 
 _FT_COLS = ["id", "name", "subtitle", "description", "info_url", "pairings_url",
-            "source", "source_url", "active", "display_order", "created_at", "country_code"]
+            "source", "source_url", "active", "display_order", "created_at", "country_code", "broadcast_url"]
 
 def list_featured_tournaments(active_only: bool = False, country_code: str = None) -> List[Dict]:
     conn = sqlite3.connect(DB_FILE)
@@ -953,7 +954,7 @@ def list_featured_tournaments(active_only: bool = False, country_code: str = Non
         conditions.append("active=1")
     if country_code:
         conditions.append(f"(country_code='' OR country_code='{country_code}')")
-    sql = "SELECT id, name, subtitle, description, info_url, pairings_url, source, source_url, active, display_order, created_at, COALESCE(country_code,'') FROM featured_tournaments"
+    sql = "SELECT id, name, subtitle, description, info_url, pairings_url, source, source_url, active, display_order, created_at, COALESCE(country_code,''), COALESCE(broadcast_url,'') FROM featured_tournaments"
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY display_order ASC, created_at DESC"
@@ -977,7 +978,7 @@ def list_featured_tournaments_for_user(user_id: int) -> List[Dict]:
     return list_featured_tournaments(active_only=True, country_code=loc["country_code"] or None)
 
 def update_featured_tournament(fid: int, **kwargs) -> bool:
-    allowed = {"name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order", "country_code"}
+    allowed = {"name", "subtitle", "description", "info_url", "pairings_url", "source", "source_url", "active", "display_order", "country_code", "broadcast_url"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return False
@@ -3236,3 +3237,84 @@ def get_pgn_game(gid: int) -> Optional[Dict]:
     row = conn.execute(f"SELECT {', '.join(cols)} FROM pgn_games WHERE id=?", (gid,)).fetchone()
     conn.close()
     return dict(zip(cols, row)) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Inbound tournament addresses (receive-only, delivered by Resend)
+# ---------------------------------------------------------------------------
+
+def init_inbound_addresses():
+    conn = sqlite3.connect(DB_FILE)
+    conn.executescript('''
+    CREATE TABLE IF NOT EXISTS inbound_addresses (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL UNIQUE,
+        local_part TEXT NOT NULL UNIQUE,
+        forward INTEGER DEFAULT 1,
+        received INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    ''')
+    conn.commit()
+    conn.close()
+
+init_inbound_addresses()
+
+_INBOUND_COLS = ["id", "user_id", "local_part", "forward", "received", "created_at"]
+
+
+def create_inbound_address(user_id: int, local_part: str) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        conn.execute("INSERT INTO inbound_addresses (user_id, local_part) VALUES (?, ?)", (user_id, local_part.lower()))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return None
+    conn.close()
+    return get_inbound_address(user_id)
+
+
+def get_inbound_address(user_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(f"SELECT {', '.join(_INBOUND_COLS)} FROM inbound_addresses WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return dict(zip(_INBOUND_COLS, row)) if row else None
+
+
+def get_user_id_by_local_part(local_part: str) -> Optional[int]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT user_id FROM inbound_addresses WHERE local_part=?", ((local_part or "").lower(),)).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def delete_inbound_address(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("DELETE FROM inbound_addresses WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def set_inbound_forward(user_id: int, enabled: bool):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE inbound_addresses SET forward=? WHERE user_id=?", (1 if enabled else 0, user_id))
+    conn.commit()
+    conn.close()
+
+
+def bump_inbound_received(user_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE inbound_addresses SET received=received+1 WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_research_players_for_source(tournament_source: str) -> List[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    cols = ["id", "start_rank", "name", "title", "fide_id", "fide_rating", "country"]
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM player_research WHERE tournament_source=? ORDER BY start_rank",
+                        (tournament_source,)).fetchall()
+    conn.close()
+    return [dict(zip(cols, r)) for r in rows]

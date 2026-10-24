@@ -30,7 +30,7 @@
           <td>{% if t.country_code %}<span class="badge bg-success">{{ t.country_code }}</span>{% else %}<span class="text-muted small">Global</span>{% endif %}</td>
           <td><span class="badge bg-secondary">{{ t.source }}</span></td>
           <td class="small">{% if t.info_url %}<a href="{{ t.info_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
-          <td class="small">{% if t.pairings_url %}<a href="{{ t.pairings_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}</td>
+          <td class="small">{% if t.pairings_url %}<a href="{{ t.pairings_url }}" target="_blank" rel="noopener">Link</a>{% else %}—{% endif %}{% if t.broadcast_url %} · <a href="{{ t.broadcast_url }}" target="_blank" rel="noopener" class="text-danger">Live</a>{% endif %}</td>
           <td>
             <span class="badge {% if t.active %}bg-success{% else %}bg-secondary{% endif %}">
               {% if t.active %}Active{% else %}Hidden{% endif %}
@@ -106,6 +106,10 @@
           <input type="url" name="pairings_url" id="new-pairings-url" class="form-control"
                  placeholder="https://...">
         </div>
+        <div class="col-sm-6">
+          <label class="form-label small">Live Broadcast URL <span class="text-muted">(optional)</span></label>
+          <input type="url" name="broadcast_url" id="new-broadcast-url" class="form-control" placeholder="https://lichess.org/broadcast/...">
+        </div>
         <div class="col-sm-3">
           <label class="form-label small">Country <span class="text-muted">(leave blank = global)</span></label>
           <select name="country_code" class="form-select">
@@ -175,6 +179,10 @@
               <label class="form-label small">Pairings URL</label>
               <input type="url" name="pairings_url" id="edit-pairings-url" class="form-control">
             </div>
+            <div class="col-sm-6">
+              <label class="form-label small">Live Broadcast URL</label>
+              <input type="url" name="broadcast_url" id="edit-broadcast-url" class="form-control">
+            </div>
             <div class="col-sm-3">
               <label class="form-label small">Country <span class="text-muted">(blank = global)</span></label>
               <select name="country_code" id="edit-cc" class="form-select">
@@ -207,6 +215,7 @@ function openEdit(t) {
   document.getElementById('edit-description').value = t.description || '';
   document.getElementById('edit-info-url').value    = t.info_url    || '';
   document.getElementById('edit-pairings-url').value= t.pairings_url|| '';
+  document.getElementById('edit-broadcast-url').value = t.broadcast_url || '';
   document.getElementById('edit-order').value       = t.display_order ?? 0;
   document.getElementById('edit-cc').value          = t.country_code  || '';
   bootstrap.Modal.getOrCreateInstance(document.getElementById('editModal')).show();

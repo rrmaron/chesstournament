@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-_APP_MODULES = ["main", "database", "auth", "trf_builder", "fide", "notify", "pgn_harvester", "mail_reader"]
+_APP_MODULES = ["main", "database", "auth", "trf_builder", "fide", "notify", "pgn_harvester", "mail_reader", "inbound_mail", "swiss_pairing"]
 
 
 def _fresh_import(monkeypatch, tmp_path, *, secret_key="test-secret-key", extra_env=None):

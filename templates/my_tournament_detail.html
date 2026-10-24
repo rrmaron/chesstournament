@@ -49,6 +49,16 @@
         {% else %}
           <p class="small text-muted">Import the entry list to predict your pairings. Chess-results links are read directly; other entry-list pages are read by the AI{% if not claude_ready %} (not configured on this server){% endif %}.</p>
         {% endif %}
+        {% if swiss %}
+        <div class="alert alert-warning py-2 mt-2 mb-2">
+          <strong>Round {{ swiss.predict_round }} by USCF rules:</strong>
+          {% if swiss.my_board %}board {{ swiss.my_board.board }}, <strong>{{ swiss.my_color }}</strong> vs <strong>{{ swiss.my_opponent.name }}</strong>{% if swiss.my_opponent.rating %} ({{ swiss.my_opponent.rating }}){% endif %}
+          {% elif swiss.my_bye %}you are predicted to get the bye
+          {% else %}your seed isn't in the imported results yet{% endif %}.
+          {% if swiss.in_progress %}<span class="small">Some round {{ swiss.after_round }} games are still in progress.</span>{% endif %}
+          <a class="small ms-1" href="/research-players/simulate?tournament_source={{ t.tournament_source | urlencode }}&my_rank={{ t.my_start_rank }}">Full board list</a>
+        </div>
+        {% endif %}
         <form method="post" action="/my-tournaments/{{ t.id }}/entries" class="mt-3">
           <div class="mb-2"><label class="form-label small mb-1">Entry list link</label>
             <input type="url" name="entry_list_url" class="form-control form-control-sm" value="{{ t.entry_list_url }}" placeholder="https://…/advance-entries"></div>
