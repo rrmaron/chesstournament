@@ -6166,3 +6166,298 @@ def _swiss_prediction(tournament_source: str, my_rank: int = 0) -> Optional[dict
         "in_progress": any((g.get("result") or "*") == "*" for g in results[last]),
         "my_bye": bool(res["bye"] and my_rank and res["bye"] == my_rank),
     }
+
+
+# ---------------------------------------------------------------------------
+# Game review: engine analysis + eval chart, AI coach notes, opponent
+# scouting and the season dashboard (see game_review.py for the logic)
+# ---------------------------------------------------------------------------
+
+import game_review as gr
+from database import (
+    get_game_analysis, request_game_analysis, count_pending_analyses, queue_position,
+    claim_next_analysis, set_analysis_progress, finish_game_analysis, fail_game_analysis,
+    save_coach_notes, get_analyses_for_games, get_review_statuses, find_games_for_name,
+    find_pgn_game_by_hash, get_pgn_game,
+)
+
+ANALYSIS_DEPTH = int(os.environ.get("ANALYSIS_DEPTH", "15"))
+ANALYSIS_THREADS = int(os.environ.get("ANALYSIS_THREADS", "1"))
+ANALYSIS_HASH_MB = int(os.environ.get("ANALYSIS_HASH_MB", "64"))
+MAX_PENDING_PER_USER = int(os.environ.get("ANALYSIS_MAX_PENDING", "40"))
+COACH_NOTES_MODEL = os.environ.get("COACH_NOTES_MODEL", "claude-opus-5-5")
+
+
+def _review_redirect(gid: int, msg: str = "", err: str = "") -> RedirectResponse:
+    from urllib.parse import urlencode
+    q = urlencode({k: v for k, v in (("msg", msg), ("err", err)) if v})
+    return RedirectResponse(f"/review/{gid}" + (f"?{q}" if q else ""), status_code=303)
+
+
+def _can_write_notes(user: dict) -> bool:
+    return user.get("role") in ("coach", "admin")
+
+
+def _queue_review(gid: int, user: dict) -> str:
+    """Queue one game, honouring the per-user cap (admins are uncapped)."""
+    if user.get("role") != "admin" and count_pending_analyses(user["id"]) >= MAX_PENDING_PER_USER:
+        return "capped"
+    return request_game_analysis(gid, user["id"], ANALYSIS_DEPTH)
+
+
+def _notes_for(row: Optional[dict]) -> dict:
+    return (row or {}).get("notes") or {}
+
+
+def _run_one_analysis(job: dict):
+    gid = job["pgn_game_id"]
+    raw = get_pgn_game_raw(gid)
+    if raw is None:
+        fail_game_analysis(gid, "Game no longer exists")
+        return
+    last = {"pct": -10}
+
+    def progress(i, n):
+        pct = int(100 * i / max(n, 1))
+        if pct - last["pct"] >= 10:
+            last["pct"] = pct
+            set_analysis_progress(gid, pct)
+
+    try:
+        data = gr.run_engine_analysis(raw, depth=job.get("depth") or ANALYSIS_DEPTH,
+                                      threads=ANALYSIS_THREADS, hash_mb=ANALYSIS_HASH_MB, progress=progress)
+        notes = _notes_for(job)
+        if notes.get("source_pgn"):
+            # Imported annotations: layer the engine marks onto the original
+            # annotated text so its hand-written lines and comments survive.
+            annotated = gr.annotated_pgn(notes["source_pgn"], data)
+        else:
+            annotated = gr.annotated_pgn(raw, data, notes)
+        finish_game_analysis(gid, data, annotated)
+    except Exception as e:
+        logging.warning("game review %s failed: %s", gid, e)
+        fail_game_analysis(gid, str(e) or e.__class__.__name__)
+
+
+async def _analysis_loop():
+    """Work through queued reviews one at a time (the engine needs the CPU)."""
+    if not gr.find_stockfish():
+        logging.warning("Stockfish not found; game reviews will stay queued")
+        return
+    while True:
+        try:
+            job = claim_next_analysis()
+            if job is None:
+                await asyncio.sleep(5)
+                continue
+            await asyncio.to_thread(_run_one_analysis, job)
+        except Exception as e:
+            logging.warning("analysis loop: %s", e)
+            await asyncio.sleep(10)
+
+
+@app.on_event("startup")
+async def start_analysis_loop():
+    asyncio.create_task(_analysis_loop())
+
+
+@app.get("/review/{gid}", response_class=HTMLResponse)
+def review_page(request: Request, gid: int, msg: str = "", err: str = "", user: dict = Depends(require_login)):
+    game = get_pgn_game(gid)
+    raw = get_pgn_game_raw(gid)
+    if not game or raw is None:
+        raise HTTPException(404, "Game not found")
+    row = get_game_analysis(gid)
+    data = (row or {}).get("data") if row and row.get("status") == "done" else None
+    notes = _notes_for(row)
+    my_color = _my_color_in_game(_my_player_names(user), game.get("white", ""), game.get("black", ""))
+    parsed = gr.read_game(raw)
+    moves = []
+    if parsed is not None:
+        board = parsed.board()
+        times = gr.think_times(parsed)
+        for i, mv in enumerate(parsed.mainline_moves()):
+            moves.append({"ply": i + 1, "san": board.san(mv), "label": gr.move_label(i + 1, board.san(mv)),
+                          "think_s": times[i] if i < len(times) else None})
+            board.push(mv)
+    return templates.TemplateResponse(request=request, name="game_review.html", context={
+        "request": request, "game": game, "row": row, "data": data, "notes": notes,
+        "moves": moves, "pgn": raw, "my_color": my_color, "msg": msg, "err": err,
+        "position": queue_position(gid) if row and row.get("status") in ("queued", "running") else 0,
+        "engine_ready": bool(gr.find_stockfish()), "claude_ready": bool(_claude_auth_mode()),
+        "can_write_notes": _can_write_notes(user), "fmt_secs": gr.fmt_secs,
+        "review_json": json.dumps({
+            "plies": (data or {}).get("plies") or [], "chart": (data or {}).get("chart") or None,
+            "notes": {str(k): v for k, v in (notes.get("notes") or {}).items()},
+            "moves": moves,
+        }),
+    })
+
+
+@app.post("/review/{gid}/analyze")
+def review_analyze(gid: int, user: dict = Depends(require_login)):
+    if not get_pgn_game(gid):
+        raise HTTPException(404, "Game not found")
+    status = _queue_review(gid, user)
+    if status == "capped":
+        return _review_redirect(gid, err=f"You already have {MAX_PENDING_PER_USER} reviews waiting; try again when they finish.")
+    return _review_redirect(gid, msg="Engine review queued." if status == "queued" else "")
+
+
+@app.get("/api/review/{gid}/status")
+def review_status(gid: int, user: dict = Depends(require_login)):
+    row = get_game_analysis(gid) or {}
+    return JSONResponse({"status": row.get("status") or "none", "progress": row.get("progress") or 0,
+                         "position": queue_position(gid), "error": row.get("error") or ""})
+
+
+@app.post("/review/{gid}/notes")
+async def review_coach_notes(gid: int, user: dict = Depends(require_login)):
+    if not _can_write_notes(user):
+        raise HTTPException(403, "Coach role required")
+    if not _claude_auth_mode():
+        return _review_redirect(gid, err="The AI is not configured on this server.")
+    row = get_game_analysis(gid)
+    if not row or row.get("status") != "done" or not row.get("data"):
+        return _review_redirect(gid, err="Run the engine review first; the notes are written from it.")
+    game = get_pgn_game(gid) or {}
+    names = _my_player_names(user)
+    color = _my_color_in_game(names, game.get("white", ""), game.get("black", "")) or ""
+    player = (game.get("white") if color == "white" else game.get("black")) if color else ""
+    try:
+        notes, response = await asyncio.to_thread(gr.generate_coach_notes, _anthropic_client(), row["data"],
+                                                  player, color, COACH_NOTES_MODEL)
+    except Exception as e:
+        logging.warning("coach notes %s: %s", gid, e)
+        return _review_redirect(gid, err=f"Coach notes failed: {e}")
+    usage = _claude_usage_cost(getattr(response, "model", ""), getattr(response, "usage", None))
+    raw = get_pgn_game_raw(gid) or ""
+    save_coach_notes(gid, notes, "claude", gr.annotated_pgn(raw, row["data"], notes), usage)
+    return _review_redirect(gid, msg=f"Coach notes written ({usage['summary']}).")
+
+
+@app.get("/review/{gid}/pgn")
+def review_download(gid: int, user: dict = Depends(require_login)):
+    game = get_pgn_game(gid)
+    raw = get_pgn_game_raw(gid)
+    if not game or raw is None:
+        raise HTTPException(404, "Game not found")
+    row = get_game_analysis(gid) or {}
+    text = row.get("annotated_pgn")
+    if not text and row.get("notes"):
+        text = gr.annotated_pgn(raw, {"plies": []}, row["notes"])
+    name = re.sub(r"[^A-Za-z0-9]+", "_", f"{game.get('white', '')}_{game.get('black', '')}_{game.get('date', '')}").strip("_")
+    return Response(content=text or raw, media_type="application/x-chess-pgn",
+                    headers={"Content-Disposition": f'attachment; filename="{name or "game"}_review.pgn"'})
+
+
+@app.post("/my-tournaments/{tid}/review-all")
+def my_tournament_review_all(tid: int, user: dict = Depends(require_login)):
+    _own_tracked(tid, user)
+    queued = capped = 0
+    for g in list_tracked_games(tid):
+        if g.get("pgn_game_id"):
+            status = _queue_review(g["pgn_game_id"], user)
+            queued += status == "queued"
+            capped += status == "capped"
+    msg = f"Queued {queued} game(s) for engine review." + (" Some were skipped: queue limit reached." if capped else "")
+    return _redirect_my(tid=tid, msg=msg)
+
+
+def _player_rows(name: str) -> list:
+    return gr.player_games(find_games_for_name(name), name)
+
+
+@app.get("/scout", response_class=HTMLResponse)
+def scout_page(request: Request, name: str = "", user: dict = Depends(require_login)):
+    report = None
+    if name.strip():
+        report = gr.scout_report(find_games_for_name(name.strip()), name.strip(), _my_player_names(user))
+        statuses = get_review_statuses([r["id"] for r in report["recent"]])
+        for r in report["recent"] + report["head_to_head"]:
+            r["review"] = statuses.get(r["id"], "")
+    return templates.TemplateResponse(request=request, name="scout.html", context={
+        "request": request, "name": name.strip(), "report": report, "my_names": _my_player_names(user),
+    })
+
+
+@app.get("/season", response_class=HTMLResponse)
+def season_page(request: Request, player: str = "", since: str = "", msg: str = "", err: str = "",
+                user: dict = Depends(require_login)):
+    names = _my_player_names(user)
+    player = player.strip() or (names[0] if names else "")
+    stats, since_norm = None, ""
+    if player:
+        rows = _player_rows(player)
+        m = re.match(r"(\d{4})[-./](\d{2})[-./](\d{2})", since or "")
+        if m:
+            since_norm = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+            rows = [r for r in rows if (r.get("date") or "").replace("-", ".") >= since_norm]
+        stats = gr.season_stats(rows, get_analyses_for_games([r["id"] for r in rows]))
+    return templates.TemplateResponse(request=request, name="season.html", context={
+        "request": request, "player": player, "since": since, "stats": stats, "msg": msg, "err": err,
+        "is_admin": user.get("role") == "admin",
+    })
+
+
+@app.post("/season/review-all")
+def season_review_all(player: str = Form(...), since: str = Form(""), user: dict = Depends(require_login)):
+    from urllib.parse import urlencode
+    rows = _player_rows(player.strip())
+    m = re.match(r"(\d{4})[-./](\d{2})[-./](\d{2})", since or "")
+    if m:
+        cut = f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+        rows = [r for r in rows if (r.get("date") or "").replace("-", ".") >= cut]
+    queued = capped = 0
+    for r in rows:
+        status = _queue_review(r["id"], user)
+        queued += status == "queued"
+        capped += status == "capped"
+    msg = f"Queued {queued} game(s) for engine review." + (" Queue limit reached; queue the rest later." if capped else "")
+    return RedirectResponse("/season?" + urlencode({"player": player, "since": since, "msg": msg}), status_code=303)
+
+
+def _import_annotated_text(raw: str, label: str, user: dict, queue_engine: bool) -> dict:
+    """Store each game (moves + clocks only) in the archive and keep its
+    comments as imported coach notes; optionally queue the engine review."""
+    sid = ensure_pgn_source("upload", f"annotated:{user['id']}:{uuid.uuid4().hex}", label)
+    stored = notes_saved = queued = 0
+    for text in ph.split_pgn(raw):
+        clean = gr.strip_annotations(text)
+        if not clean:
+            continue
+        d = ph.pgn_to_game_dict(clean, sid)
+        if not d:
+            continue
+        insert_pgn_games([d])
+        gid = find_pgn_game_by_hash(d["game_hash"])
+        if not gid:
+            continue
+        stored += 1
+        intro, by_ply = gr.comments_by_ply(text)
+        if intro or by_ply:
+            save_coach_notes(gid, {"intro": intro, "notes": {str(k): v for k, v in by_ply.items()},
+                                   "lessons": [], "source_pgn": text}, "imported", text)
+            notes_saved += 1
+        if queue_engine and request_game_analysis(gid, user["id"], ANALYSIS_DEPTH) == "queued":
+            queued += 1
+    update_pgn_source_fetched(sid, stored)
+    return {"stored": stored, "notes": notes_saved, "queued": queued}
+
+
+@app.post("/review/import-annotated")
+async def review_import_annotated(pgn_file: UploadFile = File(...), label: str = Form(""),
+                                  queue_engine: str = Form(""), user: dict = Depends(require_admin)):
+    from urllib.parse import urlencode
+    data = await pgn_file.read()
+    if not data or len(data) > 50 * 1024 * 1024:
+        return RedirectResponse("/season?" + urlencode({"err": "PGN file must be between 1 byte and 50 MB"}), status_code=303)
+    try:
+        raw = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raw = data.decode("latin-1")
+    name = label.strip() or (pgn_file.filename or "Annotated PGN")
+    res = await asyncio.to_thread(_import_annotated_text, raw, name, user, bool(queue_engine))
+    msg = (f"{res['stored']} game(s) imported from {name}; notes kept on {res['notes']}"
+           + (f"; {res['queued']} queued for engine review" if queue_engine else "") + ".")
+    return RedirectResponse("/season?" + urlencode({"msg": msg}), status_code=303)

@@ -31,7 +31,8 @@
         {% if prediction %}
           <p class="mb-1">You are seed <strong>#{{ t.my_start_rank }}</strong> of {{ prediction.total }}.</p>
           <p class="mb-2">Round 1 likely opponent: seed #{{ prediction.opponent_rank }}
-            {% if prediction.likely %}<strong>{{ prediction.likely.name }}</strong>{% if prediction.likely.fide_rating %} ({{ prediction.likely.fide_rating }}){% endif %}{% endif %}</p>
+            {% if prediction.likely %}<strong>{{ prediction.likely.name }}</strong>{% if prediction.likely.fide_rating %} ({{ prediction.likely.fide_rating }}){% endif %}
+            <a class="small ms-1" href="/scout?name={{ prediction.likely.name | urlencode }}">Scout</a>{% endif %}</p>
           <table class="table table-sm mb-2">
             <thead><tr><th>#</th><th>Player</th><th>Rating</th></tr></thead>
             <tbody>
@@ -53,6 +54,7 @@
         <div class="alert alert-warning py-2 mt-2 mb-2">
           <strong>Round {{ swiss.predict_round }} by USCF rules:</strong>
           {% if swiss.my_board %}board {{ swiss.my_board.board }}, <strong>{{ swiss.my_color }}</strong> vs <strong>{{ swiss.my_opponent.name }}</strong>{% if swiss.my_opponent.rating %} ({{ swiss.my_opponent.rating }}){% endif %}
+          <a class="small" href="/scout?name={{ swiss.my_opponent.name | urlencode }}">Scout</a>
           {% elif swiss.my_bye %}you are predicted to get the bye
           {% else %}your seed isn't in the imported results yet{% endif %}.
           {% if swiss.in_progress %}<span class="small">Some round {{ swiss.after_round }} games are still in progress.</span>{% endif %}
@@ -82,16 +84,20 @@
           <tr>
             <td>{{ g.round or '' }}</td><td class="small">{{ g.played_on }}</td>
             <td>{% if g.my_color %}<span class="badge {% if g.my_color == 'white' %}bg-light text-dark border{% else %}bg-dark{% endif %}">{{ g.my_color }}</span>{% endif %}</td>
-            <td>{{ g.opponent_name }}{% if g.opponent_rating %} <span class="text-muted small">({{ g.opponent_rating }})</span>{% endif %}</td>
+            <td><a href="/scout?name={{ g.opponent_name | urlencode }}" title="Scout this opponent" class="text-reset">{{ g.opponent_name }}</a>{% if g.opponent_rating %} <span class="text-muted small">({{ g.opponent_rating }})</span>{% endif %}</td>
             <td>{{ g.result }}</td>
             <td class="text-end text-nowrap">
-              {% if g.pgn_game_id %}<a class="small" href="/api/player-games/game/{{ g.pgn_game_id }}" target="_blank">PGN</a>{% endif %}
+              {% if g.pgn_game_id %}<a class="small me-1" href="/review/{{ g.pgn_game_id }}">Review</a><a class="small" href="/api/player-games/game/{{ g.pgn_game_id }}" target="_blank">PGN</a>{% endif %}
               <form method="post" action="/my-tournaments/{{ t.id }}/games/{{ g.id }}/remove" class="d-inline ms-1"><button class="btn btn-sm btn-link text-danger p-0">✕</button></form>
             </td>
           </tr>
           {% endfor %}
           </tbody>
         </table>
+        <form method="post" action="/my-tournaments/{{ t.id }}/review-all" class="mb-2">
+          <button class="btn btn-sm btn-outline-primary">Engine-review all games</button>
+          <span class="small text-muted ms-1">Each game gets the eval chart, flagged mistakes and best lines.</span>
+        </form>
         {% else %}
         <p class="small text-muted">No games yet. Games emailed from ChessNoteR (or any PGN email) attach here automatically when their date falls during this tournament and you are one of the players.</p>
         {% endif %}

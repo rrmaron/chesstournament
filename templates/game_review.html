@@ -1,0 +1,285 @@
+{% extends "base.html" %}
+{% block title %}Review: {{ game.white }} – {{ game.black }}{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/chessboard-1.0.0.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+  .mv { cursor: pointer; padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
+  .mv:hover { background: #e9ecef; }
+  .mv.active { background: #0d6efd; color: #fff; }
+  .mv.blunder { color: #dc3545; font-weight: 600; }
+  .mv.mistake { color: #fd7e14; font-weight: 600; }
+  .mv.inaccuracy { color: #b58900; }
+  .mv.active.blunder, .mv.active.mistake, .mv.active.inaccuracy { color: #fff; }
+  .movelist { max-height: 420px; overflow-y: auto; line-height: 1.9; }
+  .num { color: #6c757d; margin-left: 4px; }
+  #manhattan rect { cursor: pointer; }
+  .tag { font-size: .75rem; }
+</style>
+
+<nav class="small mb-2"><a href="/season">Season</a> › Game review</nav>
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+  <div>
+    <h2 class="h4 mb-1">{{ game.white }}{% if game.white_elo %} <span class="text-muted">({{ game.white_elo }})</span>{% endif %}
+      – {{ game.black }}{% if game.black_elo %} <span class="text-muted">({{ game.black_elo }})</span>{% endif %}
+      <span class="badge bg-secondary ms-1">{{ game.result }}</span></h2>
+    <div class="text-muted small">{{ game.event }}{% if game.round %} · Round {{ game.round }}{% endif %}{% if game.date %} · {{ game.date }}{% endif %}{% if game.opening %} · {{ game.eco }} {{ game.opening }}{% endif %}</div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if not row or row.status in ('none', 'error') %}
+      <form method="post" action="/review/{{ game.id }}/analyze">
+        <button class="btn btn-primary btn-sm" {% if not engine_ready %}disabled title="Stockfish is not installed on this server"{% endif %}>Run engine review</button>
+      </form>
+    {% endif %}
+    {% if data and can_write_notes %}
+      <form method="post" action="/review/{{ game.id }}/notes" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Writing notes…'">
+        <button class="btn btn-outline-primary btn-sm" {% if not claude_ready %}disabled title="The AI is not configured on this server"{% endif %}>{% if notes and row.notes_source == 'claude' %}Rewrite coach notes{% else %}Write coach notes (AI){% endif %}</button>
+      </form>
+    {% endif %}
+    <a class="btn btn-outline-secondary btn-sm" href="/review/{{ game.id }}/pgn">Download {% if data or notes %}annotated {% endif %}PGN</a>
+    {% if game.white and game.black %}
+      <a class="btn btn-outline-secondary btn-sm" href="/scout?name={{ (game.black if my_color == 'white' else game.white) | urlencode }}">Scout {{ game.black if my_color == 'white' else game.white }}</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if msg %}<div class="alert alert-success py-2">{{ msg }}</div>{% endif %}
+{% if err %}<div class="alert alert-danger py-2">{{ err }}</div>{% endif %}
+{% if row and row.status == 'error' %}<div class="alert alert-warning py-2">The last engine review failed: {{ row.error }}</div>{% endif %}
+{% if row and row.status in ('queued', 'running') %}
+  <div class="alert alert-info py-2" id="queue-box">
+    {% if row.status == 'running' %}Engine review running…{% else %}Engine review queued{% if position %} ({{ position }} ahead){% endif %}…{% endif %}
+    <div class="progress mt-2" style="height:6px"><div class="progress-bar" id="queue-bar" style="width: {{ row.progress or 0 }}%"></div></div>
+    <div class="small text-muted mt-1">This page refreshes when it is done.{% if not engine_ready %} Stockfish is not installed on this server, so nothing will run.{% endif %}</div>
+  </div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div id="board" style="width:100%"></div>
+    <div class="d-flex justify-content-between align-items-center mt-2">
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" data-nav="start">⏮</button>
+        <button class="btn btn-outline-secondary" data-nav="prev">◀</button>
+        <button class="btn btn-outline-secondary" data-nav="next">▶</button>
+        <button class="btn btn-outline-secondary" data-nav="end">⏭</button>
+        <button class="btn btn-outline-secondary" data-nav="flip">⇅</button>
+      </div>
+      <div class="small text-muted" id="ply-label"></div>
+    </div>
+    <div class="card mt-2"><div class="card-body py-2 small" id="ply-info"><span class="text-muted">Step through the game, or click a bar in the chart.</span></div></div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card mb-3">
+      <div class="card-header fw-semibold d-flex justify-content-between">
+        <span>Manhattan <span class="fw-normal text-muted small">— evaluation after each move, White's view, clipped at ±6</span></span>
+        {% if data %}<span class="small text-muted">depth {{ data.depth }}</span>{% endif %}
+      </div>
+      <div class="card-body p-2">
+        {% if data %}
+          <svg id="manhattan" width="100%" height="190" preserveAspectRatio="none"></svg>
+          <div class="small text-muted d-flex gap-3 flex-wrap">
+            <span><span style="color:#dc3545">●</span> blunder</span>
+            <span><span style="color:#fd7e14">●</span> mistake</span>
+            <span><span style="color:#b58900">●</span> inaccuracy</span>
+          </div>
+        {% else %}
+          <p class="text-muted small mb-0">The chart appears once the engine review has run.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if data %}
+    <div class="card mb-3">
+      <div class="card-body py-2">
+        <div class="table-responsive">
+        <table class="table table-sm mb-2 small">
+          <thead><tr><th></th><th title="Average centipawn loss per move">Avg loss</th><th title="Blunders">??</th><th title="Mistakes">?</th><th title="Inaccuracies">?!</th><th>Clock</th><th>Longest think</th></tr></thead>
+          <tbody>
+          {% for color in ['white', 'black'] %}{% set s = data.summary[color] %}
+            <tr{% if my_color == color %} class="table-primary"{% endif %}>
+              <td>{{ game.white if color == 'white' else game.black }}</td>
+              <td>{{ s.acpl }}</td><td>{{ s.blunders }}</td><td>{{ s.mistakes }}</td><td>{{ s.inaccuracies }}</td>
+              <td>{{ fmt_secs(s.time_used_s) }}</td>
+              <td>{% if s.longest_think %}{{ fmt_secs(s.longest_think[0]) }} on {{ s.longest_think[1] }}{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        {% if data.moments %}
+          <div class="fw-semibold small mb-1">Turning points</div>
+          <ul class="list-unstyled small mb-0">
+          {% for m in data.moments[:8] %}
+            <li class="mb-1"><a href="#" data-goto="{{ m.ply }}"><strong>{{ m.label }}</strong></a>
+              <span class="badge {% if m.kind == 'blunder' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ m.kind }}</span>
+              {{ m.before }} → {{ m.after }}{% if m.think_s is not none %} · {{ fmt_secs(m.think_s) }}{% endif %}
+              · better {{ m.best }}
+              {% for t in m.tags %}<span class="badge bg-light text-dark border tag">{{ t }}</span>{% endfor %}
+            </li>
+          {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if notes and (notes.intro or notes.lessons) %}
+    <div class="card mb-3">
+      <div class="card-header fw-semibold">Coach notes <span class="fw-normal text-muted small">{% if row.notes_source == 'claude' %}written by AI from the engine review{% elif row.notes_source == 'imported' %}imported annotation{% endif %}</span></div>
+      <div class="card-body small" style="white-space: pre-line">{{ notes.intro }}{% if notes.lessons %}
+
+<strong>Lessons</strong>
+{% for l in notes.lessons %}• {{ l }}
+{% endfor %}{% endif %}</div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header fw-semibold">Moves</div>
+      <div class="card-body movelist" id="movelist"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var R = {{ review_json | safe }};
+  var PGN = {{ pgn | tojson }};
+  var SYMBOL = {blunder: "??", mistake: "?", inaccuracy: "?!"};
+  var byPly = {};
+  (R.plies || []).forEach(function (p) { byPly[p.ply] = p; });
+  var moves = (R.moves || []).map(function (m) { return m.san; });
+  var startFen = null;
+  var hdr = PGN.match(/\[FEN "([^"]+)"\]/);
+  if (hdr) startFen = hdr[1];
+  var game = new Chess();
+  var board = Chessboard("board", {position: startFen || "start",
+    pieceTheme: "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png"});
+  {% if my_color == 'black' %}board.orientation("black");{% endif %}
+  var ply = 0;
+
+  function fmtSecs(s) {
+    if (s === null || s === undefined) return "";
+    var m = Math.floor(s / 60), r = s % 60;
+    return m + ":" + (r < 10 ? "0" : "") + r;
+  }
+  function esc(t) { var d = document.createElement("div"); d.textContent = t || ""; return d.innerHTML; }
+
+  function renderList() {
+    var html = "";
+    (R.moves || []).forEach(function (m) {
+      var p = byPly[m.ply] || {};
+      if (m.ply % 2 === 1) html += '<span class="num">' + ((m.ply + 1) / 2) + '.</span>';
+      else if (m.ply === 1) html += '<span class="num">1...</span>';
+      html += '<span class="mv ' + (p.kind || "") + '" data-ply="' + m.ply + '" title="' + esc((p.eval_str || "") + (m.think_s != null ? " · " + fmtSecs(m.think_s) : "")) + '">' +
+              esc(m.san) + (SYMBOL[p.kind] || "") + (R.notes[m.ply] ? ' <span class="text-primary">✎</span>' : "") + "</span> ";
+    });
+    document.getElementById("movelist").innerHTML = html || '<span class="text-muted">No moves.</span>';
+    document.querySelectorAll("#movelist .mv").forEach(function (el) {
+      el.addEventListener("click", function () { go(parseInt(el.dataset.ply, 10)); });
+    });
+  }
+
+  function info() {
+    var box = document.getElementById("ply-info");
+    var label = document.getElementById("ply-label");
+    if (ply === 0) { box.innerHTML = '<span class="text-muted">Start position.</span>'; label.textContent = ""; return; }
+    var m = R.moves[ply - 1], p = byPly[ply];
+    label.textContent = m.label + (m.think_s != null ? " · " + fmtSecs(m.think_s) : "");
+    var html = "<strong>" + esc(m.label) + (p && SYMBOL[p.kind] ? SYMBOL[p.kind] : "") + "</strong>";
+    if (p) {
+      html += " " + esc(p.eval_str);
+      if (p.best_san && p.best_san !== p.san) html += ' · engine preferred <strong>' + esc(p.best_san) + "</strong> (" + esc((p.cands[0] || {}).eval_str) + ")";
+      if (p.cands && p.cands.length) {
+        html += '<div class="mt-1 text-muted">';
+        p.cands.forEach(function (c) { html += "<div>" + esc(c.eval_str) + " " + esc(c.line) + "</div>"; });
+        html += "</div>";
+      }
+    }
+    if (R.notes[ply]) html += '<div class="mt-2">' + esc(R.notes[ply]) + "</div>";
+    box.innerHTML = html;
+  }
+
+  function go(n) {
+    ply = Math.max(0, Math.min(moves.length, n));
+    game = new Chess();
+    if (startFen) game.load(startFen);
+    for (var i = 0; i < ply; i++) game.move(moves[i], {sloppy: true});
+    board.position(game.fen());
+    document.querySelectorAll("#movelist .mv").forEach(function (el) {
+      el.classList.toggle("active", parseInt(el.dataset.ply, 10) === ply);
+    });
+    var act = document.querySelector("#movelist .mv.active");
+    if (act) act.scrollIntoView({block: "nearest"});
+    drawChart();
+    info();
+  }
+
+  function drawChart() {
+    var svg = document.getElementById("manhattan");
+    if (!svg || !R.chart) return;
+    var vals = R.chart.values, kinds = R.chart.kinds, n = vals.length || 1;
+    var W = 1000, H = 190, mid = H / 2, bw = W / n, NS = "http://www.w3.org/2000/svg";
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var axis = document.createElementNS(NS, "line");
+    axis.setAttribute("x1", 0); axis.setAttribute("x2", W); axis.setAttribute("y1", mid); axis.setAttribute("y2", mid);
+    axis.setAttribute("stroke", "#adb5bd"); axis.setAttribute("stroke-width", 1);
+    svg.appendChild(axis);
+    vals.forEach(function (v, i) {
+      var h = Math.max(1, Math.abs(v) / 6 * (mid - 6));
+      var r = document.createElementNS(NS, "rect");
+      r.setAttribute("x", i * bw + bw * 0.1); r.setAttribute("width", Math.max(1, bw * 0.8));
+      r.setAttribute("y", v >= 0 ? mid - h : mid); r.setAttribute("height", h);
+      var cur = (i + 1) === ply;
+      r.setAttribute("fill", cur ? "#0d6efd" : (v >= 0 ? "#ced4da" : "#343a40"));
+      var t = document.createElementNS(NS, "title");
+      t.textContent = R.chart.labels[i] + "  " + (v > 0 ? "+" : "") + v.toFixed(2);
+      r.appendChild(t);
+      r.addEventListener("click", function () { go(i + 1); });
+      svg.appendChild(r);
+      var k = kinds[i];
+      if (k) {
+        var c = document.createElementNS(NS, "circle");
+        c.setAttribute("cx", i * bw + bw / 2); c.setAttribute("cy", v >= 0 ? mid - h - 5 : mid + h + 5);
+        c.setAttribute("r", Math.min(5, Math.max(2.5, bw * 0.35)));
+        c.setAttribute("fill", k === "blunder" ? "#dc3545" : k === "mistake" ? "#fd7e14" : "#e0b000");
+        svg.appendChild(c);
+      }
+    });
+  }
+
+  document.querySelectorAll("[data-nav]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var a = b.dataset.nav;
+      if (a === "start") go(0); else if (a === "prev") go(ply - 1); else if (a === "next") go(ply + 1);
+      else if (a === "end") go(moves.length); else if (a === "flip") board.flip();
+    });
+  });
+  document.querySelectorAll("[data-goto]").forEach(function (a) {
+    a.addEventListener("click", function (e) { e.preventDefault(); go(parseInt(a.dataset.goto, 10)); });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.key === "ArrowLeft") go(ply - 1); else if (e.key === "ArrowRight") go(ply + 1);
+  });
+  window.addEventListener("resize", function () { board.resize(); });
+  renderList();
+  go(0);
+
+  {% if row and row.status in ('queued', 'running') %}
+  setInterval(function () {
+    fetch("/api/review/{{ game.id }}/status").then(function (r) { return r.json(); }).then(function (s) {
+      var bar = document.getElementById("queue-bar");
+      if (bar) bar.style.width = (s.progress || 0) + "%";
+      if (s.status === "done" || s.status === "error") location.reload();
+    }).catch(function () {});
+  }, 5000);
+  {% endif %}
+})();
+</script>
+{% endblock %}
