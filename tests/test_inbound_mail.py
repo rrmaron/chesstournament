@@ -131,3 +131,37 @@ def test_to_message_reads_inline_pgn_and_html(app_module):
                          "created_at": "2026-11-07T20:00:00Z", "message_id": "<m@x>"}, [], 5)
     assert msg["uid"] == 5 and msg["from_addr"] == "a@b.c" and msg["received_at"] == "2026-11-07 20:00:00"
     assert len(msg["pgns"]) == 1 and '[White "Mehta, Nakshwin"]' in msg["pgns"][0]
+
+
+def test_receiving_key_overrides_sending_key(client, app_module, monkeypatch):
+    """Resend sending-only keys get 401 on the receiving API, so a separate
+    full-access key can be configured; without it the sending key is used."""
+    uid = _setup_user(app_module, client)
+    _configure(app_module, monkeypatch)
+    client.post("/my-tournaments/inbound/enable")
+    address = f"{app_module.get_inbound_address(uid)['local_part']}@{DOMAIN}"
+    _fake_resend(app_module, monkeypatch, address)
+    used = []
+    orig_email, orig_att = app_module.im.fetch_received_email, app_module.im.fetch_attachments
+
+    async def spy_email(api_key, email_id):
+        used.append(api_key)
+        return await orig_email(api_key, email_id)
+
+    async def spy_att(api_key, email_id):
+        used.append(api_key)
+        return await orig_att(api_key, email_id)
+
+    monkeypatch.setattr(app_module.im, "fetch_received_email", spy_email)
+    monkeypatch.setattr(app_module.im, "fetch_attachments", spy_att)
+    monkeypatch.setattr(app_module._notify, "RESEND_API_KEY", "re_send_only")
+    event = {"email_id": "em_k1", "to": [address], "message_id": "<k1@x>"}
+
+    monkeypatch.setattr(app_module, "RESEND_RECEIVING_API_KEY", "")
+    assert _post_event(client, app_module, event).status_code == 200
+    assert used == ["re_send_only", "re_send_only"]
+
+    used.clear()
+    monkeypatch.setattr(app_module, "RESEND_RECEIVING_API_KEY", "re_full_access")
+    assert _post_event(client, app_module, {**event, "email_id": "em_k2", "message_id": "<k2@x>"}).status_code == 200
+    assert used == ["re_full_access", "re_full_access"]

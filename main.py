@@ -6039,6 +6039,9 @@ from database import (
 
 INBOUND_EMAIL_DOMAIN = os.environ.get("INBOUND_EMAIL_DOMAIN", "").strip().lower()
 RESEND_INBOUND_WEBHOOK_SECRET = os.environ.get("RESEND_INBOUND_WEBHOOK_SECRET", "")
+# Reading received mail needs a Resend key with full access; sending-only keys get 401.
+# Set this to keep RESEND_API_KEY restricted to sending; falls back to RESEND_API_KEY.
+RESEND_RECEIVING_API_KEY = os.environ.get("RESEND_RECEIVING_API_KEY", "")
 
 
 def _inbound_context(user: dict) -> dict:
@@ -6083,8 +6086,9 @@ async def _handle_inbound_email(user_id: int, email_id: str) -> str:
     user = get_user_profile(user_id)
     if not user:
         return "unknown-user"
-    email = await im.fetch_received_email(_notify.RESEND_API_KEY, email_id)
-    attachments = await im.fetch_attachments(_notify.RESEND_API_KEY, email_id)
+    api_key = RESEND_RECEIVING_API_KEY or _notify.RESEND_API_KEY
+    email = await im.fetch_received_email(api_key, email_id)
+    attachments = await im.fetch_attachments(api_key, email_id)
     msg = im.to_message(email, attachments, im.uid_from_email_id(email_id))
     account = {"id": -user_id}  # inbound messages use a per-user pseudo account for dedupe
     kind = await asyncio.get_event_loop().run_in_executor(None, _process_email_message, user, account, msg)
