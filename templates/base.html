@@ -40,6 +40,13 @@
           <a class="nav-link text-light" href="/coaching">Coaching</a>
           <a class="nav-link text-light" href="/courses">Courses</a>
           <a class="nav-link text-light" href="/my-tournaments">My Tournaments</a>
+          <div class="dropdown">
+            <a class="nav-link text-light dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">Game Review</a>
+            <ul class="dropdown-menu dropdown-menu-dark">
+              <li><a class="dropdown-item" href="/season">Season dashboard</a></li>
+              <li><a class="dropdown-item" href="/scout">Scout an opponent</a></li>
+            </ul>
+          </div>
           <a class="nav-link text-light" href="/profile">My Profile</a>
           {% if u.role in ("td", "admin") %}
             <a class="nav-link text-light" href="/tournaments">Tournaments</a>

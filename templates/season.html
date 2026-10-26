@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Season{% if player %}: {{ player }}{% endif %}{% endblock %}
+{% macro wdl(x) -%}
+  {{ x.pts }}/{{ x.games }} <span class="text-muted small">(+{{ x.w }} ={{ x.d }} −{{ x.l }})</span>
+{%- endmacro %}
+{% block content %}
+<h2 class="h4">Season dashboard</h2>
+<form class="row g-2 mb-3" method="get" action="/season">
+  <div class="col-sm-6 col-md-4"><input class="form-control" name="player" value="{{ player }}" placeholder="Player name as on pairings"></div>
+  <div class="col-sm-3 col-md-2"><input class="form-control" name="since" value="{{ since }}" placeholder="Since 2026-01-01"></div>
+  <div class="col-auto"><button class="btn btn-primary">Show</button></div>
+  {% if not player %}<div class="col-12 small text-muted">Set your player name on <a href="/profile">My Profile</a> to open this page on your own games.</div>{% endif %}
+</form>
+
+{% if msg %}<div class="alert alert-success py-2">{{ msg }}</div>{% endif %}
+{% if err %}<div class="alert alert-danger py-2">{{ err }}</div>{% endif %}
+
+{% if stats %}
+  {% if not stats.total.games %}
+    <div class="alert alert-warning">No games found for <strong>{{ player }}</strong>{% if since %} since {{ since }}{% endif %}.</div>
+  {% else %}
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-3"><div class="card"><div class="card-body py-2"><div class="small text-muted">Score</div><div class="fs-5">{{ wdl(stats.total) }}</div></div></div></div>
+    <div class="col-6 col-md-3"><div class="card"><div class="card-body py-2"><div class="small text-muted">Performance</div><div class="fs-5">{{ stats.perf or '—' }}</div></div></div></div>
+    <div class="col-6 col-md-3"><div class="card"><div class="card-body py-2"><div class="small text-muted">White / Black</div><div>{{ wdl(stats.white) }}<br>{{ wdl(stats.black) }}</div></div></div></div>
+    <div class="col-6 col-md-3"><div class="card"><div class="card-body py-2"><div class="small text-muted">Engine-reviewed games</div>
+      <div class="fs-5">{{ stats.reviewed }} / {{ stats.total.games }}</div>
+      {% if stats.reviewed %}<div class="small text-muted">avg loss {{ stats.avg_acpl }} · {{ stats.blunders_per_game }} blunders, {{ stats.mistakes_per_game }} mistakes per game</div>{% endif %}
+    </div></div></div>
+  </div>
+
+  {% if stats.reviewed < stats.total.games %}
+  <form method="post" action="/season/review-all" class="mb-3">
+    <input type="hidden" name="player" value="{{ player }}"><input type="hidden" name="since" value="{{ since }}">
+    <button class="btn btn-outline-primary btn-sm">Queue engine review for the {{ stats.total.games - stats.reviewed }} unreviewed game(s)</button>
+    <span class="small text-muted ms-2">One game at a time in the background, about a minute or two each.</span>
+  </form>
+  {% endif %}
+
+  <div class="row g-3 mb-3">
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold">Recurring patterns <span class="fw-normal text-muted small">from engine-reviewed games</span></div>
+        {% if stats.patterns %}
+        <ul class="list-group list-group-flush small">
+          {% for p in stats.patterns %}
+          <li class="list-group-item">
+            <div class="d-flex justify-content-between"><strong>{{ p.pattern }}</strong><span class="badge bg-secondary">{{ p.count }}</span></div>
+            <div class="text-muted">{% for e in p.examples %}<a href="/review/{{ e.id }}">{{ e.label }}{% if e.move %} ({{ e.move }}){% endif %}</a>{% if not loop.last %} · {% endif %}{% endfor %}</div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}<div class="card-body small text-muted">{% if stats.reviewed %}No recurring pattern yet.{% else %}Review some games to see patterns here.{% endif %}</div>{% endif %}
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold">By event</div>
+        <table class="table table-sm mb-0 small">
+          <thead><tr><th>Event</th><th>Started</th><th class="text-end">Score</th></tr></thead>
+          <tbody>
+          {% for e in stats.by_event %}<tr><td>{{ e.event }}</td><td class="text-nowrap">{{ e.first_date }}</td><td class="text-end text-nowrap">{{ wdl(e) }}</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header fw-semibold">Games</div>
+    <div class="table-responsive">
+    <table class="table table-sm mb-0 small align-middle">
+      <thead><tr><th>Date</th><th>Event</th><th>Colour</th><th>Opponent</th><th>Result</th><th></th></tr></thead>
+      <tbody>
+      {% for g in stats.timeline %}
+        <tr class="{% if g.score == 1 %}table-success{% elif g.score == 0 %}table-danger{% endif %}">
+          <td class="text-nowrap">{{ g.date }}</td><td>{{ g.event }}</td><td>{{ g.color }}</td>
+          <td><a href="/scout?name={{ g.opponent | urlencode }}" title="Scout">{{ g.opponent }}</a>{% if g.opp_elo %} ({{ g.opp_elo }}){% endif %}</td>
+          <td>{{ g.result }}</td>
+          <td class="text-end"><a href="/review/{{ g.id }}">{% if g.reviewed %}Review{% else %}Open{% endif %}</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if is_admin %}
+<details class="mt-3">
+  <summary class="small">Import an annotated PGN file (admin)</summary>
+  <form method="post" action="/review/import-annotated" enctype="multipart/form-data" class="row g-2 mt-1">
+    <div class="col-md-5"><input class="form-control form-control-sm" type="file" name="pgn_file" accept=".pgn,text/plain" required></div>
+    <div class="col-md-4"><input class="form-control form-control-sm" name="label" placeholder="Label, e.g. Mehta annotated database"></div>
+    <div class="col-md-3 form-check pt-1"><input class="form-check-input" type="checkbox" name="queue_engine" value="1" id="qe" checked>
+      <label class="form-check-label small" for="qe">Queue engine reviews</label></div>
+    <div class="col-12"><button class="btn btn-sm btn-outline-primary">Import</button>
+      <span class="small text-muted ms-2">Games go into the archive; each game's comments are kept as its coach notes.</span></div>
+  </form>
+</details>
+{% endif %}
+{% endblock %}

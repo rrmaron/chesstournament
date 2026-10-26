@@ -3,6 +3,8 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 import os
+import json
+import re
 
 # ---------------------------------------------------------------------------
 # All FIDE member federations — idempotent seed used at startup
@@ -3318,3 +3320,211 @@ def get_research_players_for_source(tournament_source: str) -> List[Dict]:
                         (tournament_source,)).fetchall()
     conn.close()
     return [dict(zip(cols, r)) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Game review: engine analyses, coach notes, imported annotations
+# ---------------------------------------------------------------------------
+
+_ANALYSIS_COLS = ["id", "pgn_game_id", "status", "depth", "data_json", "notes_json", "notes_source",
+                  "annotated_pgn", "error", "requested_by", "progress", "usage_json", "created_at", "updated_at"]
+
+
+def init_game_review_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('''CREATE TABLE IF NOT EXISTS game_analyses (
+        id INTEGER PRIMARY KEY,
+        pgn_game_id INTEGER NOT NULL UNIQUE REFERENCES pgn_games(id),
+        status TEXT NOT NULL DEFAULT 'none',
+        depth INTEGER,
+        data_json TEXT,
+        notes_json TEXT,
+        notes_source TEXT DEFAULT '',
+        annotated_pgn TEXT,
+        error TEXT DEFAULT '',
+        requested_by INTEGER,
+        progress INTEGER DEFAULT 0,
+        usage_json TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_game_analyses_status ON game_analyses(status)')
+    # A server restart mid-analysis leaves rows 'running' forever; put them back in the queue.
+    conn.execute("UPDATE game_analyses SET status='queued', progress=0 WHERE status='running'")
+    conn.commit()
+    conn.close()
+
+init_game_review_db()
+
+
+def _analysis_row(row) -> Optional[Dict]:
+    if not row:
+        return None
+    d = dict(zip(_ANALYSIS_COLS, row))
+    for key, out in (("data_json", "data"), ("notes_json", "notes"), ("usage_json", "usage")):
+        try:
+            d[out] = json.loads(d[key]) if d[key] else None
+        except ValueError:
+            d[out] = None
+    return d
+
+
+def get_game_analysis(pgn_game_id: int) -> Optional[Dict]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute(f"SELECT {', '.join(_ANALYSIS_COLS)} FROM game_analyses WHERE pgn_game_id=?",
+                       (pgn_game_id,)).fetchone()
+    conn.close()
+    return _analysis_row(row)
+
+
+def request_game_analysis(pgn_game_id: int, user_id: Optional[int], depth: int) -> str:
+    """Queue an engine review. Returns the resulting status ('queued', or the
+    existing status when one is already queued, running or done)."""
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT status FROM game_analyses WHERE pgn_game_id=?", (pgn_game_id,)).fetchone()
+    if row and row[0] in ("queued", "running", "done"):
+        conn.close()
+        return row[0]
+    if row:
+        conn.execute("UPDATE game_analyses SET status='queued', depth=?, error='', progress=0, requested_by=?, "
+                     "updated_at=CURRENT_TIMESTAMP WHERE pgn_game_id=?", (depth, user_id, pgn_game_id))
+    else:
+        conn.execute("INSERT INTO game_analyses (pgn_game_id, status, depth, requested_by) VALUES (?, 'queued', ?, ?)",
+                     (pgn_game_id, depth, user_id))
+    conn.commit()
+    conn.close()
+    return "queued"
+
+
+def count_pending_analyses(user_id: Optional[int] = None) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    if user_id is None:
+        n = conn.execute("SELECT COUNT(*) FROM game_analyses WHERE status IN ('queued','running')").fetchone()[0]
+    else:
+        n = conn.execute("SELECT COUNT(*) FROM game_analyses WHERE status IN ('queued','running') AND requested_by=?",
+                         (user_id,)).fetchone()[0]
+    conn.close()
+    return n
+
+
+def queue_position(pgn_game_id: int) -> int:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT id FROM game_analyses WHERE pgn_game_id=?", (pgn_game_id,)).fetchone()
+    n = conn.execute("SELECT COUNT(*) FROM game_analyses WHERE status IN ('queued','running') AND id<?",
+                     (row[0],)).fetchone()[0] if row else 0
+    conn.close()
+    return n
+
+
+def claim_next_analysis() -> Optional[Dict]:
+    """Oldest queued review, marked running; None when the queue is empty."""
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT pgn_game_id FROM game_analyses WHERE status='queued' ORDER BY id LIMIT 1").fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("UPDATE game_analyses SET status='running', progress=0, updated_at=CURRENT_TIMESTAMP "
+                 "WHERE pgn_game_id=? AND status='queued'", (row[0],))
+    conn.commit()
+    conn.close()
+    return get_game_analysis(row[0])
+
+
+def set_analysis_progress(pgn_game_id: int, pct: int):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE game_analyses SET progress=? WHERE pgn_game_id=?", (int(pct), pgn_game_id))
+    conn.commit()
+    conn.close()
+
+
+def finish_game_analysis(pgn_game_id: int, data: Dict, annotated_pgn: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE game_analyses SET status='done', data_json=?, annotated_pgn=?, progress=100, error='', "
+                 "updated_at=CURRENT_TIMESTAMP WHERE pgn_game_id=?",
+                 (json.dumps(data), annotated_pgn, pgn_game_id))
+    conn.commit()
+    conn.close()
+
+
+def fail_game_analysis(pgn_game_id: int, error: str):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE game_analyses SET status='error', error=?, updated_at=CURRENT_TIMESTAMP WHERE pgn_game_id=?",
+                 (error[:500], pgn_game_id))
+    conn.commit()
+    conn.close()
+
+
+def save_coach_notes(pgn_game_id: int, notes: Dict, source: str, annotated_pgn: Optional[str] = None,
+                     usage: Optional[Dict] = None):
+    """Store coach notes (from Claude, or imported from an annotated PGN). Creates
+    the row when the game has no engine review yet."""
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("INSERT OR IGNORE INTO game_analyses (pgn_game_id, status) VALUES (?, 'none')", (pgn_game_id,))
+    if annotated_pgn is None:
+        conn.execute("UPDATE game_analyses SET notes_json=?, notes_source=?, usage_json=?, "
+                     "updated_at=CURRENT_TIMESTAMP WHERE pgn_game_id=?",
+                     (json.dumps(notes), source, json.dumps(usage) if usage else None, pgn_game_id))
+    else:
+        conn.execute("UPDATE game_analyses SET notes_json=?, notes_source=?, annotated_pgn=?, usage_json=?, "
+                     "updated_at=CURRENT_TIMESTAMP WHERE pgn_game_id=?",
+                     (json.dumps(notes), source, annotated_pgn, json.dumps(usage) if usage else None, pgn_game_id))
+    conn.commit()
+    conn.close()
+
+
+def get_analyses_for_games(game_ids: List[int]) -> Dict[int, Dict]:
+    """{pgn_game_id: engine data} for the finished reviews among game_ids."""
+    if not game_ids:
+        return {}
+    out = {}
+    conn = sqlite3.connect(DB_FILE)
+    for i in range(0, len(game_ids), 500):
+        chunk = game_ids[i:i + 500]
+        rows = conn.execute(f"SELECT pgn_game_id, data_json FROM game_analyses WHERE status='done' "
+                            f"AND pgn_game_id IN ({','.join('?' * len(chunk))})", chunk).fetchall()
+        for gid, data in rows:
+            try:
+                out[gid] = json.loads(data)
+            except (TypeError, ValueError):
+                pass
+    conn.close()
+    return out
+
+
+def get_review_statuses(game_ids: List[int]) -> Dict[int, str]:
+    if not game_ids:
+        return {}
+    conn = sqlite3.connect(DB_FILE)
+    out = {}
+    for i in range(0, len(game_ids), 500):
+        chunk = game_ids[i:i + 500]
+        for gid, status, notes in conn.execute(
+                f"SELECT pgn_game_id, status, notes_json IS NOT NULL FROM game_analyses "
+                f"WHERE pgn_game_id IN ({','.join('?' * len(chunk))})", chunk).fetchall():
+            out[gid] = status if status != "none" else ("notes" if notes else "")
+    conn.close()
+    return out
+
+
+def find_games_for_name(name: str, limit: int = 5000) -> List[Dict]:
+    """Archive games where any word of the name appears for White or Black, with
+    the raw PGN; callers narrow to an exact player with game_review.same_player."""
+    tokens = [t for t in re.split(r"[\s,.\-]+", name or "") if len(t) > 1]
+    if not tokens:
+        return []
+    key = max(tokens, key=len)
+    like = f"%{key}%"
+    cols = ["id", "event", "site", "date", "round", "white", "black", "result", "white_elo", "black_elo",
+            "eco", "opening", "time_control", "raw_pgn"]
+    conn = sqlite3.connect(DB_FILE)
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM pgn_games WHERE white LIKE ? OR black LIKE ? "
+                        f"ORDER BY date DESC, id DESC LIMIT ?", (like, like, limit)).fetchall()
+    conn.close()
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def find_pgn_game_by_hash(game_hash: str) -> Optional[int]:
+    conn = sqlite3.connect(DB_FILE)
+    row = conn.execute("SELECT id FROM pgn_games WHERE game_hash=?", (game_hash,)).fetchone()
+    conn.close()
+    return row[0] if row else None

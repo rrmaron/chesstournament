@@ -11,3 +11,4 @@ beautifulsoup4
 anthropic
 Pillow
 cryptography
+chess

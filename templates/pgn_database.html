@@ -226,6 +226,7 @@
               <th class="text-center">Elo</th>
               <th>Event / Round</th>
               <th class="text-center">Date</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -263,9 +264,10 @@
               {% if g.eco %}<span class="text-muted ms-1">{{ g.eco }}</span>{% endif %}
             </td>
             <td class="text-center text-muted small text-nowrap">{{ g.date or '—' }}</td>
+            <td class="text-end"><a href="/review/{{ g.id }}" onclick="event.stopPropagation()">Review</a></td>
           </tr>
           <tr id="pgn-row-{{ g.id }}" class="d-none">
-            <td colspan="6" class="p-0">
+            <td colspan="7" class="p-0">
               <pre id="pgn-text-{{ g.id }}" class="mb-0 p-3 bg-light border-top"
                    style="font-size:0.72rem;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto"></pre>
             </td>

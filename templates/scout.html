@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Scout{% if name %}: {{ name }}{% endif %}{% endblock %}
+{% macro wdl(x) -%}
+  {{ x.games }} <span class="text-muted small">(+{{ x.w }} ={{ x.d }} −{{ x.l }}{% if x.pct is not none %}, {{ x.pct }}%{% endif %})</span>
+{%- endmacro %}
+{% macro lines_table(title, rows) -%}
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-header fw-semibold small">{{ title }}</div>
+      {% if rows %}
+      <table class="table table-sm mb-0 small">
+        <thead><tr><th>Line</th><th class="text-end">Games</th><th class="text-end">Score</th></tr></thead>
+        <tbody>
+        {% for r in rows %}<tr><td>{{ r.line }}</td><td class="text-end">{{ r.games }}</td><td class="text-end">{% if r.pct is not none %}{{ r.pct }}%{% endif %}</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      {% else %}<div class="card-body small text-muted">No games.</div>{% endif %}
+    </div>
+  </div>
+{%- endmacro %}
+{% block content %}
+<h2 class="h4">Scout an opponent</h2>
+<form class="row g-2 mb-3" method="get" action="/scout">
+  <div class="col-sm-8 col-md-6"><input class="form-control" name="name" value="{{ name }}" placeholder="Player name, e.g. Rajesh, Ednit" required></div>
+  <div class="col-auto"><button class="btn btn-primary">Scout</button></div>
+  <div class="col-12 small text-muted">Searches every game in the archive (broadcasts, imported files, emailed games). All words of the name must match, so "Alsisaria, Ahaan" won't pick up a sibling.</div>
+</form>
+
+{% if report %}
+  {% if not report.total.games %}
+    <div class="alert alert-warning">No games found for <strong>{{ name }}</strong>. Try the surname only, or import their games on the PGN DB page.</div>
+  {% else %}
+  <div class="row g-3 mb-3">
+    <div class="col-md-4"><div class="card"><div class="card-body py-2">
+      <div class="small text-muted">All games</div><div class="fs-5">{{ wdl(report.total) }}</div>
+    </div></div></div>
+    <div class="col-md-4"><div class="card"><div class="card-body py-2">
+      <div class="small text-muted">As White</div><div class="fs-5">{{ wdl(report.white) }}</div>
+    </div></div></div>
+    <div class="col-md-4"><div class="card"><div class="card-body py-2">
+      <div class="small text-muted">As Black</div><div class="fs-5">{{ wdl(report.black) }}</div>
+    </div></div></div>
+  </div>
+
+  {% if report.head_to_head %}
+  <div class="card mb-3 border-primary">
+    <div class="card-header fw-semibold">Against you ({{ my_names | join(' / ') }}): {{ wdl(report.h2h_summary) }} <span class="text-muted small">from their side</span></div>
+    <ul class="list-group list-group-flush small">
+      {% for g in report.head_to_head %}
+      <li class="list-group-item d-flex justify-content-between">
+        <span>{{ g.date }} · {{ g.event }} · they had {{ g.color }} · {{ g.result }}</span>
+        <a href="/review/{{ g.id }}">{% if g.review == 'done' %}Review{% else %}Open{% endif %}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="row g-3 mb-3">
+    {{ lines_table("As White: first move", report.first_move) }}
+    {{ lines_table("As White: openings", report.white_openings) }}
+    {{ lines_table("As Black against 1.e4", report.vs_e4) }}
+    {{ lines_table("As Black against 1.d4 (Black's first two moves)", report.vs_d4) }}
+    {% if report.vs_other %}{{ lines_table("As Black against other first moves", report.vs_other) }}{% endif %}
+    <div class="col-md-6">
+      <div class="card h-100">
+        <div class="card-header fw-semibold small">Results by opponent strength</div>
+        {% if report.by_strength %}
+        <table class="table table-sm mb-0 small"><tbody>
+          {% for b in report.by_strength %}<tr><td>{{ b.band }}</td><td class="text-end">{{ wdl(b) }}</td></tr>{% endfor %}
+        </tbody></table>
+        {% else %}<div class="card-body small text-muted">No rated games.</div>{% endif %}
+        {% if report.ratings %}
+        <div class="card-body py-2 small text-muted">Rating in these games: {{ report.ratings[0].elo }} ({{ report.ratings[0].date }}) → {{ report.ratings[-1].elo }} ({{ report.ratings[-1].date }})</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header fw-semibold">Recent games</div>
+    <div class="table-responsive">
+    <table class="table table-sm mb-0 small align-middle">
+      <thead><tr><th>Date</th><th>Event</th><th>Colour</th><th>Opponent</th><th>Result</th><th>Opening</th><th></th></tr></thead>
+      <tbody>
+      {% for g in report.recent %}
+        <tr>
+          <td class="text-nowrap">{{ g.date }}</td><td>{{ g.event }}</td><td>{{ g.color }}</td>
+          <td>{{ g.opponent }}{% if g.opp_elo %} ({{ g.opp_elo }}){% endif %}</td>
+          <td>{{ g.result }}</td><td>{{ g.eco }} {{ g.opening }}</td>
+          <td class="text-end"><a href="/review/{{ g.id }}">{% if g.review == 'done' %}Review{% else %}Open{% endif %}</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
