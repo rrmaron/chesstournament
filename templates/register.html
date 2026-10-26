@@ -86,9 +86,16 @@
                     <label class="form-label">Country</label>
                     <select name="country_code" id="countrySelect" class="form-select" onchange="loadFederations()">
                         <option value="">— Select country —</option>
-                        {% for c in countries %}
+                        <optgroup label="Most common">
+                        {% for c in countries | selectattr("popular") %}
                         <option value="{{ c.country_code }}">{{ c.country_name }}</option>
                         {% endfor %}
+                        </optgroup>
+                        <optgroup label="All countries">
+                        {% for c in countries | rejectattr("popular") %}
+                        <option value="{{ c.country_code }}">{{ c.country_name }}</option>
+                        {% endfor %}
+                        </optgroup>
                     </select>
                 </div>
                 <div class="mb-3" id="fedBlock" style="display:none">

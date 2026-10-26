@@ -2333,8 +2333,13 @@ def list_federations(active_only: bool = False) -> List[Dict]:
     conn.close()
     return rows
 
+# Shown first in country pickers, in this order (the biggest chess-playing countries).
+POPULAR_COUNTRY_CODES = ["US", "IN", "GB", "RU", "UA", "CA"]
+
+
 def list_countries() -> List[Dict]:
-    """Return unique countries that have at least one active federation."""
+    """Return unique countries that have at least one active federation.
+    Popular chess countries come first (flagged "popular"), then the rest A-Z."""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("""
@@ -2343,8 +2348,11 @@ def list_countries() -> List[Dict]:
         GROUP BY country_code, country_name
         ORDER BY country_name
     """)
-    rows = [{"country_code": r[0], "country_name": r[1]} for r in c.fetchall()]
+    rows = [{"country_code": r[0], "country_name": r[1],
+             "popular": r[0] in POPULAR_COUNTRY_CODES} for r in c.fetchall()]
     conn.close()
+    rows.sort(key=lambda r: (POPULAR_COUNTRY_CODES.index(r["country_code"])
+                             if r["popular"] else len(POPULAR_COUNTRY_CODES)))
     return rows
 
 def get_federations_for_country(country_code: str) -> List[Dict]:

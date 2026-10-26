@@ -69,8 +69,12 @@
         <label class="form-label small mb-1">Country</label>
         <select name="country_code" id="countrySelect" class="form-select form-select-sm" onchange="loadFederations()">
           <option value="">— Select country —</option>
-          {% for c in countries %}
+          {% for group, items in [("Most common", countries | selectattr("popular") | list), ("All countries", countries | rejectattr("popular") | list)] %}
+          <optgroup label="{{ group }}">
+          {% for c in items %}
           <option value="{{ c.country_code }}" {% if c.country_code == location.country_code %}selected{% endif %}>{{ c.country_name }}</option>
+          {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
       </div>
